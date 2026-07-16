@@ -8,6 +8,7 @@
 | Dot product | Accumulator overwritten | Returned only final product | 1 | CSim + synthesis passed | Codex repaired loop-carried accumulation |
 | Real S-class fixture | Missing semicolon | Compile-stage CSim failure | 1 | CSim passed | Codex repaired an existing benchmark fixture |
 
+
 ## Common configuration
 
 - Vitis HLS 2025.2
