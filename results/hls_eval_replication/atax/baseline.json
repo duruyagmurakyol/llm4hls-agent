@@ -1,0 +1,19 @@
+{
+  "benchmark": "polybench/atax",
+  "source": "official HLS-Eval reference implementation",
+  "vitis_version": "2025.2",
+  "fpga_part": "xczu3eg-sfvc784-2-e",
+  "target_clock_ns": 10,
+  "csim_pass": true,
+  "synthesis_pass": true,
+  "estimated_clock_ns": 7.643,
+  "estimated_fmax_mhz": 130.85,
+  "latency_cycles": 949,
+  "latency_seconds": 0.000007253207,
+  "ii": 21,
+  "lut_used": 9366,
+  "ff_used": 24983,
+  "dsp_used": 56,
+  "bram_used": 0,
+  "notes": "Main pipeline constrained by multiple accesses to array A; loop constraints not fully satisfied."
+}
