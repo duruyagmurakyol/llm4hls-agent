@@ -1,0 +1,14 @@
+Review the following Xilinx HLS C++ implementation and identify why the
+testbench output remains zero.
+Preserve the function name and intended addition behaviour. Return the
+corrected header and source files.
+Header:
+#ifndef ADD_H
+#define ADD_H
+void add(int a, int b, int result);
+#endif
+Source:
+#include "add.h"
+void add(int a, int b, int result) {
+    result = a + b;
+}
