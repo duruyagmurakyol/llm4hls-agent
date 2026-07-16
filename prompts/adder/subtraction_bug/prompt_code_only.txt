@@ -1,0 +1,13 @@
+Review the following Xilinx HLS C++ implementation for correctness.
+
+The function should add two integer inputs and write the result to the
+output reference.
+
+Preserve the function name, parameters, and interface. Return only the
+corrected complete source code.
+
+#include "add.h"
+
+void add(int a, int b, int &result) {
+    result = a - b;
+}
