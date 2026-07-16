@@ -1,0 +1,3 @@
+relativeroot=/home/xilinx/projects/llm4hls-agent/benchmarks/real/s_class
+original_argv=--mode hls --csim --config task.cfg --work_dir work 
+
