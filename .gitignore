@@ -1,0 +1,38 @@
+# Compiled C/C++ files
+*.o
+*.out
+*.exe
+
+# Local test executables
+add_test
+
+# Vitis HLS generated projects
+*_project/
+solution*/
+.vitis_hls/
+.Xil/
+.ipcache/
+.cache/
+.gen/
+.hw/
+.ip_user_files/
+
+# Simulation-generated files
+*.log
+*.jou
+*.str
+*.wdb
+*.vcd
+
+# Temporary files
+*.tmp
+*.bak
+*~
+.DS_Store
+
+# VS Code local settings
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
