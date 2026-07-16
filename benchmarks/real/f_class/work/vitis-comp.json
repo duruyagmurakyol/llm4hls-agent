@@ -1,0 +1,9 @@
+{
+  "name": "work",
+  "type": "HLS",
+  "configuration": {
+    "componentType": "HLS",
+    "configFiles": ["..\/task.cfg"],
+    "work_dir": "."
+  }
+}

@@ -1,0 +1,156 @@
+<ENTRY>
+{
+ "thisFile": "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class/work/work.hlsrun_csim_summary",
+ "connectId": "",
+ "serverToken": "",
+ "timestamp": "0"
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_CmdStep",
+ "dateTimestamp": "Thu Jul 16 19:32:57 2026",
+ "timestampMillis": "1784226777744",
+ "buildStep": {
+  "cmdId": "2ec016b7-6d98-480f-aa19-d25d47e4d50e",
+  "name": "vitis-run",
+  "logFile": "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class/work/logs/work.steps.log",
+  "commandLine": "/home/xilinx/Xilinx/2025.2/Vitis/bin/unwrapped/lnx64.o/vitis-run  --mode hls --csim --config task.cfg --work_dir work ",
+  "args": [
+   "--mode",
+   "hls",
+   "--csim",
+   "--config",
+   "task.cfg",
+   "--work_dir",
+   "work"
+  ],
+  "iniFiles": [],
+  "cwd": "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Thu Jul 16 19:32:57 2026",
+ "timestampMillis": "1784226777744",
+ "status": {
+  "cmdId": "2ec016b7-6d98-480f-aa19-d25d47e4d50e",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_FlowMetaData",
+ "dateTimestamp": "Thu Jul 16 19:32:59 2026",
+ "timestampMillis": "1784226779787",
+ "buildSummary": {
+  "hardwarePlatform": "",
+  "hardwareDsa": "",
+  "platformDirectory": "",
+  "runtime": "",
+  "systemConfig": "",
+  "flow": "BF_RUN",
+  "target": "TT_HLS_C_SIM",
+  "kernels": [
+   {
+    "base": {
+     "type": "KERNEL",
+     "name": "vadd",
+     "file": "",
+     "reports": [],
+     "uuid": ""
+    },
+    "sources": [
+     "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class/src/kernel.cpp"
+    ],
+    "psSources": [],
+    "cuNames": [],
+    "type": "HLS",
+    "frequency": 0,
+    "freqUnits": ""
+   }
+  ],
+  "toolVersion": "2025.2"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_SubCmdStep",
+ "dateTimestamp": "Thu Jul 16 19:32:59 2026",
+ "timestampMillis": "1784226779787",
+ "buildStep": {
+  "cmdId": "71ed6bf3-131f-4825-8898-c8c81db6b51f",
+  "name": "",
+  "logFile": "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class/work/hls/hls.log",
+  "commandLine": "",
+  "args": [],
+  "iniFiles": [],
+  "cwd": "/home/xilinx/projects/llm4hls-agent/benchmarks/real/f_class"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Thu Jul 16 19:32:59 2026",
+ "timestampMillis": "1784226779787",
+ "status": {
+  "cmdId": "71ed6bf3-131f-4825-8898-c8c81db6b51f",
+  "state": "CS_RUNNING"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Thu Jul 16 19:32:59 2026",
+ "timestampMillis": "1784226779968",
+ "status": {
+  "cmdId": "71ed6bf3-131f-4825-8898-c8c81db6b51f",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Status",
+ "dateTimestamp": "Thu Jul 16 19:33:00 2026",
+ "timestampMillis": "1784226780013",
+ "status": {
+  "cmdId": "2ec016b7-6d98-480f-aa19-d25d47e4d50e",
+  "state": "CS_PASSED"
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Thu Jul 16 19:33:00 2026",
+ "timestampMillis": "1784226780013",
+ "report": {
+  "path": "",
+  "name": "",
+  "fileType": "HTML",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>
+<ENTRY>
+{
+ "type": "ET_Report",
+ "dateTimestamp": "Thu Jul 16 19:33:00 2026",
+ "timestampMillis": "1784226780014",
+ "report": {
+  "path": "",
+  "name": "",
+  "fileType": "BINARY_PROTOBUF",
+  "reportType": "GLOBAL_RULECHECK_GUIDANCE",
+  "cmdId": ""
+ }
+}
+</ENTRY>

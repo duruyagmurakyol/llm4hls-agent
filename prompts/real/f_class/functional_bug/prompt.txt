@@ -1,0 +1,14 @@
+Review the following Xilinx HLS C++ implementation and repair the functional error.
+
+The function should add corresponding elements from two fixed-size integer arrays and write the results to the output array.
+
+Preserve the function name, arguments, loop structure and HLS pragma. Return only the corrected complete source file.
+
+#include "kernel.h"
+
+void vadd(const int a[N], const int b[N], int out[N]) {
+  for (int i = 0; i < N; ++i) {
+#pragma HLS PIPELINE II=1
+    out[i] = a[i] - b[i];
+  }
+}
