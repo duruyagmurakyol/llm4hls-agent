@@ -1,0 +1,8 @@
+Design         Feasible    Score       Latency     Clock       LUT       FF        DSP     
+-------------------------------------------------------------------------------------------
+baseline       True        1.0000      949         7.643       9366      24983     56      
+candidate_1    False       2.5071      1954        37.989      32484     38244     238     
+candidate_2    False       3.3994      5145        37.989      3786      2566      31      
+candidate_3a   False       5.7213      8938        10.565      1818      1627      14      
+candidate_3b   False       3.8252      5936        10.565      1868      1823      14      
+candidate_3c   False       5.2980      8185        10.565      3011      2204      28      

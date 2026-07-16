@@ -1,0 +1,105 @@
+You are performing controlled design-space exploration for a Xilinx Vitis HLS kernel.
+
+The current baseline is functionally correct and synthesises with:
+
+- Latency: 949 cycles
+- Clock period: 7.643 ns
+- Fmax: 130.85 MHz
+- LUTs: 9366
+- FFs: 24983
+- DSPs: 56
+- BRAMs: 0
+- Main loop II: 21
+
+Two previous attempts failed:
+
+Candidate 1:
+- 1954 cycles
+- 37.989 ns
+- 32484 LUTs
+- 38244 FFs
+- 238 DSPs
+Cause: complete top-level array partitioning and excessive unrolling.
+
+Candidate 2:
+- 5145 cycles
+- 37.989 ns
+- 3786 LUTs
+- 2566 FFs
+- 31 DSPs
+- 16 BRAMs
+Cause: loop-carried double-precision accumulation forced into II=1, creating a long critical path.
+
+Generate exactly three conservative, distinct optimisation candidates.
+
+Candidate A:
+- Use only small pragma changes.
+- Cyclically partition A by factor 2 along dimension 2.
+- Use an unroll factor of at most 2.
+- Do not restructure the algorithm substantially.
+
+Candidate B:
+- Use two partial accumulators for the dot product.
+- Combine them only after the inner loop.
+- Avoid forcing II=1 on a loop-carried double accumulator.
+- Use an unroll factor of at most 2.
+
+Candidate C:
+- Use local buffering for x and y.
+- Preserve top-level array interfaces.
+- Use conservative cyclic partitioning only on local arrays.
+- Do not completely partition A, x or y.
+- Use an unroll factor of at most 2.
+
+Hard constraints for every candidate:
+- Preserve exact functional behaviour.
+- Preserve the complete function signature.
+- Preserve the function name kernel_atax.
+- Do not modify the testbench.
+- Do not completely partition top-level arrays.
+- Do not scalarise top-level interfaces.
+- Do not force II=1 on a loop-carried double accumulator.
+- Keep estimated clock period at or below 10 ns if possible.
+- Keep DSP usage at or below 80.
+- Keep LUT usage at or below 15000.
+- Aim for latency below 949 cycles.
+- Return complete synthesizable C++ source.
+
+Output format must be exactly:
+
+=== CANDIDATE_A ===
+<complete source>
+
+=== CANDIDATE_B ===
+<complete source>
+
+=== CANDIDATE_C ===
+<complete source>
+
+Do not include Markdown fences or explanations.
+
+Original source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    for (i = 0; i < n; i++)
+        y[i] = 0;
+
+    for (i = 0; i < m; i++) {
+        tmp[i] = 0.0;
+
+        for (j = 0; j < n; j++)
+            tmp[i] = tmp[i] + A[i][j] * x[j];
+
+        for (j = 0; j < n; j++)
+            y[j] = y[j] + A[i][j] * tmp[i];
+    }
+}

@@ -1,0 +1,26 @@
+{
+  "benchmark": "polybench/atax",
+  "candidate": 1,
+  "model": "gpt-5.5",
+  "functional_pass": true,
+  "synthesis_pass": true,
+  "accepted": false,
+  "rejection_reason": "Latency, timing and resource utilisation all regressed significantly.",
+  "estimated_clock_ns": 37.989,
+  "estimated_fmax_mhz": 26.32,
+  "latency_cycles": 1954,
+  "latency_seconds": 0.000074230506,
+  "lut_used": 32484,
+  "ff_used": 38244,
+  "dsp_used": 238,
+  "bram_used": 0,
+  "comparison_to_baseline": {
+    "latency_cycles_percent": 105.9,
+    "execution_time_multiplier": 10.23,
+    "lut_percent": 246.8,
+    "ff_percent": 53.1,
+    "dsp_percent": 325.0,
+    "fmax_percent": -79.9
+  },
+  "notes": "Loop constraints were satisfied, but complete array partitioning and 14-way double-precision unrolling caused severe timing and resource regressions."
+}

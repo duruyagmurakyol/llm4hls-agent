@@ -1,0 +1,26 @@
+{
+  "benchmark": "polybench/atax",
+  "candidate": 2,
+  "model": "gpt-5.5",
+  "functional_pass": true,
+  "synthesis_pass": true,
+  "accepted": false,
+  "rejection_reason": "Area improved substantially, but latency and timing regressed severely.",
+  "estimated_clock_ns": 37.989,
+  "estimated_fmax_mhz": 26.32,
+  "latency_cycles": 5145,
+  "latency_seconds": 0.000195453405,
+  "lut_used": 3786,
+  "ff_used": 2566,
+  "dsp_used": 31,
+  "bram_used": 16,
+  "comparison_to_baseline": {
+    "latency_multiplier": 5.42,
+    "execution_time_multiplier": 26.94,
+    "lut_percent_change": -59.58,
+    "ff_percent_change": -89.73,
+    "dsp_percent_change": -44.64,
+    "fmax_percent_change": -79.89
+  },
+  "notes": "Candidate reduced area but introduced a double-precision accumulation recurrence with an estimated 37.989 ns clock period. II=1 was achieved locally, but overall latency and execution time became much worse."
+}

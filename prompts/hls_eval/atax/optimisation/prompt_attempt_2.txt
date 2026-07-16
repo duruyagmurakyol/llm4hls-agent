@@ -1,0 +1,68 @@
+You are performing a second optimisation attempt on a Xilinx Vitis HLS kernel.
+
+The first candidate remained functionally correct, but synthesis showed severe regressions.
+
+Baseline:
+- Latency: 949 cycles
+- Clock period: 7.643 ns
+- Fmax: 130.85 MHz
+- LUTs: 9366
+- FFs: 24983
+- DSPs: 56
+- BRAMs: 0
+
+Rejected candidate:
+- Latency: 1954 cycles
+- Clock period: 37.989 ns
+- Fmax: 26.32 MHz
+- LUTs: 32484
+- FFs: 38244
+- DSPs: 238
+- BRAMs: 0
+
+The rejected candidate used complete partitioning of A, x and y and a 14-way
+unroll factor. This created excessive parallel double-precision hardware,
+many scalar interfaces, and a long critical path.
+
+Produce a more conservative optimisation.
+
+Hard constraints:
+- Preserve exact functional output.
+- Preserve the complete function signature.
+- Do not completely partition top-level arrays A, x or y.
+- Do not scalarise the top-level interfaces.
+- Use no more than 80 DSPs.
+- Use no more than 15000 LUTs.
+- Aim for latency below 949 cycles.
+- Aim for estimated clock period below 10 ns.
+- Use a small unroll factor such as 2 or 3 if unrolling is beneficial.
+- Prefer local buffering, cyclic partitioning, loop interchange, or controlled pipelining.
+- Do not modify the testbench.
+- Return only the complete C++ source.
+- Do not include Markdown fences or explanations.
+
+Original baseline source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    for (i = 0; i < n; i++)
+        y[i] = 0;
+
+    for (i = 0; i < m; i++) {
+        tmp[i] = 0.0;
+
+        for (j = 0; j < n; j++)
+            tmp[i] = tmp[i] + A[i][j] * x[j];
+
+        for (j = 0; j < n; j++)
+            y[j] = y[j] + A[i][j] * tmp[i];
+    }
+}

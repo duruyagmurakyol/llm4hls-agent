@@ -1,0 +1,56 @@
+You are optimising a Xilinx Vitis HLS C++ kernel.
+
+The implementation is functionally correct and synthesises successfully.
+
+Current baseline on xczu3eg-sfvc784-2-e with a 10 ns target clock:
+
+- Latency: 949 cycles
+- Estimated clock period: 7.643 ns
+- Estimated Fmax: 130.85 MHz
+- LUTs: 9366
+- FFs: 24983
+- DSPs: 56
+- BRAMs: 0
+- Main loop initiation interval: 21
+
+Vitis reports that the initiation interval is limited by multiple accesses to
+array A.
+
+Optimise the kernel to reduce latency and initiation interval while preserving
+exact functional behaviour and the complete top-level function signature.
+
+Requirements:
+- Preserve the function name kernel_atax.
+- Preserve all arguments and array dimensions.
+- Keep compatibility with Xilinx Vitis HLS.
+- Do not modify the testbench.
+- Use HLS pragmas or code restructuring where beneficial.
+- Avoid excessive resource growth where possible.
+- Return only the complete corrected C++ source file.
+- Do not include Markdown fences or explanations.
+
+Current source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    for (i = 0; i < n; i++)
+        y[i] = 0;
+
+    for (i = 0; i < m; i++) {
+        tmp[i] = 0.0;
+
+        for (j = 0; j < n; j++)
+            tmp[i] = tmp[i] + A[i][j] * x[j];
+
+        for (j = 0; j < n; j++)
+            y[j] = y[j] + A[i][j] * tmp[i];
+    }
+}
