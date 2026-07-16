@@ -6,6 +6,7 @@
 | Adder output reference | Pass-by-value interface bug | CSim returned zero | 1 | CSim + synthesis passed | Codex identified data-flow/interface issue |
 | Vector addition | Off-by-one loop bound | Final element incorrect | 1 | CSim + synthesis passed | Repair transferred to an array-based pipelined kernel |
 | Dot product | Accumulator overwritten | Returned only final product | 1 | CSim + synthesis passed | Codex repaired loop-carried accumulation |
+| Real S-class fixture | Missing semicolon | Compile-stage CSim failure | 1 | CSim passed | Codex repaired an existing benchmark fixture |
 
 ## Common configuration
 
