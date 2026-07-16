@@ -1,4 +1,5 @@
 #include "vector_add.h"
+
 void vector_add(
     const int a[VECTOR_SIZE],
     const int b[VECTOR_SIZE],

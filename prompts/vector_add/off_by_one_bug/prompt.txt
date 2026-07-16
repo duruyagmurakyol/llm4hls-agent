@@ -1,0 +1,19 @@
+Review the following Xilinx HLS C++ implementation for correctness.
+
+The function should add every corresponding element of two fixed-size
+integer arrays and write all results to the output array.
+
+Preserve the function name, arguments, constants and interface. Return
+only the corrected complete source code.
+
+#include "vector_add.h"
+
+void vector_add(
+    const int a[VECTOR_SIZE],
+    const int b[VECTOR_SIZE],
+    int result[VECTOR_SIZE]
+) {
+    for (int i = 0; i < VECTOR_SIZE - 1; i++) {
+        result[i] = a[i] + b[i];
+    }
+}
