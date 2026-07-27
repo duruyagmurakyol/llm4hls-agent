@@ -1,0 +1,18 @@
+{
+  "benchmark": "fixture_f_class",
+  "benchmark_path": "/home/xilinx/hlsrepair_work/fixture_f_class",
+  "source": "/home/xilinx/hlsrepair_work/fixture_f_class/kernel.cpp",
+  "timestamp": "20260716_195909",
+  "stage": "csim",
+  "status": "failed",
+  "failure_class": "functional",
+  "return_code": 1,
+  "evidence": [
+    "FAIL 63",
+    "@E Simulation failed: Function 'main' returns nonzero value '1'.",
+    "ERROR: [SIM 211-100] 'csim_design' failed: nonzero return value.",
+    "ERROR: CSIM Failed"
+  ],
+  "log": "runs/fixture_f_class/20260716_195909/vitis_csim.log",
+  "repair_prompt": "runs/fixture_f_class/20260716_195909/repair_prompt.txt"
+}

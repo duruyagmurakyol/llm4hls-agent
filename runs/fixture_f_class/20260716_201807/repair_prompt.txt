@@ -1,0 +1,35 @@
+You are repairing a Xilinx HLS C++ benchmark.
+
+Benchmark: fixture_f_class
+Failure class: functional
+
+Vitis HLS failure evidence:
+FAIL 63
+@E Simulation failed: Function 'main' returns nonzero value '1'.
+ERROR: [SIM 211-100] 'csim_design' failed: nonzero return value.
+ERROR: CSIM Failed
+
+Repair the implementation so that it passes C simulation.
+
+Preserve:
+- the function name and arguments
+- the existing loop structure where possible
+- all HLS pragmas
+- compatibility with Xilinx Vitis HLS
+
+Return only the corrected complete source file.
+Ensure the source is syntactically complete.
+Do not use Markdown code fences or explanatory text.
+
+Current source:
+
+#include "kernel.h"
+// F-class fixture: compiles fine but implements the wrong operation (subtraction instead of
+// addition) -> passes stage 1 (compile), fails stage 2 (csim self-check).
+void vadd(const int a[N], const int b[N], int out[N]) {
+  for (int i = 0; i < N; ++i) {
+#pragma HLS PIPELINE II=1
+    out[i] = a[i] - b[i];
+  }
+}
+

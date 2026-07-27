@@ -1,0 +1,10 @@
+{
+  "benchmark": "benchmarks/real/f_class",
+  "timestamp": "20260716_195604",
+  "stage": "csim",
+  "status": "passed",
+  "failure_class": "none",
+  "return_code": 0,
+  "evidence": [],
+  "log": "runs/benchmarks_real_f_class/20260716_195604/vitis_csim.log"
+}

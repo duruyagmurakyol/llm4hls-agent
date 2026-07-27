@@ -36,3 +36,11 @@ solution*/
 # Python cache
 __pycache__/
 *.pyc
+# Generated HLS agent working directories
+work/
+runs/*/*/work/
+runs/*/*/original_work/
+runs/*/*/validation_work/
+
+# Generated validation executables
+runs/*/*/validation/test_repair
