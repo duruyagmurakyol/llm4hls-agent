@@ -1,0 +1,28 @@
+{
+  "run_name": "atax_diverse_search_01",
+  "model": "zai-org/GLM-5.2",
+  "temperature": 0.5,
+  "iterations_requested": 5,
+  "iterations_completed": 5,
+  "best_candidate": "atax_agent_atax_diverse_search_01_02",
+  "best_score": -569900.7799999994,
+  "best_result": {
+    "csim_pass": true,
+    "synth_pass": true,
+    "timeout": false,
+    "return_code": 0,
+    "metrics": {
+      "latency_best_cycles": 4036,
+      "latency_average_cycles": 4036,
+      "latency_worst_cycles": 4036,
+      "estimated_clock_period_ns": 10.565,
+      "target_clock_period_ns": 10.0,
+      "resources_lut_used": 4097,
+      "resources_ff_used": 3508,
+      "resources_dsp_used": 42,
+      "resources_bram_used": 0,
+      "report_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/iteration_02/evaluation/project/solution1/syn/report/csynth.xml"
+    },
+    "log_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/iteration_02/evaluation/vitis.log"
+  }
+}
