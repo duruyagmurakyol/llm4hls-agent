@@ -15,6 +15,7 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
+NON_THINKING_MODELS = {"Qwen/Qwen3.6-27B"}
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,10 @@ def complete(
     if thinking_budget is not None and thinking_budget < 0:
         raise ValueError("thinking_budget must be non-negative")
 
+    effective_enable_thinking = enable_thinking
+    if effective_enable_thinking is None and model in NON_THINKING_MODELS:
+        effective_enable_thinking = False
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -72,10 +77,10 @@ def complete(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    if thinking_budget is not None:
+    if thinking_budget is not None and effective_enable_thinking is not False:
         payload["thinking_budget"] = thinking_budget
-    if enable_thinking is not None:
-        payload["enable_thinking"] = enable_thinking
+    if effective_enable_thinking is not None:
+        payload["enable_thinking"] = effective_enable_thinking
 
     request_body = json.dumps(payload).encode("utf-8")
     request_url = endpoint or _endpoint()
