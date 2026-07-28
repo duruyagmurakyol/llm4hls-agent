@@ -1,6 +1,6 @@
 {
   "experiment_id": "vector_add_api_qwen35_interface",
-  "benchmark_source": "benchmarks/vector_add/faults/wrong_top_function",
+  "benchmark_source": "benchmarks/vector_add/faults/interface_wrong_top_name",
   "repair_mode": "direct_api",
   "provider": "siliconflow",
   "model": "Qwen/Qwen3.5-122B-A10B",
