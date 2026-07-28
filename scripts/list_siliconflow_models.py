@@ -11,7 +11,7 @@ import urllib.request
 
 
 KEY_NAMES = ("SILICONFLOW_API_KEY", "SILICONFLOW_KEY")
-URL = "https://api.siliconflow.cn/v1/models"
+DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
 
 
 def main() -> None:
@@ -19,8 +19,9 @@ def main() -> None:
     if not key:
         raise SystemExit("Missing SILICONFLOW_API_KEY (or SILICONFLOW_KEY).")
 
+    base_url = os.environ.get("SILICONFLOW_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
     request = urllib.request.Request(
-        URL,
+        f"{base_url}/models",
         headers={"Authorization": f"Bearer {key}"},
         method="GET",
     )
