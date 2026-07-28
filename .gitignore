@@ -36,3 +36,5 @@ solution*/
 # Python cache
 __pycache__/
 *.pyc
+runs/
+work/
