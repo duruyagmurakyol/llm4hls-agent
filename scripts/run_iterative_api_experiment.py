@@ -71,10 +71,31 @@ def concise_evidence(output: str, limit: int = 1800) -> str:
 
 
 def clean_source(text: str) -> str:
+    """Extract a complete C/C++ source file from a model response safely."""
     text = text.strip()
-    fenced = re.fullmatch(r"```(?:cpp|c\+\+|c)?\s*(.*?)\s*```", text, re.DOTALL)
+
+    # Prefer the contents of the first fenced C/C++ block even when the model
+    # adds a filename label before the fence, for example:
+    #   src/bicg.cpp
+    #   ```cpp
+    #   ...
+    #   ```
+    fenced = re.search(
+        r"```(?:cpp|c\+\+|cc|cxx|c)?\s*\n?(.*?)\n?```",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
     if fenced:
         text = fenced.group(1).strip()
+    else:
+        lines = text.splitlines()
+        if lines and re.fullmatch(r"[A-Za-z0-9_./-]+\.(?:c|cc|cpp|cxx|h|hpp)", lines[0].strip()):
+            text = "\n".join(lines[1:]).strip()
+
+    if "```" in text:
+        raise ValueError("Model response still contains Markdown fences after parsing")
+    if not text:
+        raise ValueError("Model response did not contain source code")
     if not text.endswith("\n"):
         text += "\n"
     return text
@@ -208,18 +229,26 @@ def main() -> None:
                 int(thinking_budget_value) if thinking_budget_value is not None else None
             ),
         )
-        candidate = clean_source(response.content)
         (iteration_dir / "raw_response.txt").write_text(response.content, encoding="utf-8")
         (iteration_dir / "api_response.json").write_text(
             json.dumps(response.raw_response, indent=2) + "\n", encoding="utf-8"
         )
-        (iteration_dir / "candidate.cpp").write_text(candidate, encoding="utf-8")
-        (workspace / editable[0]).write_text(candidate, encoding="utf-8")
+
+        try:
+            candidate = clean_source(response.content)
+        except ValueError as exc:
+            validation_code = 1
+            validation_output = f"Response parsing error: {exc}\n"
+            (iteration_dir / "validation.log").write_text(validation_output, encoding="utf-8")
+            candidate = before_source
+        else:
+            (iteration_dir / "candidate.cpp").write_text(candidate, encoding="utf-8")
+            (workspace / editable[0]).write_text(candidate, encoding="utf-8")
+            validation_code, validation_output = validate(config, workspace)
+            (iteration_dir / "validation.log").write_text(validation_output, encoding="utf-8")
 
         changed_lines, diff = changed_line_count(before_source, candidate)
         (iteration_dir / "repair.diff").write_text(diff, encoding="utf-8")
-        validation_code, validation_output = validate(config, workspace)
-        (iteration_dir / "validation.log").write_text(validation_output, encoding="utf-8")
 
         input_tokens = response.input_tokens or 0
         output_tokens = response.output_tokens or 0
