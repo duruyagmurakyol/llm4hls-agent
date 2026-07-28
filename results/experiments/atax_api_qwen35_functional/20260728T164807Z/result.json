@@ -1,0 +1,25 @@
+{
+  "schema_version": 3,
+  "experiment_id": "atax_api_qwen35_functional",
+  "timestamp_utc": "20260728T164807Z",
+  "repair_mode": "direct_api",
+  "provider": "siliconflow",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "thinking_budget": null,
+  "failure_class": "functional",
+  "pre_host_validation_passed": false,
+  "input_tokens": 986,
+  "output_tokens": 202,
+  "tokens_used": 1188,
+  "latency_seconds": 18.038215907999984,
+  "modified_files": [
+    "src/atax.cpp"
+  ],
+  "protected_files_unchanged": true,
+  "editable_scope_respected": true,
+  "changed_line_count": 2,
+  "tokens_per_changed_line": 594.0,
+  "post_host_validation_passed": true,
+  "independent_validation_passed": true,
+  "repair_diff_present": true
+}

@@ -1,0 +1,11 @@
+--- before/src/atax.cpp
++++ after/src/atax.cpp
+@@ -13,7 +13,7 @@
+     for (i = 0; i < m; i++) {
+         tmp[i] = 0.0;
+         for (j = 0; j < n; j++)
+-            tmp[i] = tmp[i] - A[i][j] * x[j];
++            tmp[i] = tmp[i] + A[i][j] * x[j];
+         for (j = 0; j < n; j++)
+             y[j] = y[j] + A[i][j] * tmp[i];
+     }
