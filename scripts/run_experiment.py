@@ -8,9 +8,13 @@ import argparse
 import difflib
 import hashlib
 import json
+import os
 import re
+import selectors
 import shutil
+import signal
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +40,83 @@ def run_command(
         )
     except FileNotFoundError as error:
         raise SystemExit(f"Command not found: {command[0]}") from error
+
+
+def run_streaming_command(
+    command: list[str],
+    cwd: Path,
+    log_path: Path,
+    timeout_seconds: int,
+) -> tuple[int, str, bool]:
+    """Run a command with live output, continuous logging and a hard timeout."""
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            start_new_session=True,
+        )
+    except FileNotFoundError as error:
+        raise SystemExit(f"Command not found: {command[0]}") from error
+
+    if process.stdout is None:
+        raise SystemExit("Unable to capture agent output")
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    chunks: list[bytes] = []
+    started = time.monotonic()
+    timed_out = False
+
+    with log_path.open("wb") as log_file:
+        while True:
+            elapsed = time.monotonic() - started
+            remaining = timeout_seconds - elapsed
+            if remaining <= 0 and process.poll() is None:
+                timed_out = True
+                message = (
+                    f"\n[runner] Agent timed out after {timeout_seconds} seconds; "
+                    "terminating process group.\n"
+                ).encode()
+                chunks.append(message)
+                log_file.write(message)
+                log_file.flush()
+                print(message.decode(), end="", flush=True)
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+
+            events = selector.select(timeout=max(0.0, min(0.25, remaining)))
+            for key, _ in events:
+                data = os.read(key.fileobj.fileno(), 4096)
+                if data:
+                    chunks.append(data)
+                    log_file.write(data)
+                    log_file.flush()
+                    print(data.decode(errors="replace"), end="", flush=True)
+                else:
+                    selector.unregister(key.fileobj)
+
+            if process.poll() is not None:
+                while True:
+                    data = os.read(process.stdout.fileno(), 4096)
+                    if not data:
+                        break
+                    chunks.append(data)
+                    log_file.write(data)
+                    print(data.decode(errors="replace"), end="", flush=True)
+                log_file.flush()
+                break
+
+    selector.close()
+    output = b"".join(chunks).decode(errors="replace")
+    return process.returncode if process.returncode is not None else 1, output, timed_out
 
 
 def sha256(path: Path) -> str:
@@ -69,10 +150,7 @@ def build_prompt(config: dict[str, Any], workspace: Path) -> str:
     """Build the autonomous repair prompt from configuration fields."""
 
     constraints = "\n".join(str(item) for item in config["agent_constraints"])
-    return (
-        f"Repair {workspace}.\n\n"
-        f"{constraints}\n"
-    )
+    return f"Repair {workspace}.\n\n{constraints}\n"
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
@@ -112,6 +190,10 @@ def main() -> None:
     if config["repair_mode"] != "autonomous":
         raise SystemExit("This first runner currently supports repair_mode=autonomous only")
 
+    timeout_seconds = int(config.get("agent_timeout_seconds", 300))
+    if timeout_seconds <= 0:
+        raise SystemExit("agent_timeout_seconds must be greater than zero")
+
     source_dir = repository_root / config["benchmark_source"]
     if not source_dir.is_dir():
         raise SystemExit(f"Benchmark source not found: {source_dir}")
@@ -124,10 +206,7 @@ def main() -> None:
     shutil.copytree(source_dir, workspace)
 
     copied_config = run_dir / "config.json"
-    copied_config.write_text(
-        json.dumps(config, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    copied_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
     editable_files = [str(path) for path in config["editable_files"]]
     protected_files = [str(path) for path in config["protected_files"]]
@@ -163,9 +242,13 @@ def main() -> None:
         "workspace-write",
         prompt,
     ]
-    codex_process = run_command(codex_command, repository_root)
-    codex_output = codex_process.stdout or ""
-    (run_dir / "agent.log").write_text(codex_output, encoding="utf-8")
+    print(f"Starting agent (timeout: {timeout_seconds}s)...", flush=True)
+    agent_return_code, codex_output, agent_timed_out = run_streaming_command(
+        codex_command,
+        repository_root,
+        run_dir / "agent.log",
+        timeout_seconds,
+    )
 
     after_hashes = relative_hashes(workspace, all_tracked_files)
     modified_files = [
@@ -234,8 +317,10 @@ def main() -> None:
         "benchmark_source": str(source_dir.relative_to(repository_root)),
         "repair_mode": config["repair_mode"],
         "model": config["model"],
+        "agent_timeout_seconds": timeout_seconds,
+        "agent_timed_out": agent_timed_out,
         "pre_host_validation_passed": pre_return_code == 0,
-        "agent_return_code": codex_process.returncode,
+        "agent_return_code": agent_return_code,
         "tokens_used": parse_tokens(codex_output),
         "modified_files": modified_files,
         "protected_files_unchanged": protected_files_unchanged,
@@ -267,6 +352,7 @@ def main() -> None:
 
     print(f"Experiment: {experiment_id}")
     print(f"Results: {run_dir.relative_to(repository_root)}")
+    print(f"Agent timed out: {agent_timed_out}")
     print(f"Pre-repair host test passed: {result['pre_host_validation_passed']}")
     print(f"Modified files: {', '.join(modified_files) if modified_files else 'none'}")
     print(f"Protected files unchanged: {protected_files_unchanged}")
@@ -275,6 +361,7 @@ def main() -> None:
 
     successful = (
         not result["pre_host_validation_passed"]
+        and not result["agent_timed_out"]
         and result["agent_return_code"] == 0
         and result["editable_scope_respected"]
         and result["protected_files_unchanged"]
