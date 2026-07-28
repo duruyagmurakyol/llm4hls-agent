@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "experiment_id": "bicg_iterative_qwen35_multi_fault",
+  "timestamp_utc": "20260728T172529Z",
+  "repair_mode": "iterative_direct_api",
+  "provider": "siliconflow",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "max_iterations": 3,
+  "iterations_executed": 1,
+  "success_iteration": 1,
+  "initial_failure_class": "functional",
+  "total_input_tokens": 1188,
+  "total_output_tokens": 210,
+  "total_tokens": 1398,
+  "total_api_latency_seconds": 4.199,
+  "final_changed_line_count": 4,
+  "protected_files_unchanged": true,
+  "post_host_validation_passed": true,
+  "independent_validation_passed": true,
+  "passed": true,
+  "iterations": [
+    {
+      "iteration": 1,
+      "failure_class_before": "functional",
+      "evidence": "FAIL s index=0 expected=1.4881 actual=2.4881",
+      "input_tokens": 1188,
+      "output_tokens": 210,
+      "tokens_used": 1398,
+      "latency_seconds": 4.199158350998914,
+      "changed_line_count": 4,
+      "host_validation_passed": true,
+      "failure_class_after": "none"
+    }
+  ]
+}
