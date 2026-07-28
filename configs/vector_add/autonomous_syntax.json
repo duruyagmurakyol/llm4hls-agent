@@ -28,9 +28,9 @@
   "independent_validation": {
     "enabled": true,
     "command": [
-      "python3",
-      "agent/run_repair.py",
-      "{workspace}"
+      "bash",
+      "-lc",
+      "python3 agent/run_repair.py '{workspace}' | tee /dev/stderr | grep -q 'Original result: PASSED'"
     ]
   },
   "agent_constraints": [
