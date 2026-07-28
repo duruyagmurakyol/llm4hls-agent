@@ -1,0 +1,12 @@
+{
+  "iteration": 2,
+  "failure_class_before": "functional",
+  "evidence": "FAIL q index=1 expected=29.0952 actual=28.6548",
+  "input_tokens": 507,
+  "output_tokens": 210,
+  "tokens_used": 717,
+  "latency_seconds": 4.662822299000254,
+  "changed_line_count": 2,
+  "host_validation_passed": true,
+  "failure_class_after": "none"
+}

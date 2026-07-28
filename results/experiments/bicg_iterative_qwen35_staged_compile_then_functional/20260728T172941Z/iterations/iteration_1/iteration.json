@@ -1,0 +1,12 @@
+{
+  "iteration": 1,
+  "failure_class_before": "compile",
+  "evidence": "src/bicg.cpp:17:19: error: expected \u2018;\u2019 before \u2018for\u2019\nsrc/bicg.cpp:18:27: error: expected \u2018;\u2019 before \u2018)\u2019 token",
+  "input_tokens": 525,
+  "output_tokens": 216,
+  "tokens_used": 741,
+  "latency_seconds": 4.621102230998076,
+  "changed_line_count": 2,
+  "host_validation_passed": false,
+  "failure_class_after": "functional"
+}
