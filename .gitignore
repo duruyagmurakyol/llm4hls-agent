@@ -64,3 +64,13 @@ __pycache__/
 # Secrets
 .env
 *.env
+
+# Older exploratory optimisation runs
+runs/atax/atax_ranked_search_01/
+runs/atax/atax_ranked_search_02/
+runs/atax/first_closed_loop/
+runs/atax/first_closed_loop_retry/
+runs/atax/first_closed_loop_retry3/
+runs/atax/first_closed_loop_retry4/
+runs/atax/first_closed_loop_retry5/
+runs/atax_evaluator_test/
