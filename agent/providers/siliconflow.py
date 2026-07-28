@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -48,10 +49,14 @@ def complete(
     user_prompt: str,
     temperature: float = 0.0,
     max_tokens: int = 2048,
-    timeout_seconds: int = 120,
+    timeout_seconds: int = 180,
     endpoint: str | None = None,
+    max_attempts: int = 3,
 ) -> ModelResponse:
-    """Call SiliconFlow once and return content plus exact usage metadata."""
+    """Call SiliconFlow and retry transient network/read failures."""
+
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be greater than zero")
 
     payload = {
         "model": model,
@@ -63,27 +68,49 @@ def complete(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    request = urllib.request.Request(
-        endpoint or _endpoint(),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    request_body = json.dumps(payload).encode("utf-8")
+    request_url = endpoint or _endpoint()
+    overall_started = time.monotonic()
+    last_error: Exception | None = None
 
-    started = time.monotonic()
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            raw = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"SiliconFlow HTTP {error.code}: {body}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"SiliconFlow request failed: {error}") from error
+    for attempt in range(1, max_attempts + 1):
+        request = urllib.request.Request(
+            request_url,
+            data=request_body,
+            headers={
+                "Authorization": f"Bearer {_api_key()}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                raw = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            # Retry provider-side failures and rate limits, but not invalid requests/keys.
+            if error.code not in {408, 429, 500, 502, 503, 504}:
+                raise RuntimeError(f"SiliconFlow HTTP {error.code}: {body}") from error
+            last_error = RuntimeError(f"SiliconFlow HTTP {error.code}: {body}")
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+            last_error = error
 
-    latency = time.monotonic() - started
+        if attempt == max_attempts:
+            raise RuntimeError(
+                f"SiliconFlow request failed after {max_attempts} attempts: {last_error}"
+            ) from last_error
+
+        delay = min(2 ** (attempt - 1), 4)
+        print(
+            f"SiliconFlow attempt {attempt}/{max_attempts} failed; retrying in {delay}s...",
+            flush=True,
+        )
+        time.sleep(delay)
+    else:
+        raise RuntimeError("SiliconFlow request failed without a response")
+
+    latency = time.monotonic() - overall_started
     choices = raw.get("choices") or []
     if not choices:
         raise RuntimeError(f"SiliconFlow returned no choices: {raw}")
