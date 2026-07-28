@@ -1,0 +1,9 @@
+Repair /home/xilinx/projects/llm4hls-agent/results/experiments/vector_add_autonomous_syntax/20260728T142255Z/workspace.
+
+Inspect only the source, header, testbench and task.cfg.
+Use g++ to reproduce the failure.
+Modify only src/vector_add.cpp.
+Make the smallest repair.
+Run the same g++ test again.
+Do not run Vitis, v++, vitis-run, git-wide searches, or inspect unrelated files.
+Report the diagnosis, exact edit and pass/fail result.
