@@ -1,0 +1,190 @@
+You are optimising an AMD/Xilinx Vitis HLS implementation of the ATAX
+kernel.
+
+This is optimisation iteration 4.
+
+Required strategy for this iteration:
+Try a two-phase ATAX architecture. First compute all tmp values, then compute y using independent partial accumulators. Avoid fusing the phases when this creates long floating-point dependency chains.
+
+Previous generated attempts:
+- Candidate: atax_agent_atax_diverse_search_01_01
+  Outcome: timing_failure
+  Strategy: Focus exclusively on meeting timing. Restructure floating-point accumulation to reduce the critical path. Consider multiple independent partial accumulators or a balanced reduction tree. Merely adding PIPELINE pragmas is not sufficient.
+  Clock: 10.565 ns
+  Target clock: 10.0 ns
+  Latency: 3770 cycles
+  LUT: 5413
+  FF: 5029
+  DSP: 56
+  BRAM: 0
+  Score: -569921.5899999996
+- Candidate: atax_agent_atax_diverse_search_01_02
+  Outcome: timing_failure
+  Strategy: Explore loop unrolling with independent partial sums. Avoid a single loop-carried floating-point accumulator dependency. Handle the N=42 array bound correctly.
+  Clock: 10.565 ns
+  Target clock: 10.0 ns
+  Latency: 4036 cycles
+  LUT: 4097
+  FF: 3508
+  DSP: 42
+  BRAM: 0
+  Score: -569900.7799999994
+- Candidate: atax_agent_atax_diverse_search_01_03
+  Outcome: timing_failure
+  Strategy: Explore array partitioning and parallel memory access. Only use partitioning that enables actual arithmetic parallelism. Do not increase resources without improving timing.
+  Clock: 10.565 ns
+  Target clock: 10.0 ns
+  Latency: 4416 cycles
+  LUT: 4000
+  FF: 4666
+  DSP: 50
+  BRAM: 0
+  Score: -570362.6599999996
+
+Do not reproduce an implementation equivalent to a previous failed or
+non-improving attempt.
+
+Optimisation priorities, in order:
+
+1. Preserve functional correctness.
+2. Pass C simulation and Vitis HLS synthesis.
+3. Meet the target clock period of 10.0 ns.
+4. Reduce latency.
+5. Reduce LUT, FF, DSP and BRAM usage.
+
+The estimated clock period is the primary optimisation objective until
+the timing target is met.
+
+Do not exchange a large latency increase for a small reduction in LUTs.
+
+The current implementation appears to contain loop-carried
+double-precision accumulation dependencies. Merely adding PIPELINE
+pragmas may not remove these dependencies. Consider structural changes
+such as independent partial accumulators, carefully bounded loop
+unrolling, or a balanced final reduction.
+
+The ATAX dimensions are:
+
+- M = 38
+- N = 42
+
+Take care when unrolling because N=42 is not divisible by four or eight.
+All array accesses must remain in bounds.
+
+Original source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+#pragma HLS ARRAY_PARTITION variable=A cyclic factor=2 dim=2
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    init_y:
+    for (i = 0; i < n; i++) {
+#pragma HLS PIPELINE
+        y[i] = 0;
+    }
+
+    row_loop:
+    for (i = 0; i < m; i++) {
+        double acc0 = 0.0;
+        double acc1 = 0.0;
+
+        dot_loop:
+        for (j = 0; j < n; j += 2) {
+#pragma HLS PIPELINE
+            acc0 = acc0 + A[i][j] * x[j];
+            acc1 = acc1 + A[i][j + 1] * x[j + 1];
+        }
+
+        double acc = acc0 + acc1;
+        tmp[i] = acc;
+
+        update_y:
+        for (j = 0; j < n; j++) {
+#pragma HLS PIPELINE
+#pragma HLS UNROLL factor=2
+            y[j] = y[j] + A[i][j] * acc;
+        }
+    }
+}
+
+
+Current best source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+#pragma HLS ARRAY_PARTITION variable=A cyclic factor=3 dim=2
+#pragma HLS ARRAY_PARTITION variable=x cyclic factor=3 dim=1
+#pragma HLS ARRAY_PARTITION variable=y cyclic factor=3 dim=1
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    init_y:
+    for (i = 0; i < n; i++) {
+#pragma HLS PIPELINE
+        y[i] = 0;
+    }
+
+    row_loop:
+    for (i = 0; i < m; i++) {
+        double acc0 = 0.0;
+        double acc1 = 0.0;
+        double acc2 = 0.0;
+
+        dot_loop:
+        for (j = 0; j < 42; j += 3) {
+#pragma HLS PIPELINE
+            acc0 = acc0 + A[i][j]     * x[j];
+            acc1 = acc1 + A[i][j + 1] * x[j + 1];
+            acc2 = acc2 + A[i][j + 2] * x[j + 2];
+        }
+
+        double acc = (acc0 + acc1) + acc2;
+        tmp[i] = acc;
+
+        update_y:
+        for (j = 0; j < 42; j += 3) {
+#pragma HLS PIPELINE
+            y[j]     = y[j]     + A[i][j]     * acc;
+            y[j + 1] = y[j + 1] + A[i][j + 1] * acc;
+            y[j + 2] = y[j + 2] + A[i][j + 2] * acc;
+        }
+    }
+}
+
+Most recent evaluation result:
+
+{
+  "csim_pass": true,
+  "synth_pass": true,
+  "timeout": false,
+  "return_code": 0,
+  "metrics": {
+    "latency_best_cycles": 4416,
+    "latency_average_cycles": 4416,
+    "latency_worst_cycles": 4416,
+    "estimated_clock_period_ns": 10.565,
+    "target_clock_period_ns": 10.0,
+    "resources_lut_used": 4000,
+    "resources_ff_used": 4666,
+    "resources_dsp_used": 50,
+    "resources_bram_used": 0,
+    "report_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/iteration_03/evaluation/project/solution1/syn/report/csynth.xml"
+  },
+  "log_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/iteration_03/evaluation/vitis.log"
+}
+
+Return only the complete replacement C++ source.
+
+Do not include explanations, Markdown code fences, or prose.

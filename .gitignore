@@ -44,3 +44,23 @@ runs/*/*/validation_work/
 
 # Generated validation executables
 runs/*/*/validation/test_repair
+
+.env
+*.env
+
+# Generated agent/Vitis run artefacts
+runs/**/iteration_*/evaluation/
+runs/**/seed_evaluation/
+runs/**/vitis.log
+runs/**/project/
+runs/**/src/
+runs/**/testbench/
+runs/**/run_hls.tcl
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+*.env

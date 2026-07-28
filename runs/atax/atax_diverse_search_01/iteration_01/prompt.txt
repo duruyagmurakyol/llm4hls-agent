@@ -1,0 +1,154 @@
+You are optimising an AMD/Xilinx Vitis HLS implementation of the ATAX
+kernel.
+
+This is optimisation iteration 1.
+
+Required strategy for this iteration:
+Focus exclusively on meeting timing. Restructure floating-point accumulation to reduce the critical path. Consider multiple independent partial accumulators or a balanced reduction tree. Merely adding PIPELINE pragmas is not sufficient.
+
+Previous generated attempts:
+No previous generated attempts.
+
+Do not reproduce an implementation equivalent to a previous failed or
+non-improving attempt.
+
+Optimisation priorities, in order:
+
+1. Preserve functional correctness.
+2. Pass C simulation and Vitis HLS synthesis.
+3. Meet the target clock period of 10.0 ns.
+4. Reduce latency.
+5. Reduce LUT, FF, DSP and BRAM usage.
+
+The estimated clock period is the primary optimisation objective until
+the timing target is met.
+
+Do not exchange a large latency increase for a small reduction in LUTs.
+
+The current implementation appears to contain loop-carried
+double-precision accumulation dependencies. Merely adding PIPELINE
+pragmas may not remove these dependencies. Consider structural changes
+such as independent partial accumulators, carefully bounded loop
+unrolling, or a balanced final reduction.
+
+The ATAX dimensions are:
+
+- M = 38
+- N = 42
+
+Take care when unrolling because N=42 is not divisible by four or eight.
+All array accesses must remain in bounds.
+
+Original source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+#pragma HLS ARRAY_PARTITION variable=A cyclic factor=2 dim=2
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    init_y:
+    for (i = 0; i < n; i++) {
+#pragma HLS PIPELINE
+        y[i] = 0;
+    }
+
+    row_loop:
+    for (i = 0; i < m; i++) {
+        double acc0 = 0.0;
+        double acc1 = 0.0;
+
+        dot_loop:
+        for (j = 0; j < n; j += 2) {
+#pragma HLS PIPELINE
+            acc0 = acc0 + A[i][j] * x[j];
+            acc1 = acc1 + A[i][j + 1] * x[j + 1];
+        }
+
+        double acc = acc0 + acc1;
+        tmp[i] = acc;
+
+        update_y:
+        for (j = 0; j < n; j++) {
+#pragma HLS PIPELINE
+#pragma HLS UNROLL factor=2
+            y[j] = y[j] + A[i][j] * acc;
+        }
+    }
+}
+
+
+Current best source:
+
+#include "atax.h"
+
+void kernel_atax(double A[38][42], double x[42], double y[42], double tmp[38]) {
+#pragma HLS top name = kernel_atax
+#pragma HLS ARRAY_PARTITION variable=A cyclic factor=2 dim=2
+
+    const int m = 38;
+    const int n = 42;
+
+    int i, j;
+
+    init_y:
+    for (i = 0; i < n; i++) {
+#pragma HLS PIPELINE
+        y[i] = 0;
+    }
+
+    row_loop:
+    for (i = 0; i < m; i++) {
+        double acc0 = 0.0;
+        double acc1 = 0.0;
+
+        dot_loop:
+        for (j = 0; j < n; j += 2) {
+#pragma HLS PIPELINE
+            acc0 = acc0 + A[i][j] * x[j];
+            acc1 = acc1 + A[i][j + 1] * x[j + 1];
+        }
+
+        double acc = acc0 + acc1;
+        tmp[i] = acc;
+
+        update_y:
+        for (j = 0; j < n; j++) {
+#pragma HLS PIPELINE
+#pragma HLS UNROLL factor=2
+            y[j] = y[j] + A[i][j] * acc;
+        }
+    }
+}
+
+
+Most recent evaluation result:
+
+{
+  "csim_pass": true,
+  "synth_pass": true,
+  "timeout": false,
+  "return_code": 0,
+  "metrics": {
+    "latency_best_cycles": 5936,
+    "latency_average_cycles": 5936,
+    "latency_worst_cycles": 5936,
+    "estimated_clock_period_ns": 10.565,
+    "target_clock_period_ns": 10.0,
+    "resources_lut_used": 1868,
+    "resources_ff_used": 1823,
+    "resources_dsp_used": 14,
+    "resources_bram_used": 0,
+    "report_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/seed_evaluation/project/solution1/syn/report/csynth.xml"
+  },
+  "log_path": "/home/xilinx/projects/llm4hls-agent/runs/atax/atax_diverse_search_01/seed_evaluation/vitis.log"
+}
+
+Return only the complete replacement C++ source.
+
+Do not include explanations, Markdown code fences, or prose.

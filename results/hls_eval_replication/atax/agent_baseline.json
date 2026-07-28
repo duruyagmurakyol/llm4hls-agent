@@ -1,0 +1,19 @@
+{
+  "csim_pass": true,
+  "synth_pass": true,
+  "timeout": false,
+  "return_code": 0,
+  "metrics": {
+    "latency_best_cycles": 1113,
+    "latency_average_cycles": 1113,
+    "latency_worst_cycles": 1113,
+    "estimated_clock_period_ns": 7.643,
+    "target_clock_period_ns": 10.0,
+    "resources_lut_used": 10443,
+    "resources_ff_used": 28391,
+    "resources_dsp_used": 56,
+    "resources_bram_used": 0,
+    "report_path": "/home/xilinx/projects/llm4hls-agent/runs/atax_evaluator_test/project/solution1/syn/report/csynth.xml"
+  },
+  "log_path": "/home/xilinx/projects/llm4hls-agent/runs/atax_evaluator_test/vitis.log"
+}
