@@ -15,8 +15,6 @@ from typing import Any
 
 
 def run_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run a command and capture combined stdout/stderr."""
-
     try:
         return subprocess.run(
             command,
@@ -31,8 +29,6 @@ def run_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[st
 
 
 def latest_result(repository_root: Path, experiment_id: str) -> Path | None:
-    """Return the newest result.json for one experiment."""
-
     experiment_root = repository_root / "results" / "experiments" / experiment_id
     if not experiment_root.is_dir():
         return None
@@ -41,13 +37,13 @@ def latest_result(repository_root: Path, experiment_id: str) -> Path | None:
 
 
 def runner_for(config: dict[str, Any]) -> str:
-    """Select the experiment runner from the configured repair mode."""
-
     mode = config.get("repair_mode")
     if mode == "autonomous":
         return "scripts/run_experiment.py"
     if mode == "structured_feedback":
         return "scripts/run_structured_experiment.py"
+    if mode == "direct_api":
+        return "scripts/run_api_experiment.py"
     raise SystemExit(f"Unsupported repair_mode: {mode}")
 
 
@@ -105,6 +101,7 @@ def main() -> None:
         row = {
             "experiment_id": experiment_id,
             "repair_mode": config.get("repair_mode"),
+            "provider": result.get("provider", config.get("provider")),
             "model": config.get("model"),
             "config": str(config_path.relative_to(repository_root)),
             "runner_return_code": process.returncode,
@@ -112,7 +109,10 @@ def main() -> None:
             "pre_host_validation_passed": result.get("pre_host_validation_passed"),
             "agent_return_code": result.get("agent_return_code"),
             "agent_timed_out": result.get("agent_timed_out"),
+            "input_tokens": result.get("input_tokens"),
+            "output_tokens": result.get("output_tokens"),
             "tokens_used": result.get("tokens_used"),
+            "latency_seconds": result.get("latency_seconds"),
             "changed_line_count": result.get("changed_line_count"),
             "tokens_per_changed_line": result.get("tokens_per_changed_line"),
             "modified_files": ";".join(result.get("modified_files", [])),
@@ -142,9 +142,14 @@ def main() -> None:
         for row in rows
         if isinstance(row.get("tokens_used"), int)
     ]
+    latency_values = [
+        float(row["latency_seconds"])
+        for row in rows
+        if isinstance(row.get("latency_seconds"), (int, float))
+    ]
 
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "suite": suite_name,
         "timestamp_utc": timestamp,
         "config_directory": str(config_dir.relative_to(repository_root)),
@@ -155,6 +160,10 @@ def main() -> None:
         "total_tokens": sum(token_values) if token_values else None,
         "average_tokens": round(sum(token_values) / len(token_values), 2)
         if token_values else None,
+        "total_api_latency_seconds": round(sum(latency_values), 3)
+        if latency_values else None,
+        "average_api_latency_seconds": round(sum(latency_values) / len(latency_values), 3)
+        if latency_values else None,
         "stopped_early": stopped_early,
         "all_passed": total_run == total_configured and passed_count == total_configured,
         "experiments": rows,
@@ -175,6 +184,7 @@ def main() -> None:
     print(f"Passed: {passed_count}/{total_configured}")
     print(f"Total tokens: {summary['total_tokens']}")
     print(f"Average tokens: {summary['average_tokens']}")
+    print(f"Average API latency: {summary['average_api_latency_seconds']}")
     if stopped_early:
         print("Stopped after the first failure. Use --continue-on-failure to run all configs.")
 
