@@ -63,19 +63,27 @@ def failure_class(output: str) -> str:
 def concise_evidence(output: str, limit: int = 1200) -> str:
     lines = [line for line in output.splitlines() if line.strip()]
     selected = [
-        line for line in lines
-        if any(token in line.lower() for token in ("error", "undefined", "fail", "expected", "actual"))
+        line
+        for line in lines
+        if any(
+            token in line.lower()
+            for token in ("error", "undefined", "fail", "expected", "actual")
+        )
     ]
     text = "\n".join(selected[-12:] or lines[-12:])
     return text[-limit:]
 
 
-def prompt(config: dict[str, Any], workspace: Path, evidence: str, category: str) -> tuple[str, str]:
+def prompt(
+    config: dict[str, Any], workspace: Path, evidence: str, category: str
+) -> tuple[str, str]:
     editable = str(config["editable_files"][0])
     source = (workspace / editable).read_text(encoding="utf-8")
     contexts: list[str] = []
     for name in config.get("context_files", config["protected_files"]):
-        contexts.append(f"FILE: {name}\n```\n{(workspace / name).read_text(encoding='utf-8')}\n```")
+        contexts.append(
+            f"FILE: {name}\n```\n{(workspace / name).read_text(encoding='utf-8')}\n```"
+        )
 
     system = (
         "You repair AMD/Xilinx HLS C++ code. Return only the complete repaired contents "
@@ -119,7 +127,10 @@ def main() -> None:
     run_dir = root / "results" / "experiments" / experiment_id / timestamp
     workspace = run_dir / "workspace"
     run_dir.mkdir(parents=True)
-    shutil.copytree(root / config["benchmark_source"], workspace)
+    benchmark_source = root / config["benchmark_source"]
+    if not benchmark_source.is_dir():
+        raise SystemExit(f"Benchmark source not found: {benchmark_source}")
+    shutil.copytree(benchmark_source, workspace)
     metadata = workspace / "fault.txt"
     if metadata.exists():
         metadata.unlink()
@@ -139,6 +150,7 @@ def main() -> None:
     (run_dir / "system_prompt.txt").write_text(system_prompt + "\n", encoding="utf-8")
     (run_dir / "prompt.txt").write_text(user_prompt + "\n", encoding="utf-8")
 
+    thinking_budget_value = config.get("thinking_budget")
     response = complete(
         model=str(config["model"]),
         system_prompt=system_prompt,
@@ -146,6 +158,9 @@ def main() -> None:
         temperature=float(config.get("temperature", 0.0)),
         max_tokens=int(config.get("max_output_tokens", 2048)),
         timeout_seconds=int(config.get("api_timeout_seconds", 120)),
+        thinking_budget=(
+            int(thinking_budget_value) if thinking_budget_value is not None else None
+        ),
     )
     repaired = clean_source(response.content)
     (run_dir / "raw_response.txt").write_text(response.content, encoding="utf-8")
@@ -156,16 +171,24 @@ def main() -> None:
 
     after_hashes = hashes(workspace, tracked)
     modified = [name for name in tracked if before_hashes[name] != after_hashes[name]]
-    protected_unchanged = all(before_hashes[name] == after_hashes[name] for name in protected)
+    protected_unchanged = all(
+        before_hashes[name] == after_hashes[name] for name in protected
+    )
     scope_ok = set(modified).issubset(set(editable))
-    diff = "".join(difflib.unified_diff(
-        before_source.splitlines(keepends=True),
-        repaired.splitlines(keepends=True),
-        fromfile=f"before/{editable[0]}",
-        tofile=f"after/{editable[0]}",
-    ))
+    diff = "".join(
+        difflib.unified_diff(
+            before_source.splitlines(keepends=True),
+            repaired.splitlines(keepends=True),
+            fromfile=f"before/{editable[0]}",
+            tofile=f"after/{editable[0]}",
+        )
+    )
     (run_dir / "repair.diff").write_text(diff, encoding="utf-8")
-    changed_lines = sum(1 for line in diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---")))
+    changed_lines = sum(
+        1
+        for line in diff.splitlines()
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    )
 
     post_code, post_output = validate(config, workspace)
     (run_dir / "host_validation_after.log").write_text(post_output, encoding="utf-8")
@@ -174,11 +197,16 @@ def main() -> None:
     independent_code: int | None = None
     independent_output = ""
     if independent.get("enabled", False):
-        command = [str(x).replace("{workspace}", str(workspace)) for x in independent["command"]]
+        command = [
+            str(x).replace("{workspace}", str(workspace))
+            for x in independent["command"]
+        ]
         process = run(command, root)
         independent_code = process.returncode
         independent_output = process.stdout or ""
-        (run_dir / "independent_validation.log").write_text(independent_output, encoding="utf-8")
+        (run_dir / "independent_validation.log").write_text(
+            independent_output, encoding="utf-8"
+        )
 
     result = {
         "schema_version": 3,
@@ -187,6 +215,7 @@ def main() -> None:
         "repair_mode": "direct_api",
         "provider": "siliconflow",
         "model": config["model"],
+        "thinking_budget": thinking_budget_value,
         "failure_class": category,
         "pre_host_validation_passed": pre_code == 0,
         "input_tokens": response.input_tokens,
@@ -197,12 +226,20 @@ def main() -> None:
         "protected_files_unchanged": protected_unchanged,
         "editable_scope_respected": scope_ok,
         "changed_line_count": changed_lines,
-        "tokens_per_changed_line": response.total_tokens / changed_lines if response.total_tokens is not None and changed_lines else None,
+        "tokens_per_changed_line": (
+            response.total_tokens / changed_lines
+            if response.total_tokens is not None and changed_lines
+            else None
+        ),
         "post_host_validation_passed": post_code == 0,
-        "independent_validation_passed": independent_code == 0 if independent_code is not None else None,
+        "independent_validation_passed": (
+            independent_code == 0 if independent_code is not None else None
+        ),
         "repair_diff_present": bool(diff.strip()),
     }
-    (run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    (run_dir / "result.json").write_text(
+        json.dumps(result, indent=2) + "\n", encoding="utf-8"
+    )
 
     if not args.keep_workspace:
         shutil.rmtree(workspace)
@@ -210,7 +247,10 @@ def main() -> None:
     print(f"Experiment: {experiment_id}")
     print(f"Model: {config['model']}")
     print(f"Failure class: {category}")
-    print(f"Tokens: {response.total_tokens} (input={response.input_tokens}, output={response.output_tokens})")
+    print(
+        f"Tokens: {response.total_tokens} "
+        f"(input={response.input_tokens}, output={response.output_tokens})"
+    )
     print(f"Latency: {response.latency_seconds:.2f}s")
     print(f"Modified files: {', '.join(modified) if modified else 'none'}")
     print(f"Post-repair host test passed: {post_code == 0}")
