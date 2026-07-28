@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "experiment_id": "bicg_iterative_qwen35_staged_compile_then_functional",
+  "timestamp_utc": "20260728T172941Z",
+  "repair_mode": "iterative_direct_api",
+  "provider": "siliconflow",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "max_iterations": 3,
+  "iterations_executed": 2,
+  "success_iteration": 2,
+  "initial_failure_class": "compile",
+  "total_input_tokens": 1032,
+  "total_output_tokens": 426,
+  "total_tokens": 1458,
+  "total_api_latency_seconds": 9.284,
+  "final_changed_line_count": 4,
+  "protected_files_unchanged": true,
+  "post_host_validation_passed": true,
+  "independent_validation_passed": true,
+  "passed": true,
+  "iterations": [
+    {
+      "iteration": 1,
+      "failure_class_before": "compile",
+      "evidence": "src/bicg.cpp:17:19: error: expected \u2018;\u2019 before \u2018for\u2019\nsrc/bicg.cpp:18:27: error: expected \u2018;\u2019 before \u2018)\u2019 token",
+      "input_tokens": 525,
+      "output_tokens": 216,
+      "tokens_used": 741,
+      "latency_seconds": 4.621102230998076,
+      "changed_line_count": 2,
+      "host_validation_passed": false,
+      "failure_class_after": "functional"
+    },
+    {
+      "iteration": 2,
+      "failure_class_before": "functional",
+      "evidence": "FAIL q index=1 expected=29.0952 actual=28.6548",
+      "input_tokens": 507,
+      "output_tokens": 210,
+      "tokens_used": 717,
+      "latency_seconds": 4.662822299000254,
+      "changed_line_count": 2,
+      "host_validation_passed": true,
+      "failure_class_after": "none"
+    }
+  ]
+}
