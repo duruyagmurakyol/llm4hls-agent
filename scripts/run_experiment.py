@@ -205,6 +205,12 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
     shutil.copytree(source_dir, workspace)
 
+    # Preserve fault metadata in the immutable benchmark source, but do not
+    # expose it to the autonomous repair agent.
+    fault_metadata = workspace / "fault.txt"
+    if fault_metadata.exists():
+        fault_metadata.unlink()
+
     copied_config = run_dir / "config.json"
     copied_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
