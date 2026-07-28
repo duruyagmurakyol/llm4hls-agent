@@ -1,0 +1,1 @@
+Missing semicolon and undeclared shifted_p mask incorrect s initialisation.

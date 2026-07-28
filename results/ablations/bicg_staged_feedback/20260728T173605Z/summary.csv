@@ -1,0 +1,7 @@
+case,mode,max_iterations,runner_return_code,passed,iterations_executed,success_iteration,total_tokens,total_api_latency_seconds,post_host_validation_passed,independent_validation_passed,result_path
+staged_compile_then_functional,one_shot,1,1,False,1,,741,6.383,False,False,results/experiments/bicg_iterative_qwen35_staged_compile_then_functional/20260728T173504Z/result.json
+staged_compile_then_functional,iterative,3,0,True,2,2,1458,8.505,True,True,results/experiments/bicg_iterative_qwen35_staged_compile_then_functional/20260728T173511Z/result.json
+staged_interface_then_functional,one_shot,1,1,False,1,,729,3.698,False,False,results/experiments/bicg_iterative_qwen35_staged_interface_then_functional/20260728T173526Z/result.json
+staged_interface_then_functional,iterative,3,0,True,2,2,1431,7.592,True,True,results/experiments/bicg_iterative_qwen35_staged_interface_then_functional/20260728T173530Z/result.json
+staged_compile_compile_functional,one_shot,1,1,False,1,,778,4.441,False,False,results/experiments/bicg_iterative_qwen35_staged_compile_compile_functional/20260728T173545Z/result.json
+staged_compile_compile_functional,iterative,3,0,True,2,2,1482,9.499,True,True,results/experiments/bicg_iterative_qwen35_staged_compile_compile_functional/20260728T173549Z/result.json
