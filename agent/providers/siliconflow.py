@@ -53,6 +53,7 @@ def complete(
     endpoint: str | None = None,
     max_attempts: int = 3,
     thinking_budget: int | None = None,
+    enable_thinking: bool | None = None,
 ) -> ModelResponse:
     """Call SiliconFlow and retry transient network/read failures."""
 
@@ -73,6 +74,8 @@ def complete(
     }
     if thinking_budget is not None:
         payload["thinking_budget"] = thinking_budget
+    if enable_thinking is not None:
+        payload["enable_thinking"] = enable_thinking
 
     request_body = json.dumps(payload).encode("utf-8")
     request_url = endpoint or _endpoint()
@@ -128,7 +131,7 @@ def complete(
         if finish_reason == "length" and isinstance(reasoning, str) and reasoning.strip():
             raise RuntimeError(
                 "SiliconFlow exhausted the output budget during reasoning before returning "
-                "final content. Set a smaller thinking_budget or larger max_tokens."
+                "final content. Disable thinking for this experiment or increase max_tokens."
             )
         raise RuntimeError(f"SiliconFlow returned empty content: {raw}")
 
