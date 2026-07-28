@@ -36,9 +36,19 @@ def latest_result(repository_root: Path, experiment_id: str) -> Path | None:
     experiment_root = repository_root / "results" / "experiments" / experiment_id
     if not experiment_root.is_dir():
         return None
-
     candidates = sorted(experiment_root.glob("*/result.json"))
     return candidates[-1] if candidates else None
+
+
+def runner_for(config: dict[str, Any]) -> str:
+    """Select the experiment runner from the configured repair mode."""
+
+    mode = config.get("repair_mode")
+    if mode == "autonomous":
+        return "scripts/run_experiment.py"
+    if mode == "structured_feedback":
+        return "scripts/run_structured_experiment.py"
+    raise SystemExit(f"Unsupported repair_mode: {mode}")
 
 
 def main() -> None:
@@ -73,10 +83,14 @@ def main() -> None:
     for index, config_path in enumerate(configs, start=1):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         experiment_id = str(config["experiment_id"])
-        print(f"[{index}/{len(configs)}] Running {experiment_id}...")
+        runner = runner_for(config)
+        print(
+            f"[{index}/{len(configs)}] Running {experiment_id} "
+            f"({config['repair_mode']})..."
+        )
 
         process = run_command(
-            [sys.executable, "scripts/run_experiment.py", str(config_path)],
+            [sys.executable, runner, str(config_path)],
             repository_root,
         )
         output = process.stdout or ""
@@ -90,11 +104,17 @@ def main() -> None:
 
         row = {
             "experiment_id": experiment_id,
+            "repair_mode": config.get("repair_mode"),
+            "model": config.get("model"),
             "config": str(config_path.relative_to(repository_root)),
             "runner_return_code": process.returncode,
+            "failure_class": result.get("failure_class"),
             "pre_host_validation_passed": result.get("pre_host_validation_passed"),
             "agent_return_code": result.get("agent_return_code"),
+            "agent_timed_out": result.get("agent_timed_out"),
             "tokens_used": result.get("tokens_used"),
+            "changed_line_count": result.get("changed_line_count"),
+            "tokens_per_changed_line": result.get("tokens_per_changed_line"),
             "modified_files": ";".join(result.get("modified_files", [])),
             "protected_files_unchanged": result.get("protected_files_unchanged"),
             "editable_scope_respected": result.get("editable_scope_respected"),
@@ -117,9 +137,14 @@ def main() -> None:
     passed_count = sum(bool(row["passed"]) for row in rows)
     total_run = len(rows)
     total_configured = len(configs)
+    token_values = [
+        int(row["tokens_used"])
+        for row in rows
+        if isinstance(row.get("tokens_used"), int)
+    ]
 
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite": suite_name,
         "timestamp_utc": timestamp,
         "config_directory": str(config_dir.relative_to(repository_root)),
@@ -127,6 +152,9 @@ def main() -> None:
         "executed_experiments": total_run,
         "passed_experiments": passed_count,
         "failed_experiments": total_run - passed_count,
+        "total_tokens": sum(token_values) if token_values else None,
+        "average_tokens": round(sum(token_values) / len(token_values), 2)
+        if token_values else None,
         "stopped_early": stopped_early,
         "all_passed": total_run == total_configured and passed_count == total_configured,
         "experiments": rows,
@@ -145,6 +173,8 @@ def main() -> None:
     print("\nSuite summary")
     print(f"Results: {suite_dir.relative_to(repository_root)}")
     print(f"Passed: {passed_count}/{total_configured}")
+    print(f"Total tokens: {summary['total_tokens']}")
+    print(f"Average tokens: {summary['average_tokens']}")
     if stopped_early:
         print("Stopped after the first failure. Use --continue-on-failure to run all configs.")
 
