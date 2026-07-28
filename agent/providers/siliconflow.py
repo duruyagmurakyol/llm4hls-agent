@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_ENDPOINT = "https://api.siliconflow.cn/v1/chat/completions"
+DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,11 @@ def _api_key() -> str:
     )
 
 
+def _endpoint() -> str:
+    base_url = os.environ.get("SILICONFLOW_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    return f"{base_url}/chat/completions"
+
+
 def complete(
     *,
     model: str,
@@ -44,7 +49,7 @@ def complete(
     temperature: float = 0.0,
     max_tokens: int = 2048,
     timeout_seconds: int = 120,
-    endpoint: str = DEFAULT_ENDPOINT,
+    endpoint: str | None = None,
 ) -> ModelResponse:
     """Call SiliconFlow once and return content plus exact usage metadata."""
 
@@ -59,7 +64,7 @@ def complete(
         "stream": False,
     }
     request = urllib.request.Request(
-        endpoint,
+        endpoint or _endpoint(),
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {_api_key()}",
