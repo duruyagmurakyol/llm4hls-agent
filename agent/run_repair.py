@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import difflib
 import json
 import shutil
 import subprocess
@@ -26,12 +27,27 @@ def read_config_value(config_path: Path, key: str) -> str | None:
 
 
 def classify_result(return_code: int, output: str) -> tuple[str, str]:
-    """Classify a Vitis HLS C-simulation result."""
+    """Classify a Vitis HLS C-simulation result.
+
+    Classification is ordered so that linker/interface and compiler failures
+    are identified before generic non-zero simulation messages.
+    """
 
     output_lower = output.lower()
 
     if return_code == 0 and "csim done with 0 errors" in output_lower:
         return "passed", "none"
+
+    interface_markers = [
+        "undefined symbol",
+        "undefined reference",
+        "linker command failed",
+        "ld.lld: error",
+        "cannot find symbol",
+    ]
+
+    if any(marker in output_lower for marker in interface_markers):
+        return "failed", "interface"
 
     compile_markers = [
         "error: expected",
@@ -40,13 +56,16 @@ def classify_result(return_code: int, output: str) -> tuple[str, str]:
         "error: unknown type name",
         "error: fatal error",
         "compilation terminated",
+        "compilation error(s)",
     ]
 
     if any(marker in output_lower for marker in compile_markers):
         return "failed", "compile"
 
     functional_markers = [
-        "fail",
+        "fail index=",
+        "test failed",
+        "mismatch",
         "returns nonzero value",
         "nonzero return value",
         "simulation failed",
@@ -63,7 +82,11 @@ def extract_evidence(output: str) -> list[str]:
 
     keywords = [
         "error:",
-        "fail",
+        "undefined symbol",
+        "undefined reference",
+        "linker command failed",
+        "fail index=",
+        "mismatch",
         "simulation failed",
         "csim failed",
         "returns nonzero",
@@ -82,6 +105,49 @@ def extract_evidence(output: str) -> list[str]:
                 evidence.append(cleaned_line)
 
     return evidence[:20]
+
+
+def calculate_edit_metrics(source_code: str, candidate_code: str) -> dict[str, object]:
+    """Measure line-level changes between the broken source and repair."""
+
+    source_lines = source_code.splitlines()
+    candidate_lines = candidate_code.splitlines()
+    matcher = difflib.SequenceMatcher(
+        None,
+        source_lines,
+        candidate_lines,
+        autojunk=False,
+    )
+
+    added_lines = 0
+    removed_lines = 0
+    changed_hunks = 0
+    unchanged_lines = 0
+
+    for tag, source_start, source_end, candidate_start, candidate_end in matcher.get_opcodes():
+        if tag == "equal":
+            unchanged_lines += source_end - source_start
+            continue
+
+        changed_hunks += 1
+
+        if tag in {"replace", "delete"}:
+            removed_lines += source_end - source_start
+
+        if tag in {"replace", "insert"}:
+            added_lines += candidate_end - candidate_start
+
+    return {
+        "source_lines": len(source_lines),
+        "candidate_lines": len(candidate_lines),
+        "added_lines": added_lines,
+        "removed_lines": removed_lines,
+        "changed_lines": added_lines + removed_lines,
+        "changed_hunks": changed_hunks,
+        "unchanged_lines": unchanged_lines,
+        "similarity_ratio": round(matcher.ratio(), 4),
+        "exact_match": source_code.strip() == candidate_code.strip(),
+    }
 
 
 def generate_prompt(
@@ -211,7 +277,6 @@ def copy_validation_files(
     source_relative = source_path.relative_to(benchmark_dir)
     validation_source = validation_dir / source_relative
     validation_source.parent.mkdir(parents=True, exist_ok=True)
-
     shutil.copy2(candidate_path, validation_source)
 
     tb_setting = read_config_value(config_path, "tb.file")
@@ -241,29 +306,34 @@ def copy_validation_files(
     return validation_config, validation_source
 
 
+def write_result(result_path: Path, result: dict[str, object]) -> None:
+    """Write a formatted result record."""
+
+    result_path.write_text(
+        json.dumps(result, indent=2),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run, diagnose, repair and validate a Vitis HLS benchmark."
     )
-
     parser.add_argument(
         "benchmark",
         type=Path,
         help="Benchmark directory containing task.cfg",
     )
-
     parser.add_argument(
         "--generate-repair",
         action="store_true",
         help="Use Codex to generate a candidate repair after failure",
     )
-
     parser.add_argument(
         "--validate",
         action="store_true",
         help="Validate the generated candidate using Vitis C simulation",
     )
-
     parser.add_argument(
         "--model",
         default="gpt-5.5",
@@ -303,7 +373,6 @@ def main() -> None:
 
     safe_name = benchmark_name.replace("/", "_").replace("\\", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     run_dir = repository_root / "runs" / safe_name / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -323,7 +392,6 @@ def main() -> None:
         config_path=config_path,
         work_dir=original_work_dir,
     )
-
     original_output = original_process.stdout or ""
     original_log_path.write_text(original_output, encoding="utf-8")
 
@@ -331,7 +399,6 @@ def main() -> None:
         original_process.returncode,
         original_output,
     )
-
     evidence = extract_evidence(original_output)
 
     result: dict[str, object] = {
@@ -354,49 +421,34 @@ def main() -> None:
 
     if evidence:
         print("Evidence:")
-
         for line in evidence:
             print(f"  {line}")
 
     if status == "passed":
         result["repair_status"] = "not_required"
-
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
+        write_result(result_path, result)
         print("Benchmark already passes; no repair generated.")
         print(f"Result record: {result_path}")
         return
 
     source_code = source_path.read_text(encoding="utf-8")
-
     prompt = generate_prompt(
         benchmark_name=benchmark_name,
         failure_class=failure_class,
         evidence=evidence,
         source_code=source_code,
     )
-
     prompt_path.write_text(prompt, encoding="utf-8")
     result["repair_prompt"] = str(prompt_path.relative_to(repository_root))
-
     print(f"Generated prompt: {prompt_path}")
 
     if not args.generate_repair:
         result["repair_status"] = "prompt_generated"
-
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
+        write_result(result_path, result)
         print(f"Result record: {result_path}")
         return
 
     print(f"Requesting repair from Codex using {args.model}...")
-
     codex_process = run_codex(
         prompt_text=prompt,
         output_path=candidate_path,
@@ -411,56 +463,42 @@ def main() -> None:
 
     if codex_process.returncode != 0:
         result["repair_status"] = "codex_failed"
-
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
-        raise SystemExit(
-            f"Codex failed. See: {codex_log_path}"
-        )
+        write_result(result_path, result)
+        raise SystemExit(f"Codex failed. See: {codex_log_path}")
 
     if not candidate_path.is_file():
         result["repair_status"] = "candidate_missing"
-
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
+        write_result(result_path, result)
         raise SystemExit("Codex did not produce a candidate source file.")
 
     candidate_text = candidate_path.read_text(encoding="utf-8").strip()
 
     if not candidate_text:
         result["repair_status"] = "candidate_empty"
-
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
+        write_result(result_path, result)
         raise SystemExit("Codex produced an empty candidate.")
 
+    edit_metrics = calculate_edit_metrics(source_code, candidate_text)
     result["repair_status"] = "candidate_generated"
     result["candidate"] = str(candidate_path.relative_to(repository_root))
+    result["edit_metrics"] = edit_metrics
 
     print(f"Candidate repair: {candidate_path}")
+    print(
+        "Edit metrics: "
+        f"+{edit_metrics['added_lines']} "
+        f"-{edit_metrics['removed_lines']} "
+        f"across {edit_metrics['changed_hunks']} hunk(s); "
+        f"similarity={edit_metrics['similarity_ratio']}"
+    )
 
     if not args.validate:
-        result_path.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8",
-        )
-
+        write_result(result_path, result)
         print(f"Result record: {result_path}")
         return
 
     print("Validating candidate in an isolated benchmark copy...")
-
     validation_dir = run_dir / "validation"
-
     validation_config, _ = copy_validation_files(
         benchmark_dir=benchmark_dir,
         config_path=config_path,
@@ -471,7 +509,6 @@ def main() -> None:
 
     validation_work_dir = run_dir / "validation_work"
     validation_log_path = run_dir / "validation_csim.log"
-
     validation_process = run_vitis_csim(
         benchmark_dir=validation_dir,
         config_path=validation_config,
@@ -480,12 +517,10 @@ def main() -> None:
 
     validation_output = validation_process.stdout or ""
     validation_log_path.write_text(validation_output, encoding="utf-8")
-
     validation_status, validation_failure_class = classify_result(
         validation_process.returncode,
         validation_output,
     )
-
     validation_evidence = extract_evidence(validation_output)
 
     result["validation"] = {
@@ -505,15 +540,10 @@ def main() -> None:
 
         if validation_evidence:
             print("Validation evidence:")
-
             for line in validation_evidence:
                 print(f"  {line}")
 
-    result_path.write_text(
-        json.dumps(result, indent=2),
-        encoding="utf-8",
-    )
-
+    write_result(result_path, result)
     print(f"Result record: {result_path}")
 
 
