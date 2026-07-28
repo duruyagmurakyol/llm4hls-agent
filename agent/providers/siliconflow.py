@@ -15,7 +15,10 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
-NON_THINKING_MODELS = {"Qwen/Qwen3.6-27B"}
+NON_THINKING_MODELS = {
+    "Qwen/Qwen3.5-122B-A10B",
+    "Qwen/Qwen3.6-27B",
+}
 
 
 @dataclass(frozen=True)
