@@ -52,13 +52,16 @@ def complete(
     timeout_seconds: int = 180,
     endpoint: str | None = None,
     max_attempts: int = 3,
+    thinking_budget: int | None = None,
 ) -> ModelResponse:
     """Call SiliconFlow and retry transient network/read failures."""
 
     if max_attempts <= 0:
         raise ValueError("max_attempts must be greater than zero")
+    if thinking_budget is not None and thinking_budget < 0:
+        raise ValueError("thinking_budget must be non-negative")
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -68,6 +71,9 @@ def complete(
         "max_tokens": max_tokens,
         "stream": False,
     }
+    if thinking_budget is not None:
+        payload["thinking_budget"] = thinking_budget
+
     request_body = json.dumps(payload).encode("utf-8")
     request_url = endpoint or _endpoint()
     overall_started = time.monotonic()
@@ -89,7 +95,6 @@ def complete(
             break
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
-            # Retry provider-side failures and rate limits, but not invalid requests/keys.
             if error.code not in {408, 429, 500, 502, 503, 504}:
                 raise RuntimeError(f"SiliconFlow HTTP {error.code}: {body}") from error
             last_error = RuntimeError(f"SiliconFlow HTTP {error.code}: {body}")
@@ -114,8 +119,17 @@ def complete(
     choices = raw.get("choices") or []
     if not choices:
         raise RuntimeError(f"SiliconFlow returned no choices: {raw}")
-    content = choices[0].get("message", {}).get("content")
+
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    finish_reason = choices[0].get("finish_reason")
     if not isinstance(content, str) or not content.strip():
+        reasoning = message.get("reasoning_content")
+        if finish_reason == "length" and isinstance(reasoning, str) and reasoning.strip():
+            raise RuntimeError(
+                "SiliconFlow exhausted the output budget during reasoning before returning "
+                "final content. Set a smaller thinking_budget or larger max_tokens."
+            )
         raise RuntimeError(f"SiliconFlow returned empty content: {raw}")
 
     usage = raw.get("usage") or {}
