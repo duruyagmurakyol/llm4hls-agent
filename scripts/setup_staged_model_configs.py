@@ -25,13 +25,37 @@ def slugify(value: str) -> str:
     return slug
 
 
+def default_thinking_budget(model: str) -> int | None:
+    """Return a provider-compatible default while minimizing model-specific confounds."""
+    if "kimi" in model.lower():
+        # SiliconFlow rejects thinking_budget=0 for Kimi. Omitting the field lets
+        # the provider use the model's supported default rather than inventing a
+        # non-comparable arbitrary budget.
+        return None
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Exact SiliconFlow model identifier")
     parser.add_argument("--slug", default=None, help="Short identifier used in paths/results")
+    parser.add_argument(
+        "--thinking-budget",
+        type=int,
+        default=None,
+        help="Optional positive model-specific thinking budget; omit to use a safe default",
+    )
     args = parser.parse_args()
 
+    if args.thinking_budget is not None and args.thinking_budget <= 0:
+        raise SystemExit("--thinking-budget must be a positive integer when supplied")
+
     model_slug = args.slug or slugify(args.model.split("/")[-1])
+    thinking_budget = (
+        args.thinking_budget
+        if args.thinking_budget is not None
+        else default_thinking_budget(args.model)
+    )
     created = 0
 
     for benchmark in BENCHMARKS:
@@ -47,6 +71,7 @@ def main() -> None:
             config = json.loads(source.read_text(encoding="utf-8"))
             config["model"] = args.model
             config["experiment_id"] = f"{benchmark}_iterative_{model_slug}_{case}"
+            config["thinking_budget"] = thinking_budget
 
             target = target_root / f"{case}.json"
             target.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -57,6 +82,7 @@ def main() -> None:
         "schema_version": 1,
         "model": args.model,
         "model_slug": model_slug,
+        "thinking_budget": thinking_budget,
         "benchmarks": list(BENCHMARKS),
         "cases": list(CASES),
         "configs_created": created,
