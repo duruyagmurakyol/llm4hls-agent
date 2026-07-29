@@ -1,0 +1,7 @@
+benchmark,mode,runs,passed_runs,success_rate,mean_tokens,stdev_tokens,mean_latency_seconds,stdev_latency_seconds,mean_iterations,success_iteration_distribution
+BICG,one_shot,15,0,0.0,1081.733,153.6,32.126,42.815,1.0,{}
+BICG,iterative,15,15,1.0,2674.4,328.178,84.128,63.313,2.0,{'2': 15}
+ATAX,one_shot,15,0,0.0,1164.4,293.707,27.993,35.152,1.0,{}
+ATAX,iterative,15,15,1.0,2522.267,207.002,56.882,44.584,2.0,{'2': 15}
+ALL,one_shot,30,0,0.0,1123.067,234.097,30.06,38.548,1.0,{}
+ALL,iterative,30,30,1.0,2598.333,280.473,70.505,55.559,2.0,{'2': 30}

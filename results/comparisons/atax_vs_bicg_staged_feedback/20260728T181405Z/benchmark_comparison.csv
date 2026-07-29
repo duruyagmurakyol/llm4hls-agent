@@ -1,0 +1,7 @@
+benchmark,mode,runs,passed_runs,success_rate,mean_tokens,stdev_tokens,mean_latency_seconds,stdev_latency_seconds,median_latency_seconds,p90_latency_seconds,mean_iterations,success_iteration_distribution,source_summary
+BICG,one_shot,15,0,0.0,749.333,21.586,4.19,0.338,4.176,4.568,1.0,{},results/ablations/bicg_staged_feedback_repeated/20260728T174515Z/summary.json
+BICG,iterative,15,15,1.0,1457.0,21.564,16.343,31.427,8.055,10.628,2.0,{'2': 15},results/ablations/bicg_staged_feedback_repeated/20260728T174515Z/summary.json
+ATAX,one_shot,15,0,0.0,706.133,3.944,12.413,31.287,4.381,4.903,1.0,{},results/ablations/atax_staged_feedback_repeated/20260728T180452Z/summary.json
+ATAX,iterative,15,15,1.0,1386.333,7.943,8.671,1.02,8.462,9.455,2.0,{'2': 15},results/ablations/atax_staged_feedback_repeated/20260728T180452Z/summary.json
+COMBINED,one_shot,30,0,0.0,727.733,26.741,8.301,22.138,4.227,4.709,1.0,{},ATAX+BICG latest repeated summaries
+COMBINED,iterative,30,30,1.0,1421.667,39.325,12.507,22.193,8.216,10.36,2.0,{'2': 30},ATAX+BICG latest repeated summaries

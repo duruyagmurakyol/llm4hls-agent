@@ -1,0 +1,9 @@
+case,mode,runs,passed_runs,success_rate,mean_tokens,stdev_tokens,mean_latency_seconds,stdev_latency_seconds,mean_iterations,success_iteration_distribution
+staged_compile_then_functional,one_shot,5,0,0.0,710.0,0.0,4.627,0.324,1.0,{}
+staged_compile_then_functional,iterative,5,5,1.0,1394.0,2.236,9.119,0.345,2.0,{'2': 5}
+staged_interface_then_functional,one_shot,5,0,0.0,701.0,0.0,4.324,0.159,1.0,{}
+staged_interface_then_functional,iterative,5,5,1.0,1376.0,0.0,8.294,0.291,2.0,{'2': 5}
+staged_compile_compile_functional,one_shot,5,0,0.0,707.4,0.894,28.287,54.345,1.0,{}
+staged_compile_compile_functional,iterative,5,5,1.0,1389.0,0.0,8.6,1.733,2.0,{'2': 5}
+ALL_CASES,one_shot,15,0,0.0,706.133,3.944,12.413,31.287,1.0,{}
+ALL_CASES,iterative,15,15,1.0,1386.333,7.943,8.671,1.02,2.0,{'2': 15}

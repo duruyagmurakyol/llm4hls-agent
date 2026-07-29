@@ -1,0 +1,46 @@
+{
+  "experiment_id": "bicg_iterative_kimi_k27_code_staged_interface_then_functional",
+  "repair_mode": "iterative_direct_api",
+  "provider": "siliconflow",
+  "model": "moonshotai/Kimi-K2.7-Code",
+  "benchmark_source": "benchmarks/bicg/faults/staged_interface_then_functional",
+  "editable_files": [
+    "src/bicg.cpp"
+  ],
+  "protected_files": [
+    "src/bicg.h",
+    "testbench/bicg_test.cpp",
+    "task.cfg"
+  ],
+  "context_files": [
+    "src/bicg.h",
+    "task.cfg"
+  ],
+  "temperature": 0.0,
+  "max_output_tokens": 2048,
+  "api_timeout_seconds": 120,
+  "thinking_budget": null,
+  "max_iterations": 3,
+  "host_validation": {
+    "command": [
+      "g++",
+      "-std=c++17",
+      "-Isrc",
+      "src/bicg.cpp",
+      "testbench/bicg_test.cpp",
+      "-o",
+      "host_test"
+    ],
+    "run_command": [
+      "./host_test"
+    ]
+  },
+  "independent_validation": {
+    "enabled": true,
+    "command": [
+      "python3",
+      "agent/run_repair.py",
+      "{workspace}"
+    ]
+  }
+}
