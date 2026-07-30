@@ -137,21 +137,32 @@ def main() -> None:
 
     csim_dir = output_dir / f"candidate_{args.candidate_index:03d}_csim"
     project_dir = csim_dir / "project"
+    staged_candidate = csim_dir / candidate.name
     generated_tcl = csim_dir / "run_csim.tcl"
     log_path = csim_dir / "vitis_csim.log"
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
     csim_dir.mkdir(parents=True, exist_ok=True)
 
-    tcl_text, design_command = make_csim_tcl(baseline_tcl, candidate, project_dir)
-    if candidate.as_posix() not in design_command or "-cflags" not in design_command:
+    # Vitis 2025.2 rewrites an external absolute design path incorrectly in hls.app
+    # when the project is nested below the candidate. Stage an identical copy next to
+    # the project so its generated ../candidate_XXX.cpp path resolves correctly.
+    shutil.copy2(candidate, staged_candidate)
+    if staged_candidate.read_bytes() != candidate.read_bytes():
+        raise RuntimeError("Staged candidate differs from the original candidate.")
+
+    tcl_text, design_command = make_csim_tcl(
+        baseline_tcl, staged_candidate, project_dir
+    )
+    if staged_candidate.as_posix() not in design_command or "-cflags" not in design_command:
         raise RuntimeError(
-            "Generated design command did not preserve candidate path and compile flags."
+            "Generated design command did not preserve staged candidate path and compile flags."
         )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
     command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl)]
     print("\nCandidate CSim validation")
     print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
+    print(f"Staged candidate: {staged_candidate.relative_to(REPO_ROOT)}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
     print(f"Design source command: {design_command}")
     print("Running Vitis HLS CSim only...")
@@ -167,7 +178,7 @@ def main() -> None:
     log_path.write_text(completed.stdout, encoding="utf-8")
 
     candidate_compile_pattern = re.compile(
-        rf"Compiling\s+.*{re.escape(candidate.name)}\b", re.IGNORECASE
+        rf"Compiling\s+.*{re.escape(staged_candidate.name)}\b", re.IGNORECASE
     )
     candidate_compiled = bool(candidate_compile_pattern.search(completed.stdout))
     passed = completed.returncode == 0 and candidate_compiled
@@ -175,6 +186,7 @@ def main() -> None:
     report = {
         "candidate_index": args.candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
+        "staged_candidate_file": str(staged_candidate.relative_to(REPO_ROOT)),
         "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
         "design_source_command": design_command,
         "project_dir": str(project_dir.relative_to(REPO_ROOT)),
