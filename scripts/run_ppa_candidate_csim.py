@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +100,17 @@ def absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = N
     return " ".join(shlex.quote(token) for token in tokens)
 
 
+def temporary_project_dir(config_path: Path, candidate_index: int) -> Path:
+    """Use /tmp because Vitis 2025.2 omitted external design files in /home projects."""
+    run_key = hashlib.sha256(str(config_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return (
+        Path(tempfile.gettempdir())
+        / "llm4hls-agent"
+        / run_key
+        / f"candidate_{candidate_index:03d}_csim"
+    )
+
+
 def make_csim_tcl(
     baseline_tcl: Path,
     candidate: Path,
@@ -169,7 +182,8 @@ def main() -> None:
     parser.add_argument("--candidate-index", type=int, default=1)
     args = parser.parse_args()
 
-    config = load_json(args.config.resolve())
+    config_path = args.config.resolve()
+    config = load_json(config_path)
     output_dir = REPO_ROOT / config["output_dir"]
     candidate = output_dir / f"candidate_{args.candidate_index:03d}.cpp"
     validation = output_dir / f"candidate_{args.candidate_index:03d}_static_validation.json"
@@ -189,11 +203,15 @@ def main() -> None:
         raise FileNotFoundError(f"Baseline TCL not found: {baseline_tcl}")
 
     csim_dir = output_dir / f"candidate_{args.candidate_index:03d}_csim"
-    project_dir = csim_dir / "project"
+    project_dir = temporary_project_dir(config_path, args.candidate_index)
     generated_tcl = csim_dir / "run_csim.tcl"
     log_path = csim_dir / "vitis_csim.log"
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
     csim_dir.mkdir(parents=True, exist_ok=True)
+
+    # Vitis open_project -reset did not reliably clear bad source metadata.
+    shutil.rmtree(project_dir, ignore_errors=True)
+    project_dir.parent.mkdir(parents=True, exist_ok=True)
 
     tcl_text, design_command, auxiliary_commands = make_csim_tcl(
         baseline_tcl, candidate.resolve(), project_dir
@@ -203,7 +221,7 @@ def main() -> None:
     command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
     print("\nCandidate CSim validation")
     print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
-    print(f"Isolated project: {project_dir.relative_to(REPO_ROOT)}")
+    print(f"Temporary Vitis project: {project_dir}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
     print(f"Design source command: {design_command}")
     for auxiliary in auxiliary_commands:
@@ -232,7 +250,8 @@ def main() -> None:
         "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
         "design_source_command": design_command,
         "auxiliary_source_commands": auxiliary_commands,
-        "project_dir": str(project_dir.relative_to(REPO_ROOT)),
+        "project_dir": str(project_dir),
+        "project_storage": "temporary",
         "log_file": str(log_path.relative_to(REPO_ROOT)),
         "return_code": completed.returncode,
         "candidate_compiled": candidate_compiled,
