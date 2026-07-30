@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,18 +38,15 @@ def validate_config(config: dict[str, Any], repo_root: Path) -> None:
     required_files = {
         "baseline source": repo_root / baseline["source"],
         "baseline TCL": repo_root / baseline["tcl"],
+        "hierarchical analyser": repo_root / "scripts/analyse_hls_hierarchy.py",
     }
 
     for description, path in required_files.items():
         if not path.is_file():
             raise FileNotFoundError(f"{description} not found: {path}")
 
-    project_dir = repo_root / baseline["project_dir"]
-    if not project_dir.is_dir():
-        print(f"Warning: baseline project does not exist yet: {project_dir}")
 
-
-def print_plan(config: dict[str, Any], repo_root: Path) -> None:
+def print_configuration(config: dict[str, Any], repo_root: Path) -> None:
     baseline = config["baseline"]
     budget = config["budget"]
 
@@ -65,19 +64,51 @@ def print_plan(config: dict[str, Any], repo_root: Path) -> None:
     print(f"Maximum candidates: {budget['max_candidates']}")
     print(f"Maximum synthesis calls: {budget['max_synthesis_calls']}")
 
-    print("\nPlanned workflow")
-    print("1. Validate baseline")
-    print("2. Synthesise baseline")
-    print("3. Diagnose hierarchy")
-    print("4. Map target to source")
-    print("5. Generate constrained optimisation prompt")
-    print("6. Generate candidate")
-    print("7. Run CSim and synthesis")
-    print("8. Compare PPA")
-    print("9. Accept, reject, or retain candidate")
-    print("10. Write experiment record")
 
-    print("\nDry run complete. No synthesis or file modification was performed.")
+def diagnose_existing_baseline(config: dict[str, Any], repo_root: Path) -> Path:
+    project_dir = repo_root / config["baseline"]["project_dir"]
+
+    if not project_dir.is_dir():
+        raise FileNotFoundError(
+            "Baseline synthesis project does not exist yet: "
+            f"{project_dir}\n"
+            "This stage only reuses existing reports and does not run Vitis."
+        )
+
+    reports = sorted(project_dir.rglob("*csynth.xml"))
+    if not reports:
+        raise FileNotFoundError(
+            "No synthesis reports were found under: "
+            f"{project_dir}\n"
+            "This stage only reuses existing reports and does not run Vitis."
+        )
+
+    output_dir = repo_root / config["output_dir"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    diagnosis_path = output_dir / "baseline_hierarchical_diagnosis.json"
+
+    print("\nBaseline report validation")
+    print(f"Synthesis reports found: {len(reports)}")
+    for report in reports:
+        print(f"  - {report.relative_to(repo_root)}")
+
+    command = [
+        sys.executable,
+        str(repo_root / "scripts/analyse_hls_hierarchy.py"),
+        str(project_dir),
+        "--output",
+        str(diagnosis_path),
+    ]
+
+    print("\nRunning hierarchical diagnosis...")
+    subprocess.run(command, cwd=repo_root, check=True)
+
+    if not diagnosis_path.is_file():
+        raise RuntimeError(
+            f"Diagnosis command finished but output was not created: {diagnosis_path}"
+        )
+
+    return diagnosis_path
 
 
 def main() -> None:
@@ -96,7 +127,15 @@ def main() -> None:
 
     config = load_config(config_path)
     validate_config(config, repo_root)
-    print_plan(config, repo_root)
+    print_configuration(config, repo_root)
+
+    diagnosis_path = diagnose_existing_baseline(config, repo_root)
+
+    print("\nStage complete")
+    print("Validated the existing baseline synthesis reports.")
+    print("Ran the hierarchical bottleneck diagnosis.")
+    print(f"Output: {diagnosis_path.relative_to(repo_root)}")
+    print("No Vitis synthesis, LLM call, or candidate modification was performed.")
 
 
 if __name__ == "__main__":
