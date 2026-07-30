@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "experiment_id": "vector_add_ppa_qwen35",
+  "provider": "siliconflow",
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "workspace": "benchmarks/vector_add/ppa_baseline",
+  "editable_file": "src/vector_add.cpp",
+  "protected_files": [
+    "src/vector_add.h",
+    "testbench/vector_add_test.cpp",
+    "run_hls.tcl",
+    "task.cfg"
+  ],
+  "temperature": 0.0,
+  "max_output_tokens": 1536,
+  "thinking_budget": 0,
+  "api_timeout_seconds": 180,
+  "max_candidates": 1,
+  "synthesis_budget": 2,
+  "primary_objective": "latency_best_cycles",
+  "acceptance": {
+    "require_host_pass": true,
+    "require_csim_pass": false,
+    "require_primary_non_regression": true,
+    "require_any_metric_improvement": true
+  }
+}

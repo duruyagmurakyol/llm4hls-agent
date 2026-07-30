@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "source_report": "/tmp/atax_update_y/kernel_atax_Pipeline_update_y_csynth.xml",
+  "top_function": {
+    "name": "kernel_atax_Pipeline_update_y",
+    "latency_best_cycles": 53,
+    "latency_worst_cycles": 53,
+    "latency_cycles": 53,
+    "interval_min_cycles": 44,
+    "interval_max_cycles": 44,
+    "interval_cycles": 44
+  },
+  "loops": [
+    {
+      "name": "loop_1",
+      "trip_count": 21,
+      "latency_cycles": 51,
+      "achieved_ii": 2,
+      "target_ii": null,
+      "pipelined": true,
+      "contribution_to_total_latency": 0.9622641509433962
+    }
+  ],
+  "resources": {
+    "lut_used": 270,
+    "ff_used": 560,
+    "dsp_used": 0,
+    "bram_used": 0,
+    "lut_available": null,
+    "ff_available": null,
+    "dsp_available": null,
+    "bram_available": null
+  },
+  "clock": {
+    "target_period_ns": 10,
+    "estimated_period_ns": 7.042
+  },
+  "warnings": [],
+  "constraints": {
+    "interface_frozen": false
+  },
+  "extraction": {
+    "loop_count": 1,
+    "warning_count": 0,
+    "missing_fields": []
+  }
+}

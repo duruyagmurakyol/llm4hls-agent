@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "source_report": "/home/xilinx/projects/llm4hls-agent/benchmarks/vector_add/ppa_baseline/vector_add_hls/solution1/syn/report/vector_add_csynth.xml",
+  "top_function": {
+    "name": "vector_add",
+    "latency_best_cycles": 1026,
+    "latency_worst_cycles": 1026,
+    "latency_cycles": 1026,
+    "interval_min_cycles": 1024,
+    "interval_max_cycles": 1024,
+    "interval_cycles": 1024
+  },
+  "loops": [
+    {
+      "name": "loop_1",
+      "trip_count": 1024,
+      "latency_cycles": 1024,
+      "achieved_ii": 1,
+      "target_ii": null,
+      "pipelined": true,
+      "contribution_to_total_latency": 0.9980506822612085
+    }
+  ],
+  "resources": {
+    "lut_used": 113,
+    "ff_used": 24,
+    "dsp_used": 0,
+    "bram_used": 0,
+    "lut_available": null,
+    "ff_available": null,
+    "dsp_available": null,
+    "bram_available": null
+  },
+  "clock": {
+    "target_period_ns": 10,
+    "estimated_period_ns": 1.641
+  },
+  "warnings": [
+    "/home/xilinx/projects/llm4hls-agent/benchmarks/vector_add/ppa_baseline/run_hls.tcl:9:1: warning: HLS pragma dump _XLX_SEP_ PragmaIsValid=1_XLX_SEP_ PragmaType=top_XLX_SEP_ PragmaContext=directive_XLX_SEP_ PragmaFunction=vector_add_XLX_SEP_ PragmaOptions=name=vector_add_XLX_SEP_ [-Wdump-hls-pragmas]",
+    "1 warning generated.",
+    "| config_compile -design_size_maximum_warning | 100000 | Show a warning when total design instructions exceeds this value |"
+  ],
+  "constraints": {
+    "interface_frozen": true
+  },
+  "extraction": {
+    "loop_count": 1,
+    "warning_count": 3,
+    "missing_fields": []
+  }
+}
