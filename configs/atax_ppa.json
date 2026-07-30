@@ -15,7 +15,7 @@
     "enable_thinking": false
   },
   "budget": {
-    "max_candidates": 3,
+    "max_candidates": 5,
     "max_synthesis_calls": 4
   }
 }
