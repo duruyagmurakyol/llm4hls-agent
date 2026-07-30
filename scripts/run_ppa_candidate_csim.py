@@ -113,7 +113,7 @@ def main() -> None:
             "Run scripts/validate_ppa_candidate.py first."
         )
     validation_record = load_json(validation)
-    if not validation_record.get("overall_pass", validation_record.get("overall") == "PASS"):
+    if validation_record.get("passed") is not True:
         raise RuntimeError("Static validation did not pass; refusing to run CSim.")
 
     baseline_source = REPO_ROOT / config["baseline"]["source"]
