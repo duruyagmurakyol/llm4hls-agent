@@ -41,6 +41,30 @@ def _loops(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in loops if isinstance(item, dict)]
 
 
+CATEGORY_PRIORITY = {
+    "dataflow_stall": 100,
+    "critical_path": 95,
+    "memory_port_contention": 90,
+    "loop_carried_dependency": 88,
+    "pipeline_ii_violation": 80,
+    "sequential_loop": 75,
+    "resource_pressure": 70,
+    "near_sequential_lower_bound": 65,
+    "dominant_latency_region": 20,
+    "insufficient_evidence": 0,
+}
+
+
+def _ranking_key(item: Diagnosis) -> tuple[int, float]:
+    """Rank causal diagnoses above contextual observations.
+
+    A dominant region identifies where time is spent, but it does not explain why
+    the region is slow or whether it is already close to an architectural bound.
+    """
+
+    return (CATEGORY_PRIORITY.get(item.category, 10), item.confidence)
+
+
 def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
     """Return ranked diagnoses from generic synthesis/source evidence.
 
@@ -246,7 +270,7 @@ def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
             )
         )
 
-    diagnoses.sort(key=lambda item: item.confidence, reverse=True)
+    diagnoses.sort(key=_ranking_key, reverse=True)
     primary = diagnoses[0]
     return {
         "schema_version": 1,
