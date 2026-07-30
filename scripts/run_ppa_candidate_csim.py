@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -39,20 +39,71 @@ def first_command(lines: list[str], pattern: str, description: str) -> str:
     return command
 
 
-def replace_design_source(design_line: str, candidate_relative: str) -> str:
-    """Preserve the known-working design flags and replace only the source path."""
-    source_match = re.search(r"([^\s{}\"]+\.(?:c|cc|cpp))\s*$", design_line)
-    if source_match is None:
-        raise ValueError(f"Could not parse design source path from: {design_line}")
-    return design_line[: source_match.start()] + candidate_relative
+def parse_add_files(command: str) -> tuple[bool, list[str], str]:
+    """Return testbench flag, non-path options, and source path from add_files."""
+    tokens = shlex.split(command)
+    if not tokens or tokens[0] != "add_files":
+        raise ValueError(f"Not an add_files command: {command}")
+
+    is_testbench = "-tb" in tokens
+    source_index = next(
+        (
+            index
+            for index in range(len(tokens) - 1, 0, -1)
+            if re.search(r"\.(?:c|cc|cpp|cxx|h|hpp)$", tokens[index], re.IGNORECASE)
+        ),
+        None,
+    )
+    if source_index is None:
+        raise ValueError(f"Could not parse source path from: {command}")
+    return is_testbench, tokens[1:source_index], tokens[source_index]
+
+
+def absolutise_cflags(options: list[str], tcl_dir: Path) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(options):
+        token = options[index]
+        if token == "-cflags" and index + 1 < len(options):
+            flags = shlex.split(options[index + 1])
+            rewritten: list[str] = []
+            for flag in flags:
+                if flag.startswith("-I") and len(flag) > 2:
+                    include = Path(flag[2:])
+                    if not include.is_absolute():
+                        include = (tcl_dir / include).resolve()
+                    rewritten.append(f"-I{include.as_posix()}")
+                else:
+                    rewritten.append(flag)
+            result.extend(["-cflags", " ".join(rewritten)])
+            index += 2
+            continue
+        result.append(token)
+        index += 1
+    return result
+
+
+def absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = None) -> str:
+    is_testbench, options, source_text = parse_add_files(command)
+    source = replacement.resolve() if replacement is not None else Path(source_text)
+    if replacement is None and not source.is_absolute():
+        source = (tcl_dir / source).resolve()
+    options = absolutise_cflags(options, tcl_dir)
+
+    tokens = ["add_files"]
+    if is_testbench and "-tb" not in options:
+        tokens.append("-tb")
+    tokens.extend(options)
+    tokens.append(source.as_posix())
+    return " ".join(shlex.quote(token) for token in tokens)
 
 
 def make_csim_tcl(
     baseline_tcl: Path,
     candidate: Path,
     project_dir: Path,
-) -> tuple[str, str]:
-    """Mirror the proven-working baseline TCL topology exactly."""
+) -> tuple[str, str, list[str]]:
+    """Generate a location-independent CSim TCL using absolute artifact paths."""
     source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     tcl_dir = baseline_tcl.parent.resolve()
 
@@ -69,26 +120,23 @@ def make_csim_tcl(
             for line in source_lines
             if re.match(r"^add_files\b", line.strip())
             and "-tb" not in line
-            and re.search(r"\.(?:c|cc|cpp)(?:\s|$)", line.strip())
+            and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())
         ),
         None,
     )
     if design_line is None:
         raise ValueError("Could not find baseline design-source add_files command.")
 
-    header_commands = [
+    auxiliary_lines = [
         line.strip()
         for line in source_lines
         if re.match(r"^add_files\b", line.strip())
-        and "-tb" not in line
-        and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+        and (
+            "-tb" in line
+            or re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+        )
     ]
-    testbench_commands = [
-        line.strip()
-        for line in source_lines
-        if re.match(r"^add_files\b", line.strip()) and "-tb" in line
-    ]
-    if not testbench_commands:
+    if not any("-tb" in line for line in auxiliary_lines):
         raise ValueError("Could not find baseline testbench add_files command.")
 
     baseline_csim = next(
@@ -96,22 +144,21 @@ def make_csim_tcl(
         "csim_design",
     )
 
-    candidate_relative = Path(os.path.relpath(candidate.resolve(), tcl_dir)).as_posix()
-    design_command = replace_design_source(design_line, candidate_relative)
+    design_command = absolute_add_files(design_line, tcl_dir, candidate)
+    auxiliary_commands = [absolute_add_files(line, tcl_dir) for line in auxiliary_lines]
 
     canonical = [
         f'open_project -reset "{project_dir.resolve().as_posix()}"',
         set_top,
         design_command,
-        *header_commands,
-        *testbench_commands,
+        *auxiliary_commands,
         open_solution,
         set_part,
         create_clock,
         baseline_csim,
         "exit",
     ]
-    return "\n".join(canonical) + "\n", design_command
+    return "\n".join(canonical) + "\n", design_command, auxiliary_commands
 
 
 def main() -> None:
@@ -148,7 +195,7 @@ def main() -> None:
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
     csim_dir.mkdir(parents=True, exist_ok=True)
 
-    tcl_text, design_command = make_csim_tcl(
+    tcl_text, design_command, auxiliary_commands = make_csim_tcl(
         baseline_tcl, candidate.resolve(), project_dir
     )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
@@ -159,6 +206,8 @@ def main() -> None:
     print(f"Isolated project: {project_dir.relative_to(REPO_ROOT)}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
     print(f"Design source command: {design_command}")
+    for auxiliary in auxiliary_commands:
+        print(f"Auxiliary source command: {auxiliary}")
     print("Running Vitis HLS CSim only...")
 
     completed = subprocess.run(
@@ -182,6 +231,7 @@ def main() -> None:
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
         "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
         "design_source_command": design_command,
+        "auxiliary_source_commands": auxiliary_commands,
         "project_dir": str(project_dir.relative_to(REPO_ROOT)),
         "log_file": str(log_path.relative_to(REPO_ROOT)),
         "return_code": completed.returncode,
