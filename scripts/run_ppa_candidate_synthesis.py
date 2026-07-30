@@ -40,6 +40,13 @@ def first_command(lines: list[str], pattern: str, description: str) -> str:
     return command
 
 
+def top_name_from_command(set_top: str) -> str:
+    parts = set_top.split()
+    if len(parts) < 2:
+        raise ValueError(f"Could not parse top function from: {set_top}")
+    return parts[-1].strip("{}\"")
+
+
 def replace_design_source(design_line: str, candidate_relative: str) -> str:
     source_match = re.search(r"([^\s{}\"]+\.(?:c|cc|cpp))\s*$", design_line)
     if source_match is None:
@@ -51,12 +58,13 @@ def make_synthesis_tcl(
     baseline_tcl: Path,
     candidate: Path,
     project_name: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """Mirror the proven-working baseline topology and run synthesis only."""
     source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     tcl_dir = baseline_tcl.parent.resolve()
 
     set_top = first_command(source_lines, r"^set_top\b", "set_top")
+    top_name = top_name_from_command(set_top)
     open_solution = first_command(
         source_lines, r"^open_solution(?:\s+-reset)?\b", "open_solution"
     )
@@ -98,7 +106,7 @@ def make_synthesis_tcl(
         "csynth_design",
         "exit",
     ]
-    return "\n".join(canonical) + "\n", design_command
+    return "\n".join(canonical) + "\n", design_command, top_name
 
 
 def text_at(root: ET.Element, path: str) -> str | None:
@@ -134,12 +142,33 @@ def parse_csynth_xml(xml_path: Path) -> dict[str, Any]:
     }
 
 
+def collect_reports(report_dir: Path, top_name: str) -> tuple[Path | None, dict[str, dict[str, Any]]]:
+    xml_paths = sorted(report_dir.glob("*_csynth.xml"))
+    top_report = report_dir / f"{top_name}_csynth.xml"
+    if not top_report.is_file():
+        top_report = None
+
+    hierarchy: dict[str, dict[str, Any]] = {}
+    for xml_path in xml_paths:
+        function_name = xml_path.name.removesuffix("_csynth.xml")
+        hierarchy[function_name] = {
+            "csynth_xml": str(xml_path.relative_to(REPO_ROOT)),
+            "metrics": parse_csynth_xml(xml_path),
+        }
+    return top_report, hierarchy
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run isolated Vitis HLS synthesis for a CSim-validated PPA candidate."
     )
     parser.add_argument("config", type=Path, help="PPA optimisation JSON config")
     parser.add_argument("--candidate-index", type=int, default=1)
+    parser.add_argument(
+        "--extract-only",
+        action="store_true",
+        help="Reuse the existing synthesis project and only re-extract reports.",
+    )
     args = parser.parse_args()
 
     config = load_json(args.config.resolve())
@@ -169,76 +198,88 @@ def main() -> None:
 
     project_name = f"atax_candidate_{args.candidate_index:03d}_synthesis_project"
     project_dir = baseline_tcl.parent / project_name
-    tcl_text, design_command = make_synthesis_tcl(
+    tcl_text, design_command, top_name = make_synthesis_tcl(
         baseline_tcl, candidate.resolve(), project_name
     )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
-    command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
-    print("\nCandidate synthesis")
-    print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
-    print(f"Isolated project: {project_dir.relative_to(REPO_ROOT)}")
-    print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
-    print(f"Design source command: {design_command}")
-    print("Running Vitis HLS synthesis...")
+    completed_returncode: int | None = None
+    if not args.extract_only:
+        command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
+        print("\nCandidate synthesis")
+        print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
+        print(f"Isolated project: {project_dir.relative_to(REPO_ROOT)}")
+        print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
+        print(f"Design source command: {design_command}")
+        print("Running Vitis HLS synthesis...")
 
-    completed = subprocess.run(
-        command,
-        cwd=baseline_tcl.parent,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    log_path.write_text(completed.stdout, encoding="utf-8")
+        completed = subprocess.run(
+            command,
+            cwd=baseline_tcl.parent,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        completed_returncode = completed.returncode
+        log_path.write_text(completed.stdout, encoding="utf-8")
+    else:
+        print("\nCandidate synthesis report extraction")
+        print("Reusing existing synthesis results; Vitis will not be run.")
 
-    xml_candidates = sorted(project_dir.glob("solution1/syn/report/*_csynth.xml"))
-    xml_report = xml_candidates[0] if xml_candidates else None
-    metrics: dict[str, Any] = {}
+    report_dir = project_dir / "solution1/syn/report"
+    top_report: Path | None = None
+    hierarchy: dict[str, dict[str, Any]] = {}
     parse_error: str | None = None
-    if xml_report is not None:
-        try:
-            metrics = parse_csynth_xml(xml_report)
-        except (ET.ParseError, OSError, ValueError) as exc:
-            parse_error = str(exc)
+    try:
+        top_report, hierarchy = collect_reports(report_dir, top_name)
+    except (ET.ParseError, OSError, ValueError) as exc:
+        parse_error = str(exc)
 
-    passed = completed.returncode == 0 and xml_report is not None
+    metrics = hierarchy.get(top_name, {}).get("metrics", {})
+    synthesis_succeeded = top_report is not None
+    passed = synthesis_succeeded and (args.extract_only or completed_returncode == 0)
+
     report = {
         "candidate_index": args.candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
         "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
         "design_source_command": design_command,
         "project_dir": str(project_dir.relative_to(REPO_ROOT)),
-        "log_file": str(log_path.relative_to(REPO_ROOT)),
-        "csynth_xml": str(xml_report.relative_to(REPO_ROOT)) if xml_report else None,
-        "return_code": completed.returncode,
+        "log_file": str(log_path.relative_to(REPO_ROOT)) if log_path.exists() else None,
+        "top_function": top_name,
+        "top_csynth_xml": str(top_report.relative_to(REPO_ROOT)) if top_report else None,
+        "return_code": completed_returncode,
+        "extract_only": args.extract_only,
         "passed": passed,
         "metrics": metrics,
+        "hierarchical_reports": hierarchy,
         "parse_error": parse_error,
-        "synthesis_run": True,
+        "synthesis_run": not args.extract_only,
         "baseline_modified": False,
     }
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
-    print(f"Return code: {completed.returncode}")
-    print(f"CSynth XML found: {xml_report is not None}")
+    print(f"Top function: {top_name}")
+    print(f"Top CSynth XML found: {top_report is not None}")
     if metrics:
-        print("Metrics:")
+        print("Top-level metrics:")
         for key, value in metrics.items():
             print(f"  {key}: {value}")
+    print(f"Hierarchical reports found: {len(hierarchy)}")
     if parse_error:
         print(f"Metric parse warning: {parse_error}")
-    print(f"Log: {log_path.relative_to(REPO_ROOT)}")
     print(f"Report: {report_path.relative_to(REPO_ROOT)}")
     print(f"Overall: {'PASS' if passed else 'FAIL'}")
     print("The baseline source was not modified.")
 
     if not passed:
-        tail = completed.stdout.splitlines()[-40:]
-        if tail:
-            print("\nLast log lines")
-            print("\n".join(tail))
-        raise SystemExit(completed.returncode or 1)
+        if not args.extract_only and log_path.exists():
+            tail = log_path.read_text(encoding="utf-8").splitlines()[-40:]
+            if tail:
+                print("\nLast log lines")
+                print("\n".join(tail))
+        raise SystemExit(completed_returncode or 1)
 
 
 if __name__ == "__main__":
