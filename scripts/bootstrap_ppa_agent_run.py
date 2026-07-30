@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 
@@ -56,6 +57,10 @@ def main() -> None:
             "Use a new Track A run ID rather than overwriting evidence."
         )
 
+    run_stage(
+        "Ensure isolated baseline CSim and synthesis",
+        [str(SCRIPTS / "ensure_ppa_baseline_synthesis.py"), str(config_path)],
+    )
     run_stage(
         "Diagnose baseline and prepare Candidate 001 prompt",
         [str(SCRIPTS / "run_ppa_optimisation.py"), str(config_path)],
