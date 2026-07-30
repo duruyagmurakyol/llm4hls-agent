@@ -48,6 +48,10 @@ def _text_first(root: ET.Element, names: Iterable[str]) -> str | None:
 
 
 def find_csynth_xml(root: Path) -> Path:
+    if root.is_file():
+        if root.name.endswith("csynth.xml"):
+            return root
+        raise FileNotFoundError(f"Not a csynth XML report: {root}")
     candidates = sorted(root.glob("**/*csynth.xml"))
     if not candidates:
         raise FileNotFoundError(f"No *csynth.xml report found under {root}")
@@ -139,6 +143,8 @@ def extract_loops(root: ET.Element, top_latency: int | float | None) -> list[dic
 
 
 def collect_warnings(search_root: Path, limit: int = 100) -> list[str]:
+    if search_root.is_file():
+        search_root = search_root.parent
     patterns = ("*.log", "*.rpt")
     warnings: list[str] = []
     seen: set[str] = set()
