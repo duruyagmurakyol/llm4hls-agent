@@ -232,6 +232,137 @@ def map_target_to_source(
     return output_path
 
 
+def analyse_source_causes(
+    config: dict[str, Any], repo_root: Path, source_target_path: Path
+) -> Path:
+    source_target = json.loads(source_target_path.read_text(encoding="utf-8"))
+    source_path = repo_root / source_target["source_file"]
+    lines = source_path.read_text(encoding="utf-8").splitlines()
+
+    start = int(source_target["region_start_line"]) - 1
+    end = int(source_target["region_end_line"])
+    loop_lines = lines[start:end]
+
+    loop_header = next(
+        (line for line in loop_lines if re.search(r"\b(for|while)\s*\(", line)),
+        "",
+    )
+    induction_variables = set(
+        re.findall(r"\b(?:int\s+)?([A-Za-z_]\w*)\s*=", loop_header)
+    )
+
+    recurrence_variables: list[str] = []
+    recurrence_statements: list[str] = []
+    assignment_pattern = re.compile(
+        r"^\s*([A-Za-z_]\w*)\s*=\s*\1\s*([+\-*/])\s*.+;\s*$"
+    )
+
+    for line in loop_lines:
+        match = assignment_pattern.match(line)
+        if not match:
+            continue
+        variable = match.group(1)
+        if variable in induction_variables:
+            continue
+        if variable not in recurrence_variables:
+            recurrence_variables.append(variable)
+            recurrence_statements.append(line.strip())
+
+    array_accesses = sorted(
+        set(
+            match.group(1)
+            for line in loop_lines
+            for match in re.finditer(r"\b([A-Za-z_]\w*)\s*\[", line)
+        )
+    )
+
+    hypotheses: list[dict[str, Any]] = []
+    if recurrence_variables:
+        hypotheses.append(
+            {
+                "category": "loop_carried_reduction_recurrence",
+                "confidence": 0.88,
+                "evidence": {
+                    "variables": recurrence_variables,
+                    "statements": recurrence_statements,
+                },
+                "interpretation": (
+                    "The loop updates accumulator variables using their previous "
+                    "iteration values, creating loop-carried dependency chains."
+                ),
+            }
+        )
+
+    if any("*" in statement for statement in recurrence_statements):
+        hypotheses.append(
+            {
+                "category": "arithmetic_operator_chain",
+                "confidence": 0.70,
+                "evidence": {"statements": recurrence_statements},
+                "interpretation": (
+                    "Multiply-and-accumulate expressions may contribute to the "
+                    "reported critical path and recurrence latency."
+                ),
+            }
+        )
+
+    if len(array_accesses) >= 2:
+        hypotheses.append(
+            {
+                "category": "memory_access_or_port_pressure",
+                "confidence": 0.58,
+                "evidence": {"arrays": array_accesses},
+                "interpretation": (
+                    "Multiple array accesses occur in each loop iteration, so memory "
+                    "banking or port availability should remain an alternative cause."
+                ),
+            }
+        )
+
+    if not hypotheses:
+        hypotheses.append(
+            {
+                "category": "source_cause_not_identified",
+                "confidence": 0.30,
+                "evidence": {},
+                "interpretation": (
+                    "The current lightweight source analysis found no explicit "
+                    "recurrence or memory-access pattern."
+                ),
+            }
+        )
+
+    output_path = repo_root / config["output_dir"] / "baseline_source_cause.json"
+    record = {
+        "target_name": source_target["target_name"],
+        "loop_label": source_target["loop_label"],
+        "source_file": source_target["source_file"],
+        "region_start_line": source_target["region_start_line"],
+        "region_end_line": source_target["region_end_line"],
+        "primary_hypothesis": hypotheses[0],
+        "alternative_hypotheses": hypotheses[1:],
+        "analysis_scope": "labelled_loop_only",
+    }
+    output_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+    primary = hypotheses[0]
+    print("\nSource-cause analysis")
+    print(f"Primary hypothesis: {primary['category']}")
+    print(f"Confidence: {primary['confidence']}")
+    if recurrence_variables:
+        print(f"Recurrence variables: {', '.join(recurrence_variables)}")
+    if array_accesses:
+        print(f"Arrays accessed: {', '.join(array_accesses)}")
+    for alternative in hypotheses[1:]:
+        print(
+            "Alternative hypothesis: "
+            f"{alternative['category']} "
+            f"(confidence={alternative['confidence']})"
+        )
+
+    return output_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run diagnosis-guided HLS PPA optimisation."
@@ -252,13 +383,16 @@ def main() -> None:
 
     diagnosis_path = diagnose_existing_baseline(config, repo_root)
     source_target_path = map_target_to_source(config, repo_root, diagnosis_path)
+    source_cause_path = analyse_source_causes(config, repo_root, source_target_path)
 
     print("\nStage complete")
     print("Validated the existing baseline synthesis reports.")
     print("Ran the hierarchical bottleneck diagnosis.")
     print("Mapped the selected target back to the baseline source.")
+    print("Generated source-level cause hypotheses for the selected loop.")
     print(f"Diagnosis: {diagnosis_path.relative_to(repo_root)}")
     print(f"Source target: {source_target_path.relative_to(repo_root)}")
+    print(f"Source cause: {source_cause_path.relative_to(repo_root)}")
     print("No Vitis synthesis, LLM call, or candidate modification was performed.")
 
 
