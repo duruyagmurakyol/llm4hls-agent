@@ -1,0 +1,14 @@
+{
+  "experiment_name": "atax_ppa",
+  "benchmark": "atax",
+  "baseline": {
+    "source": "benchmarks/hls_eval/atax/candidates/atax_candidate_3b.cpp",
+    "tcl": "benchmarks/hls_eval/atax/scripts/run_candidate_3b.tcl",
+    "project_dir": "benchmarks/hls_eval/atax/scripts/atax_candidate_3b_project"
+  },
+  "output_dir": "experiments/atax/autonomous_ppa",
+  "budget": {
+    "max_candidates": 3,
+    "max_synthesis_calls": 4
+  }
+}
