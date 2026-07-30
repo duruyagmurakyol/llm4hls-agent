@@ -32,6 +32,10 @@ OBJECTIVES = (
     "resources_dsp_used",
     "resources_bram_used",
 )
+PARETO_ELIGIBLE_VERDICTS = {
+    "accept_dominates_baseline",
+    "keep_pareto_candidate",
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -65,7 +69,6 @@ def baseline_metrics(output_dir: Path) -> dict[str, Any]:
             if isinstance(metrics, dict) and metrics:
                 return metrics
 
-    # Stable fallback for the existing ATAX diagnosis format: find kernel_atax.
     for key in ("reports", "functions", "ranked_targets"):
         items = diagnosis.get(key)
         if not isinstance(items, list):
@@ -78,7 +81,6 @@ def baseline_metrics(output_dir: Path) -> dict[str, Any]:
             if name == "kernel_atax" and isinstance(metrics, dict) and metrics:
                 return metrics
 
-    # Candidate 001 is known to be synthesis-identical to the cached baseline.
     candidate_one = output_dir / "candidate_001_synthesis.json"
     if candidate_one.is_file():
         metrics = load_json(candidate_one).get("metrics")
@@ -107,13 +109,20 @@ def classify_candidate(output_dir: Path, index: int, baseline: dict[str, Any]) -
     csim = load_optional(output_dir / f"{prefix}_csim_validation.json")
     synthesis = load_optional(output_dir / f"{prefix}_synthesis.json")
 
+    synthesis_completed = bool(
+        synthesis
+        and synthesis.get("passed") is True
+        and isinstance(synthesis.get("metrics"), dict)
+        and synthesis.get("metrics")
+    )
+
     record: dict[str, Any] = {
         "candidate_index": index,
         "candidate_file": str(source.relative_to(REPO_ROOT)),
         "static_validation": static.get("passed") if static else None,
         "csim": csim.get("passed") if csim else None,
         "synthesis": synthesis.get("passed") if synthesis else None,
-        "synthesis_run": bool(synthesis and synthesis.get("synthesis_run")),
+        "synthesis_run": synthesis_completed,
         "metrics": {},
         "deltas_percent": {},
         "verdict": "incomplete",
@@ -131,7 +140,7 @@ def classify_candidate(output_dir: Path, index: int, baseline: dict[str, Any]) -
         record["reason"] = "Vitis CSim failed or the candidate was not compiled."
         return record
 
-    if not synthesis or synthesis.get("passed") is not True:
+    if not synthesis_completed:
         return record
 
     metrics = synthesis.get("metrics") or {}
@@ -205,14 +214,16 @@ def main() -> None:
     baseline = baseline_metrics(output_dir)
     records = [classify_candidate(output_dir, index, baseline) for index in candidate_indices(output_dir)]
 
-    synthesized = [record for record in records if record.get("synthesis") is True]
+    pareto_candidates = [
+        record for record in records if record.get("verdict") in PARETO_ELIGIBLE_VERDICTS
+    ]
     baseline_record = {
         "candidate_index": 0,
         "candidate_file": config["baseline"]["source"],
         "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
         "verdict": "baseline",
     }
-    pareto_pool = [baseline_record, *synthesized]
+    pareto_pool = [baseline_record, *pareto_candidates]
     pareto = [
         item
         for item in pareto_pool
