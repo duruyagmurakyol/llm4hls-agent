@@ -57,7 +57,7 @@ def replace_design_source(design_line: str, candidate_relative: str) -> str:
 def make_synthesis_tcl(
     baseline_tcl: Path,
     candidate: Path,
-    project_name: str,
+    project_dir: Path,
 ) -> tuple[str, str, str]:
     """Mirror the proven-working baseline topology and run synthesis only."""
     source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
@@ -96,7 +96,7 @@ def make_synthesis_tcl(
     design_command = replace_design_source(design_line, candidate_relative)
 
     canonical = [
-        f"open_project -reset {project_name}",
+        f'open_project -reset "{project_dir.resolve().as_posix()}"',
         set_top,
         design_command,
         *header_commands,
@@ -191,15 +191,14 @@ def main() -> None:
         raise FileNotFoundError(f"Baseline TCL not found: {baseline_tcl}")
 
     synthesis_dir = output_dir / f"candidate_{args.candidate_index:03d}_synthesis"
+    project_dir = synthesis_dir / "project"
     generated_tcl = synthesis_dir / "run_synthesis.tcl"
     log_path = synthesis_dir / "vitis_synthesis.log"
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_synthesis.json"
     synthesis_dir.mkdir(parents=True, exist_ok=True)
 
-    project_name = f"atax_candidate_{args.candidate_index:03d}_synthesis_project"
-    project_dir = baseline_tcl.parent / project_name
     tcl_text, design_command, top_name = make_synthesis_tcl(
-        baseline_tcl, candidate.resolve(), project_name
+        baseline_tcl, candidate.resolve(), project_dir
     )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
