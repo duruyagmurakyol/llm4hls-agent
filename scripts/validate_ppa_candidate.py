@@ -45,6 +45,75 @@ def normalised_signature(text: str, name: str) -> str | None:
     return re.sub(r'^extern\s+"C"\s+', '', signature)
 
 
+def matching_brace(text: str, opening: int) -> int | None:
+    depth = 0
+    for index in range(opening, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def loop_tail_bounds_safe(text: str) -> tuple[bool, list[dict[str, Any]]]:
+    """Detect constant-trip loops whose indexed tail exceeds the declared bound."""
+    constants = {
+        name: int(value)
+        for name, value in re.findall(
+            r"\b(?:const\s+)?int\s+([A-Za-z_]\w*)\s*=\s*(\d+)\s*;", text
+        )
+    }
+    issues: list[dict[str, Any]] = []
+    loop_pattern = re.compile(
+        r"for\s*\(\s*([A-Za-z_]\w*)\s*=\s*(\d+)\s*;\s*"
+        r"\1\s*<\s*([A-Za-z_]\w*|\d+)\s*;\s*"
+        r"\1\s*\+=\s*(\d+)\s*\)\s*\{"
+    )
+
+    for match in loop_pattern.finditer(text):
+        variable, start_text, bound_text, step_text = match.groups()
+        bound = int(bound_text) if bound_text.isdigit() else constants.get(bound_text)
+        if bound is None:
+            continue
+
+        start = int(start_text)
+        step = int(step_text)
+        if step <= 0 or start >= bound:
+            continue
+
+        opening = text.find("{", match.start())
+        closing = matching_brace(text, opening)
+        if closing is None:
+            continue
+        body = text[opening + 1 : closing]
+
+        offsets = [0]
+        for access in re.finditer(
+            rf"\[\s*{re.escape(variable)}\s*(?:\+\s*(\d+))?\s*\]", body
+        ):
+            offsets.append(int(access.group(1) or 0))
+
+        max_offset = max(offsets)
+        last_iteration = start + ((bound - 1 - start) // step) * step
+        highest_index = last_iteration + max_offset
+        if highest_index >= bound:
+            issues.append(
+                {
+                    "loop_variable": variable,
+                    "start": start,
+                    "bound": bound,
+                    "step": step,
+                    "max_index_offset": max_offset,
+                    "last_iteration_start": last_iteration,
+                    "highest_index_accessed": highest_index,
+                }
+            )
+
+    return not issues, issues
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare a generated PPA candidate with its configured baseline."
@@ -76,6 +145,7 @@ def main() -> None:
     required_top = "kernel_atax"
     baseline_c_linkage = has_c_linkage(baseline, required_top)
     candidate_c_linkage = has_c_linkage(candidate, required_top)
+    bounds_safe, bounds_issues = loop_tail_bounds_safe(candidate)
 
     checks = {
         "non_empty": bool(candidate.strip()),
@@ -90,6 +160,7 @@ def main() -> None:
             and normalised_signature(candidate, required_top) is not None
         ),
         "top_linkage_preserved": baseline_c_linkage == candidate_c_linkage,
+        "constant_loop_tail_bounds_safe": bounds_safe,
     }
 
     loop_label = source_target.get("loop_label")
@@ -129,6 +200,7 @@ def main() -> None:
         "diff_file": str(diff_path.relative_to(REPO_ROOT)),
         "passed": passed,
         "checks": checks,
+        "bounds_issues": bounds_issues,
         "changed_diff_lines": changed_lines,
         "baseline_line_count": len(baseline.splitlines()),
         "candidate_line_count": len(candidate.splitlines()),
@@ -143,6 +215,12 @@ def main() -> None:
     print(f"Candidate: {candidate_path.relative_to(REPO_ROOT)}")
     for name, result in checks.items():
         print(f"{'PASS' if result else 'FAIL'}: {name}")
+    for issue in bounds_issues:
+        print(
+            "Bounds issue: "
+            f"{issue['loop_variable']} step {issue['step']} reaches index "
+            f"{issue['highest_index_accessed']} with bound {issue['bound']}"
+        )
     print(f"Changed diff lines: {changed_lines}")
     print(f"Diff: {diff_path.relative_to(REPO_ROOT)}")
     print(f"Report: {report_path.relative_to(REPO_ROOT)}")
