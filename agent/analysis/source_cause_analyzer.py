@@ -28,7 +28,15 @@ def _normalise_target(function: str) -> list[str]:
 
 
 def _source_files(root: Path) -> list[Path]:
-    excluded = {"solution1", ".git", "node_modules", "results"}
+    """Return source candidates, including Vitis preprocessed recovery files.
+
+    Generated wrapper/mapper files are retained as low-priority candidates, while
+    ``*.pp.*.cpp`` files receive a preference later because they contain the source
+    body that Vitis actually synthesised. A caller may explicitly point at a hidden
+    ``.autopilot/db`` directory, so solution directories must not be excluded.
+    """
+
+    excluded = {".git", "node_modules", "results"}
     files: list[Path] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
@@ -48,6 +56,10 @@ def _score_file(path: Path, text: str, tokens: list[str]) -> int:
         score += min(5, haystack.count(token))
     if "#pragma hls" in haystack:
         score += 2
+    if re.search(r"\.pp\.\d+\.cpp$", path.name, re.I):
+        score += 12
+    if path.name.startswith(("apatb_", "mapper_", "hls_design_meta")):
+        score -= 12
     return score
 
 
@@ -70,15 +82,30 @@ def _extract_region(text: str, tokens: list[str], context: int = 18) -> tuple[in
     return start + 1, end, numbered
 
 
+def _recurrence_updates(code: str) -> list[tuple[str, str, str]]:
+    """Detect compound and explicit self-referential recurrence assignments."""
+
+    updates = re.findall(r"\b([a-zA-Z_]\w*)\s*(\+=|-=|\*=)\s*([^;]+);", code)
+    seen = {(var, op, expr.strip()) for var, op, expr in updates}
+
+    explicit_pattern = re.compile(
+        r"\b([a-zA-Z_]\w*)\s*=\s*\1\s*([+\-*])\s*([^;]+);"
+    )
+    for match in explicit_pattern.finditer(code):
+        var, operator, expr = match.groups()
+        item = (var, f"={operator}", expr.strip())
+        if item not in seen:
+            updates.append(item)
+            seen.add(item)
+    return updates
+
+
 def _analyse_region(region: str, report_target: dict[str, Any]) -> dict[str, Any]:
     code = "\n".join(line.split(": ", 1)[-1] for line in region.splitlines())
-    lower = code.lower()
     max_ii = report_target.get("max_achieved_ii")
     report_category = (report_target.get("primary_diagnosis") or {}).get("category")
 
-    reductions = re.findall(
-        r"\b([a-zA-Z_]\w*)\s*(\+=|-=|\*=)\s*([^;]+);", code
-    )
+    reductions = _recurrence_updates(code)
     array_reads = re.findall(r"\b([a-zA-Z_]\w*)\s*\[[^\]]+\]", code)
     unique_arrays = sorted(set(array_reads))
     has_mul_add = bool(re.search(r"\*[^;\n]+(?:\+|\+=)|(?:\+|\+=)[^;\n]+\*", code))
