@@ -105,7 +105,7 @@ def main() -> None:
         "kind": "legacy_ppa",
         "config": relative(generated_adapter_path),
         "initialise_command": [
-            "scripts/run_ppa_optimisation.py",
+            "scripts/bootstrap_ppa_agent_run.py",
             relative(generated_adapter_path),
         ],
         "iteration_command": [
