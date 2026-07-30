@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -37,8 +38,30 @@ def first_command(lines: list[str], pattern: str, description: str) -> str:
     return command
 
 
-def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str:
-    """Rebuild a minimal TCL in a known-valid HLS command order."""
+def candidate_design_command(source_lines: list[str], candidate: Path) -> str:
+    """Preserve baseline design-source flags while replacing only its source path."""
+    design_line = next(
+        (
+            line.strip()
+            for line in source_lines
+            if re.match(r"^add_files\b", line.strip())
+            and "-tb" not in line
+            and re.search(r"\.(?:c|cc|cpp)(?:\s|$)", line.strip())
+        ),
+        None,
+    )
+    if design_line is None:
+        raise ValueError("Could not find the baseline design-source add_files command.")
+
+    source_match = re.search(r"([^\s{}\"]+\.(?:c|cc|cpp))\s*$", design_line)
+    if source_match is None:
+        raise ValueError(f"Could not parse design source path from: {design_line}")
+
+    return design_line[: source_match.start()] + "{" + candidate.as_posix() + "}"
+
+
+def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> tuple[str, str]:
+    """Rebuild a minimal TCL while preserving compile flags and header inputs."""
     source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
 
     set_top = first_command(source_lines, r"^set_top\b", "set_top")
@@ -48,6 +71,15 @@ def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str
     set_part = first_command(source_lines, r"^set_part\b", "set_part")
     create_clock = first_command(source_lines, r"^create_clock\b", "create_clock")
 
+    design_command = candidate_design_command(source_lines, candidate)
+
+    header_commands = [
+        line.strip()
+        for line in source_lines
+        if re.match(r"^add_files\b", line.strip())
+        and "-tb" not in line
+        and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+    ]
     testbench_commands = [
         line.strip()
         for line in source_lines
@@ -56,7 +88,6 @@ def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str
     if not testbench_commands:
         raise ValueError("Could not find any add_files -tb command in baseline TCL.")
 
-    # Preserve optional csim flags from the baseline command.
     baseline_csim = next(
         (line.strip() for line in source_lines if re.match(r"^csim_design\b", line.strip())),
         "csim_design",
@@ -65,7 +96,8 @@ def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str
     canonical = [
         f"open_project -reset {{{project_dir.as_posix()}}}",
         set_top,
-        f"add_files {{{candidate.as_posix()}}}",
+        design_command,
+        *header_commands,
         *testbench_commands,
         open_solution,
         set_part,
@@ -73,7 +105,7 @@ def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str
         baseline_csim,
         "exit",
     ]
-    return "\n".join(canonical) + "\n"
+    return "\n".join(canonical) + "\n", design_command
 
 
 def main() -> None:
@@ -110,10 +142,11 @@ def main() -> None:
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
     csim_dir.mkdir(parents=True, exist_ok=True)
 
-    tcl_text = make_csim_tcl(baseline_tcl, candidate, project_dir)
-    design_command = f"add_files {{{candidate.as_posix()}}}"
-    if design_command not in tcl_text:
-        raise RuntimeError("Generated TCL does not contain the exact candidate add_files command.")
+    tcl_text, design_command = make_csim_tcl(baseline_tcl, candidate, project_dir)
+    if candidate.as_posix() not in design_command or "-cflags" not in design_command:
+        raise RuntimeError(
+            "Generated design command did not preserve candidate path and compile flags."
+        )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
     command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl)]
@@ -143,6 +176,7 @@ def main() -> None:
         "candidate_index": args.candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
         "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
+        "design_source_command": design_command,
         "project_dir": str(project_dir.relative_to(REPO_ROOT)),
         "log_file": str(log_path.relative_to(REPO_ROOT)),
         "return_code": completed.returncode,
