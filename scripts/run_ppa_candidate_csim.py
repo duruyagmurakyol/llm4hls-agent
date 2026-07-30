@@ -38,31 +38,28 @@ def first_command(lines: list[str], pattern: str, description: str) -> str:
     return command
 
 
-def candidate_design_command(source_lines: list[str], candidate: Path) -> str:
-    """Preserve baseline design-source flags while replacing only its source path."""
-    design_line = next(
-        (
-            line.strip()
-            for line in source_lines
-            if re.match(r"^add_files\b", line.strip())
-            and "-tb" not in line
-            and re.search(r"\.(?:c|cc|cpp)(?:\s|$)", line.strip())
-        ),
-        None,
-    )
-    if design_line is None:
-        raise ValueError("Could not find the baseline design-source add_files command.")
-
-    source_match = re.search(r"([^\s{}\"]+\.(?:c|cc|cpp))\s*$", design_line)
-    if source_match is None:
-        raise ValueError(f"Could not parse design source path from: {design_line}")
-
-    return design_line[: source_match.start()] + "{" + candidate.as_posix() + "}"
+def resolve_from_tcl(path_text: str, tcl_dir: Path) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else (tcl_dir / path).resolve()
 
 
-def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> tuple[str, str]:
-    """Rebuild a minimal TCL while preserving compile flags and header inputs."""
+def extract_path(command: str, suffixes: tuple[str, ...]) -> str | None:
+    tokens = re.findall(r'\{([^{}]+)\}|"([^"]+)"|(\S+)', command)
+    flattened = [next(part for part in token if part) for token in tokens]
+    for token in reversed(flattened):
+        if token.endswith(suffixes):
+            return token
+    return None
+
+
+def make_csim_tcl(
+    baseline_tcl: Path,
+    candidate: Path,
+    project_dir: Path,
+) -> tuple[str, str, Path]:
+    """Build a minimal CSim TCL and stage the candidate after project reset."""
     source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
+    tcl_dir = baseline_tcl.parent
 
     set_top = first_command(source_lines, r"^set_top\b", "set_top")
     open_solution = first_command(
@@ -71,41 +68,73 @@ def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> tup
     set_part = first_command(source_lines, r"^set_part\b", "set_part")
     create_clock = first_command(source_lines, r"^create_clock\b", "create_clock")
 
-    design_command = candidate_design_command(source_lines, candidate)
+    header_line = next(
+        (
+            line.strip()
+            for line in source_lines
+            if re.match(r"^add_files\b", line.strip())
+            and "-tb" not in line
+            and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+        ),
+        None,
+    )
+    if header_line is None:
+        raise ValueError("Could not find the baseline header add_files command.")
+    header_text = extract_path(header_line, (".h", ".hpp"))
+    if header_text is None:
+        raise ValueError(f"Could not parse header path from: {header_line}")
+    header_path = resolve_from_tcl(header_text, tcl_dir)
+    if not header_path.is_file():
+        raise FileNotFoundError(f"Header not found: {header_path}")
 
-    header_commands = [
-        line.strip()
-        for line in source_lines
-        if re.match(r"^add_files\b", line.strip())
-        and "-tb" not in line
-        and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
-    ]
-    testbench_commands = [
-        line.strip()
-        for line in source_lines
-        if re.match(r"^add_files\b", line.strip()) and "-tb" in line
-    ]
-    if not testbench_commands:
-        raise ValueError("Could not find any add_files -tb command in baseline TCL.")
+    testbench_line = next(
+        (
+            line.strip()
+            for line in source_lines
+            if re.match(r"^add_files\b", line.strip()) and "-tb" in line
+        ),
+        None,
+    )
+    if testbench_line is None:
+        raise ValueError("Could not find the baseline testbench add_files command.")
+    testbench_text = extract_path(testbench_line, (".c", ".cc", ".cpp"))
+    if testbench_text is None:
+        raise ValueError(f"Could not parse testbench path from: {testbench_line}")
+    testbench_path = resolve_from_tcl(testbench_text, tcl_dir)
+    if not testbench_path.is_file():
+        raise FileNotFoundError(f"Testbench not found: {testbench_path}")
 
     baseline_csim = next(
         (line.strip() for line in source_lines if re.match(r"^csim_design\b", line.strip())),
         "csim_design",
     )
 
+    staged_candidate = project_dir / candidate.name
+    include_dir = header_path.parent
+    design_command = (
+        f'add_files -cflags "-I{include_dir.as_posix()}" '
+        f'{{{staged_candidate.as_posix()}}}'
+    )
+
     canonical = [
         f"open_project -reset {{{project_dir.as_posix()}}}",
+        # open_project -reset recreates the directory, so stage the file afterwards.
+        f"file copy -force {{{candidate.as_posix()}}} {{{staged_candidate.as_posix()}}}",
+        f"if {{![file exists {{{staged_candidate.as_posix()}}}]}} {{error \"Candidate staging failed\"}}",
         set_top,
         design_command,
-        *header_commands,
-        *testbench_commands,
+        f"add_files {{{header_path.as_posix()}}}",
+        (
+            f'add_files -tb -cflags "-I{include_dir.as_posix()} -Wno-unknown-pragmas" '
+            f'{{{testbench_path.as_posix()}}}'
+        ),
         open_solution,
         set_part,
         create_clock,
         baseline_csim,
         "exit",
     ]
-    return "\n".join(canonical) + "\n", design_command
+    return "\n".join(canonical) + "\n", design_command, staged_candidate
 
 
 def main() -> None:
@@ -137,32 +166,20 @@ def main() -> None:
 
     csim_dir = output_dir / f"candidate_{args.candidate_index:03d}_csim"
     project_dir = csim_dir / "project"
-    staged_candidate = csim_dir / candidate.name
     generated_tcl = csim_dir / "run_csim.tcl"
     log_path = csim_dir / "vitis_csim.log"
     report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
     csim_dir.mkdir(parents=True, exist_ok=True)
 
-    # Vitis 2025.2 rewrites an external absolute design path incorrectly in hls.app
-    # when the project is nested below the candidate. Stage an identical copy next to
-    # the project so its generated ../candidate_XXX.cpp path resolves correctly.
-    shutil.copy2(candidate, staged_candidate)
-    if staged_candidate.read_bytes() != candidate.read_bytes():
-        raise RuntimeError("Staged candidate differs from the original candidate.")
-
-    tcl_text, design_command = make_csim_tcl(
-        baseline_tcl, staged_candidate, project_dir
+    tcl_text, design_command, staged_candidate = make_csim_tcl(
+        baseline_tcl, candidate.resolve(), project_dir.resolve()
     )
-    if staged_candidate.as_posix() not in design_command or "-cflags" not in design_command:
-        raise RuntimeError(
-            "Generated design command did not preserve staged candidate path and compile flags."
-        )
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
-    command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl)]
+    command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
     print("\nCandidate CSim validation")
     print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
-    print(f"Staged candidate: {staged_candidate.relative_to(REPO_ROOT)}")
+    print(f"TCL-staged candidate: {staged_candidate.relative_to(REPO_ROOT)}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
     print(f"Design source command: {design_command}")
     print("Running Vitis HLS CSim only...")
@@ -178,7 +195,7 @@ def main() -> None:
     log_path.write_text(completed.stdout, encoding="utf-8")
 
     candidate_compile_pattern = re.compile(
-        rf"Compiling\s+.*{re.escape(staged_candidate.name)}\b", re.IGNORECASE
+        rf"Compiling\s+.*{re.escape(candidate.name)}\b", re.IGNORECASE
     )
     candidate_compiled = bool(candidate_compile_pattern.search(completed.stdout))
     passed = completed.returncode == 0 and candidate_compiled
@@ -207,7 +224,7 @@ def main() -> None:
     print("No synthesis was run and the baseline source was not modified.")
 
     if not passed:
-        tail = completed.stdout.splitlines()[-30:]
+        tail = completed.stdout.splitlines()[-35:]
         if tail:
             print("\nLast log lines")
             print("\n".join(tail))
