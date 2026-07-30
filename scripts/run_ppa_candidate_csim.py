@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Run CSim for one generated PPA candidate without modifying the baseline."""
+"""Run isolated Vitis HLS CSim for one generated PPA candidate."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,80 +30,50 @@ def find_vitis_run() -> str:
     )
 
 
-def make_csim_tcl(
-    baseline_tcl: Path,
-    candidate: Path,
-    project_dir: Path,
-) -> str:
-    """Build a clean CSim-only TCL while preserving baseline settings and testbench lines."""
+def first_command(lines: list[str], pattern: str, description: str) -> str:
+    command = next((line.strip() for line in lines if re.match(pattern, line.strip())), None)
+    if command is None:
+        raise ValueError(f"Could not find {description} in baseline TCL.")
+    return command
 
-    baseline_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
-    generated: list[str] = [
+
+def make_csim_tcl(baseline_tcl: Path, candidate: Path, project_dir: Path) -> str:
+    """Rebuild a minimal TCL in a known-valid HLS command order."""
+    source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
+
+    set_top = first_command(source_lines, r"^set_top\b", "set_top")
+    open_solution = first_command(
+        source_lines, r"^open_solution(?:\s+-reset)?\b", "open_solution"
+    )
+    set_part = first_command(source_lines, r"^set_part\b", "set_part")
+    create_clock = first_command(source_lines, r"^create_clock\b", "create_clock")
+
+    testbench_commands = [
+        line.strip()
+        for line in source_lines
+        if re.match(r"^add_files\b", line.strip()) and "-tb" in line
+    ]
+    if not testbench_commands:
+        raise ValueError("Could not find any add_files -tb command in baseline TCL.")
+
+    # Preserve optional csim flags from the baseline command.
+    baseline_csim = next(
+        (line.strip() for line in source_lines if re.match(r"^csim_design\b", line.strip())),
+        "csim_design",
+    )
+
+    canonical = [
         f"open_project -reset {{{project_dir.as_posix()}}}",
+        set_top,
         f"add_files {{{candidate.as_posix()}}}",
+        *testbench_commands,
+        open_solution,
+        set_part,
+        create_clock,
+        baseline_csim,
+        "exit",
     ]
-
-    saw_top = False
-    saw_solution = False
-    saw_part = False
-    saw_clock = False
-    testbench_count = 0
-
-    for line in baseline_lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        if re.match(r"^open_project\b", stripped):
-            continue
-        if re.match(r"^add_files\b", stripped):
-            if re.search(r"(?:^|\s)-tb(?:\s|$)", stripped):
-                generated.append(line)
-                testbench_count += 1
-            continue
-        if re.match(r"^(csim_design|csynth_design|cosim_design|export_design|exit)\b", stripped):
-            continue
-
-        generated.append(line)
-        saw_top = saw_top or bool(re.match(r"^set_top\b", stripped))
-        saw_solution = saw_solution or bool(re.match(r"^open_solution\b", stripped))
-        saw_part = saw_part or bool(re.match(r"^set_part\b", stripped))
-        saw_clock = saw_clock or bool(re.match(r"^create_clock\b", stripped))
-
-    missing = [
-        name
-        for name, present in (
-            ("set_top", saw_top),
-            ("open_solution", saw_solution),
-            ("set_part", saw_part),
-            ("create_clock", saw_clock),
-            ("testbench add_files -tb", testbench_count > 0),
-        )
-        if not present
-    ]
-    if missing:
-        raise ValueError(
-            "Baseline TCL is missing required CSim settings: " + ", ".join(missing)
-        )
-
-    generated.extend(["csim_design", "exit"])
-    tcl = "\n".join(generated) + "\n"
-
-    candidate_line = f"add_files {{{candidate.as_posix()}}}"
-    if tcl.count(candidate_line) != 1:
-        raise RuntimeError("Generated TCL does not contain exactly one candidate add_files line.")
-    design_add_files = [
-        line
-        for line in generated
-        if re.match(r"^\s*add_files\b", line) and "-tb" not in line
-    ]
-    if design_add_files != [candidate_line]:
-        raise RuntimeError(
-            "Generated TCL contains an unexpected design-source add_files command: "
-            f"{design_add_files}"
-        )
-
-    return tcl
+    return "\n".join(canonical) + "\n"
 
 
 def main() -> None:
@@ -127,8 +96,7 @@ def main() -> None:
             f"Static validation report not found: {validation}\n"
             "Run scripts/validate_ppa_candidate.py first."
         )
-    validation_record = load_json(validation)
-    if validation_record.get("passed") is not True:
+    if load_json(validation).get("passed") is not True:
         raise RuntimeError("Static validation did not pass; refusing to run CSim.")
 
     baseline_tcl = REPO_ROOT / config["baseline"]["tcl"]
@@ -143,13 +111,16 @@ def main() -> None:
     csim_dir.mkdir(parents=True, exist_ok=True)
 
     tcl_text = make_csim_tcl(baseline_tcl, candidate, project_dir)
+    design_command = f"add_files {{{candidate.as_posix()}}}"
+    if design_command not in tcl_text:
+        raise RuntimeError("Generated TCL does not contain the exact candidate add_files command.")
     generated_tcl.write_text(tcl_text, encoding="utf-8")
 
     command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl)]
     print("\nCandidate CSim validation")
     print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
-    print(f"Design source command: add_files {{{candidate.as_posix()}}}")
+    print(f"Design source command: {design_command}")
     print("Running Vitis HLS CSim only...")
 
     completed = subprocess.run(
@@ -162,8 +133,12 @@ def main() -> None:
     )
     log_path.write_text(completed.stdout, encoding="utf-8")
 
-    candidate_was_compiled = candidate.name in completed.stdout
-    passed = completed.returncode == 0 and candidate_was_compiled
+    candidate_compile_pattern = re.compile(
+        rf"Compiling\s+.*{re.escape(candidate.name)}\b", re.IGNORECASE
+    )
+    candidate_compiled = bool(candidate_compile_pattern.search(completed.stdout))
+    passed = completed.returncode == 0 and candidate_compiled
+
     report = {
         "candidate_index": args.candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
@@ -171,7 +146,7 @@ def main() -> None:
         "project_dir": str(project_dir.relative_to(REPO_ROOT)),
         "log_file": str(log_path.relative_to(REPO_ROOT)),
         "return_code": completed.returncode,
-        "candidate_was_compiled": candidate_was_compiled,
+        "candidate_compiled": candidate_compiled,
         "passed": passed,
         "synthesis_run": False,
         "baseline_modified": False,
@@ -179,7 +154,7 @@ def main() -> None:
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     print(f"Return code: {completed.returncode}")
-    print(f"Candidate compiled: {candidate_was_compiled}")
+    print(f"Candidate compiled: {candidate_compiled}")
     print(f"Log: {log_path.relative_to(REPO_ROOT)}")
     print(f"Report: {report_path.relative_to(REPO_ROOT)}")
     print(f"Overall: {'PASS' if passed else 'FAIL'}")
