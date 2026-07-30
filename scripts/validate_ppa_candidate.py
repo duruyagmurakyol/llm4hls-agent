@@ -23,11 +23,26 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def function_signature(text: str, name: str) -> str | None:
     pattern = re.compile(
-        rf"(?:extern\s+\"C\"\s*)?[\w:\s*&<>]+\b{re.escape(name)}\s*\([^)]*\)",
+        rf'(?:extern\s+"C"\s*)?[\w:\s*&<>]+\b{re.escape(name)}\s*\([^)]*\)',
         re.MULTILINE,
     )
     match = pattern.search(text)
     return " ".join(match.group(0).split()) if match else None
+
+
+def has_c_linkage(text: str, name: str) -> bool:
+    pattern = re.compile(
+        rf'extern\s+"C"\s+[\w:\s*&<>]+\b{re.escape(name)}\s*\(',
+        re.MULTILINE,
+    )
+    return bool(pattern.search(text))
+
+
+def normalised_signature(text: str, name: str) -> str | None:
+    signature = function_signature(text, name)
+    if signature is None:
+        return None
+    return re.sub(r'^extern\s+"C"\s+', '', signature)
 
 
 def main() -> None:
@@ -59,6 +74,9 @@ def main() -> None:
     source_target = load_json(source_target_path) if source_target_path.is_file() else {}
 
     required_top = "kernel_atax"
+    baseline_c_linkage = has_c_linkage(baseline, required_top)
+    candidate_c_linkage = has_c_linkage(candidate, required_top)
+
     checks = {
         "non_empty": bool(candidate.strip()),
         "contains_include": "#include" in candidate,
@@ -67,10 +85,11 @@ def main() -> None:
         "balanced_braces": candidate.count("{") == candidate.count("}"),
         "baseline_and_candidate_differ": baseline != candidate,
         "top_signature_preserved": (
-            function_signature(baseline, required_top)
-            == function_signature(candidate, required_top)
-            and function_signature(candidate, required_top) is not None
+            normalised_signature(baseline, required_top)
+            == normalised_signature(candidate, required_top)
+            and normalised_signature(candidate, required_top) is not None
         ),
+        "top_linkage_preserved": baseline_c_linkage == candidate_c_linkage,
     }
 
     loop_label = source_target.get("loop_label")
@@ -114,6 +133,8 @@ def main() -> None:
         "baseline_line_count": len(baseline.splitlines()),
         "candidate_line_count": len(candidate.splitlines()),
         "target_loop_label": loop_label,
+        "baseline_c_linkage": baseline_c_linkage,
+        "candidate_c_linkage": candidate_c_linkage,
         "note": "Static validation is a pre-synthesis gate and does not prove functional correctness.",
     }
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
