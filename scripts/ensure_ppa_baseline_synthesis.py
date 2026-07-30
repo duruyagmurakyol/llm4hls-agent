@@ -39,30 +39,58 @@ def first_command(lines: list[str], pattern: str, description: str) -> str:
     return command
 
 
-def source_commands(lines: list[str]) -> list[str]:
-    commands = [
+def design_source_command(lines: list[str]) -> str:
+    command = next(
+        (
+            line.strip()
+            for line in lines
+            if re.match(r"^add_files\b", line.strip())
+            and "-tb" not in line
+            and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())
+        ),
+        None,
+    )
+    if command is None:
+        raise ValueError("Could not find the design-source add_files command in baseline TCL.")
+    return command
+
+
+def replace_design_source(command: str, source_relative: str) -> str:
+    match = re.search(r"([^\s{}\"]+\.(?:c|cc|cpp|cxx))\s*$", command)
+    if match is None:
+        raise ValueError(f"Could not parse design source path from: {command}")
+    return command[: match.start()] + source_relative
+
+
+def auxiliary_source_commands(lines: list[str]) -> list[str]:
+    """Keep headers and testbench commands from the proven baseline TCL."""
+    return [
         line.strip()
         for line in lines
         if re.match(r"^add_files\b", line.strip())
+        and (
+            "-tb" in line
+            or re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+        )
     ]
-    if not commands:
-        raise ValueError("Could not find any add_files commands in baseline TCL.")
-    return commands
 
 
-def make_tcl(baseline_tcl: Path, project_dir: Path) -> str:
+def make_tcl(baseline_tcl: Path, baseline_source: Path, project_dir: Path) -> tuple[str, str]:
     lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     set_top = first_command(lines, r"^set_top\b", "set_top")
     open_solution = first_command(lines, r"^open_solution(?:\s+-reset)?\b", "open_solution")
     set_part = first_command(lines, r"^set_part\b", "set_part")
     create_clock = first_command(lines, r"^create_clock\b", "create_clock")
 
-    # Existing add_files paths are interpreted relative to the original TCL directory,
-    # so the generated TCL is executed from that same directory.
+    tcl_dir = baseline_tcl.parent.resolve()
+    source_relative = Path(os.path.relpath(baseline_source.resolve(), tcl_dir)).as_posix()
+    design_command = replace_design_source(design_source_command(lines), source_relative)
+
     commands = [
         f'open_project -reset "{project_dir.resolve().as_posix()}"',
         set_top,
-        *source_commands(lines),
+        design_command,
+        *auxiliary_source_commands(lines),
         open_solution,
         set_part,
         create_clock,
@@ -70,7 +98,7 @@ def make_tcl(baseline_tcl: Path, project_dir: Path) -> str:
         "csynth_design",
         "exit",
     ]
-    return "\n".join(commands) + "\n"
+    return "\n".join(commands) + "\n", design_command
 
 
 def main() -> None:
@@ -83,6 +111,7 @@ def main() -> None:
     config = load_json(args.config.resolve())
     baseline = config["baseline"]
     baseline_tcl = REPO_ROOT / baseline["tcl"]
+    baseline_source = REPO_ROOT / baseline["source"]
     project_dir = REPO_ROOT / baseline["project_dir"]
     output_dir = REPO_ROOT / config["output_dir"]
     run_dir = output_dir / "baseline_run"
@@ -91,6 +120,8 @@ def main() -> None:
 
     if not baseline_tcl.is_file():
         raise FileNotFoundError(f"Baseline TCL not found: {baseline_tcl}")
+    if not baseline_source.is_file():
+        raise FileNotFoundError(f"Baseline source not found: {baseline_source}")
 
     existing_reports = sorted(project_dir.rglob("*_csynth.xml")) if project_dir.is_dir() else []
     if existing_reports:
@@ -101,11 +132,14 @@ def main() -> None:
         return
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    generated_tcl.write_text(make_tcl(baseline_tcl, project_dir), encoding="utf-8")
+    tcl_text, design_command = make_tcl(baseline_tcl, baseline_source, project_dir)
+    generated_tcl.write_text(tcl_text, encoding="utf-8")
 
     command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
     print("\nBaseline CSim and synthesis")
     print(f"Source TCL: {baseline_tcl.relative_to(REPO_ROOT)}")
+    print(f"Baseline source: {baseline_source.relative_to(REPO_ROOT)}")
+    print(f"Design source command: {design_command}")
     print(f"Isolated project: {project_dir.relative_to(REPO_ROOT)}")
     print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
     print("Running Vitis HLS because no baseline synthesis reports exist...")
