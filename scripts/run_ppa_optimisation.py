@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -111,6 +112,126 @@ def diagnose_existing_baseline(config: dict[str, Any], repo_root: Path) -> Path:
     return diagnosis_path
 
 
+def select_recommended_target(diagnosis: dict[str, Any]) -> dict[str, Any]:
+    ranked = diagnosis.get("ranked_targets")
+    if isinstance(ranked, list) and ranked:
+        first = ranked[0]
+        if isinstance(first, dict):
+            return first
+
+    recommended = diagnosis.get("recommended_focus")
+    if isinstance(recommended, dict):
+        return recommended
+
+    raise ValueError(
+        "Could not find a recommended target in the hierarchical diagnosis JSON."
+    )
+
+
+def get_target_name(target: dict[str, Any]) -> str:
+    for key in ("function", "target", "name", "report_name"):
+        value = target.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    raise ValueError("The selected diagnosis target has no usable name field.")
+
+
+def infer_loop_label(target_name: str) -> str:
+    match = re.search(r"Pipeline_(.+)$", target_name)
+    if match:
+        return match.group(1)
+
+    return target_name.split("_")[-1]
+
+
+def find_labelled_loop(lines: list[str], label: str) -> tuple[int, int]:
+    label_pattern = re.compile(rf"^\s*{re.escape(label)}\s*:\s*$")
+    label_index = next(
+        (index for index, line in enumerate(lines) if label_pattern.match(line)),
+        None,
+    )
+
+    if label_index is None:
+        raise ValueError(f"Could not locate loop label '{label}:' in baseline source.")
+
+    loop_index = next(
+        (
+            index
+            for index in range(label_index + 1, min(len(lines), label_index + 8))
+            if re.search(r"\b(for|while)\s*\(", lines[index])
+        ),
+        None,
+    )
+
+    if loop_index is None:
+        raise ValueError(f"Found label '{label}:' but not its loop statement.")
+
+    brace_depth = 0
+    body_started = False
+    end_index = loop_index
+
+    for index in range(loop_index, len(lines)):
+        brace_depth += lines[index].count("{")
+        if "{" in lines[index]:
+            body_started = True
+        brace_depth -= lines[index].count("}")
+        end_index = index
+        if body_started and brace_depth == 0:
+            break
+
+    if not body_started:
+        end_index = loop_index
+
+    return label_index, end_index
+
+
+def map_target_to_source(
+    config: dict[str, Any], repo_root: Path, diagnosis_path: Path
+) -> Path:
+    with diagnosis_path.open("r", encoding="utf-8") as file:
+        diagnosis = json.load(file)
+
+    target = select_recommended_target(diagnosis)
+    target_name = get_target_name(target)
+    loop_label = infer_loop_label(target_name)
+
+    source_path = repo_root / config["baseline"]["source"]
+    lines = source_path.read_text(encoding="utf-8").splitlines()
+    start_index, end_index = find_labelled_loop(lines, loop_label)
+
+    context_start = max(0, start_index - 3)
+    context_end = min(len(lines), end_index + 4)
+    source_excerpt = "\n".join(
+        f"{index + 1:4d}: {lines[index]}"
+        for index in range(context_start, context_end)
+    )
+
+    output_dir = repo_root / config["output_dir"]
+    output_path = output_dir / "baseline_source_target.json"
+    record = {
+        "target_name": target_name,
+        "loop_label": loop_label,
+        "source_file": str(source_path.relative_to(repo_root)),
+        "label_line": start_index + 1,
+        "region_start_line": start_index + 1,
+        "region_end_line": end_index + 1,
+        "diagnosis": target,
+        "source_excerpt": source_excerpt,
+    }
+    output_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+    print("\nSource target mapping")
+    print(f"Selected target: {target_name}")
+    print(f"Loop label: {loop_label}")
+    print(f"Source: {source_path.relative_to(repo_root)}")
+    print(f"Lines: {start_index + 1}-{end_index + 1}")
+    print("\nRelevant source excerpt")
+    print(source_excerpt)
+
+    return output_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run diagnosis-guided HLS PPA optimisation."
@@ -130,11 +251,14 @@ def main() -> None:
     print_configuration(config, repo_root)
 
     diagnosis_path = diagnose_existing_baseline(config, repo_root)
+    source_target_path = map_target_to_source(config, repo_root, diagnosis_path)
 
     print("\nStage complete")
     print("Validated the existing baseline synthesis reports.")
     print("Ran the hierarchical bottleneck diagnosis.")
-    print(f"Output: {diagnosis_path.relative_to(repo_root)}")
+    print("Mapped the selected target back to the baseline source.")
+    print(f"Diagnosis: {diagnosis_path.relative_to(repo_root)}")
+    print(f"Source target: {source_target_path.relative_to(repo_root)}")
     print("No Vitis synthesis, LLM call, or candidate modification was performed.")
 
 
