@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/llm4hls/track-a-task.schema.json",
+  "title": "FPT 2026 Track A LLM4HLS Task",
+  "type": "object",
+  "required": [
+    "task_id",
+    "task_kind",
+    "artifacts",
+    "interface",
+    "target",
+    "budgets",
+    "model",
+    "output_dir"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "task_kind": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "correct_unoptimised",
+        "compile_failure",
+        "synthesis_failure",
+        "csim_failure",
+        "cosim_failure",
+        "structural_failure",
+        "resource_inefficiency"
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["source", "testbench", "specification"],
+      "properties": {
+        "source": {"type": "string"},
+        "testbench": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "headers": {"type": "array", "items": {"type": "string"}},
+        "specification": {"type": "string"},
+        "build_files": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "interface": {
+      "type": "object",
+      "required": ["top_function", "language"],
+      "properties": {
+        "top_function": {"type": "string", "minLength": 1},
+        "language": {"type": "string", "enum": ["c", "cpp"]},
+        "numerical_tolerance": {"type": ["number", "null"]},
+        "protected_contract": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["tool", "tool_version", "part", "clock_period_ns"],
+      "properties": {
+        "tool": {"type": "string"},
+        "tool_version": {"type": "string"},
+        "part": {"type": "string"},
+        "clock_period_ns": {"type": "number", "exclusiveMinimum": 0},
+        "resource_limits": {"type": "object"}
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "required": ["max_iterations", "max_csim_calls", "max_cosim_calls", "max_synthesis_calls", "max_model_calls"],
+      "properties": {
+        "max_iterations": {"type": "integer", "minimum": 1},
+        "max_csim_calls": {"type": "integer", "minimum": 0},
+        "max_cosim_calls": {"type": "integer", "minimum": 0},
+        "max_synthesis_calls": {"type": "integer", "minimum": 0},
+        "max_model_calls": {"type": "integer", "minimum": 0},
+        "max_total_tokens": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": {"type": "string"},
+        "name": {"type": "string"},
+        "temperature": {"type": "number"},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "enable_thinking": {"type": ["boolean", "null"]}
+      }
+    },
+    "tool_commands": {
+      "type": "object",
+      "properties": {
+        "compile": {"type": "array", "items": {"type": "string"}},
+        "csim": {"type": "array", "items": {"type": "string"}},
+        "cosim": {"type": "array", "items": {"type": "string"}},
+        "synthesis": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "output_dir": {"type": "string"}
+  }
+}
