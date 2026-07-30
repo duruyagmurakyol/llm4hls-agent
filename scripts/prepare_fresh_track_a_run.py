@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -86,6 +87,10 @@ def main() -> None:
     fresh_adapter_config = json.loads(json.dumps(adapter_config))
     fresh_adapter_config["experiment_name"] = f"{adapter_config['experiment_name']}__{run_id}"
     fresh_adapter_config["output_dir"] = relative(generated_candidate_dir)
+    fresh_adapter_config.setdefault("baseline", {})
+    fresh_adapter_config["baseline"]["project_dir"] = relative(
+        generated_candidate_dir / "baseline_project"
+    )
 
     budgets = source_task["budgets"]
     fresh_adapter_config.setdefault("budget", {})
@@ -122,7 +127,8 @@ def main() -> None:
             "inherits_model_responses": False,
             "inherits_validation_reports": False,
             "inherits_pareto_archive": False,
-            "may_reuse_immutable_baseline_reports": True,
+            "inherits_baseline_reports": False,
+            "baseline_is_synthesised_in_run": True,
         },
     }
     write_json(generated_manifest_path, fresh_task)
@@ -134,7 +140,9 @@ def main() -> None:
     print(f"Adapter config: {relative(generated_adapter_path)}")
     print(f"Candidate workspace: {relative(generated_candidate_dir)}")
     print(f"Ledger workspace: {relative(generated_ledger_dir)}")
+    print(f"Baseline project: {relative(generated_candidate_dir / 'baseline_project')}")
     print("Inherited candidate evidence: none")
+    print("Inherited baseline synthesis evidence: none")
 
 
 if __name__ == "__main__":
