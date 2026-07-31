@@ -39,3 +39,11 @@ __pycache__/
 runs/
 work/
 results/experiments/
+
+# Disposable Vitis execution workspaces
+.vitis_projects/
+
+# Generated autonomous experiment workspaces
+experiments/atax/autonomous_ppa/
+experiments/track_a/
+experiments/track_a_runs/

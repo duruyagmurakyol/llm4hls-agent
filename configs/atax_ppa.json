@@ -1,0 +1,21 @@
+{
+  "experiment_name": "atax_ppa",
+  "benchmark": "atax",
+  "baseline": {
+    "source": "benchmarks/hls_eval/atax/candidates/atax_candidate_3b.cpp",
+    "tcl": "benchmarks/hls_eval/atax/scripts/run_candidate_3b.tcl",
+    "project_dir": "benchmarks/hls_eval/atax/scripts/atax_candidate_3b_project"
+  },
+  "output_dir": "experiments/atax/autonomous_ppa",
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "budget": {
+    "max_candidates": 5,
+    "max_synthesis_calls": 4
+  }
+}
