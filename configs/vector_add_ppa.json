@@ -6,7 +6,19 @@
   "baseline": {
     "source": "benchmarks/hls_eval/vector_add/src/vector_add.cpp",
     "tcl": "benchmarks/hls_eval/vector_add/scripts/run_agent_baseline.tcl",
-    "project_dir": "/tmp/llm4hls-agent/vector_add_baseline"
+    "project_dir": "/tmp/llm4hls-agent/vector_add_baseline",
+    "metrics": {
+      "clock_period_ns": 6.437,
+      "latency_best_cycles": 1029,
+      "latency_average_cycles": 1029,
+      "latency_worst_cycles": 1029,
+      "interval_min_cycles": 1024,
+      "interval_max_cycles": 1024,
+      "resources_lut_used": 320,
+      "resources_ff_used": 321,
+      "resources_dsp_used": 2,
+      "resources_bram_used": 0
+    }
   },
   "validation": {
     "constant_loop_tail_bounds": true,
