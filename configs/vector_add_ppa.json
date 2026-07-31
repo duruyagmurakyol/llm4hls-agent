@@ -1,0 +1,35 @@
+{
+  "experiment_name": "vector_add_ppa",
+  "benchmark": "vector_add",
+  "top_function": "vector_add",
+  "target_loop_label": "vector_add_loop",
+  "baseline": {
+    "source": "benchmarks/hls_eval/vector_add/src/vector_add.cpp",
+    "tcl": "benchmarks/hls_eval/vector_add/scripts/run_baseline.tcl",
+    "project_dir": "/tmp/llm4hls-agent/vector_add_baseline"
+  },
+  "validation": {
+    "constant_loop_tail_bounds": true,
+    "required_loop_labels": ["vector_add_loop"],
+    "preserve_diagnosed_loop_label": true
+  },
+  "prompt_constraints": [
+    "VECTOR_SIZE is 1024 and every output must equal a[i] + b[i].",
+    "The baseline loop is already automatically pipelined at II=1, so do not return a pipeline-only change.",
+    "A latency improvement requires processing multiple elements per cycle with matching memory banking, partitioning, or reshaping.",
+    "Prefer factor-2 parallelism first and include safe remainder handling if the loop structure changes.",
+    "Treat increased resources as acceptable only when the result creates a meaningful latency-resource trade-off."
+  ],
+  "output_dir": "experiments/vector_add/autonomous_ppa",
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "budget": {
+    "max_candidates": 3,
+    "max_synthesis_calls": 2
+  }
+}
