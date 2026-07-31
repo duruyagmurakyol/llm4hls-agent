@@ -5,7 +5,7 @@
   "target_loop_label": "vector_add_loop",
   "baseline": {
     "source": "benchmarks/hls_eval/vector_add/src/vector_add.cpp",
-    "tcl": "benchmarks/hls_eval/vector_add/scripts/run_baseline.tcl",
+    "tcl": "benchmarks/hls_eval/vector_add/scripts/run_agent_baseline.tcl",
     "project_dir": "/tmp/llm4hls-agent/vector_add_baseline"
   },
   "validation": {
