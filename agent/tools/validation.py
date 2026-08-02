@@ -138,6 +138,34 @@ def _dataflow_pipeline_conflict(text: str, top: str) -> bool:
     return has_dataflow and has_pipeline
 
 
+def _pipeline_complete_unroll_conflicts(text: str, top: str) -> list[dict[str, Any]]:
+    """Find loops carrying both PIPELINE and complete UNROLL directives."""
+    body = _function_body(text, top)
+    conflicts: list[dict[str, Any]] = []
+    loop_pattern = re.compile(
+        r"(?:(?P<label>[A-Za-z_]\w*)\s*:\s*)?for\s*\([^)]*\)\s*\{",
+        re.MULTILINE,
+    )
+    for match in loop_pattern.finditer(body):
+        opening = body.find("{", match.start())
+        closing = _matching_brace(body, opening)
+        if closing is None:
+            continue
+        prefix_start = max(0, match.start() - 300)
+        region = body[prefix_start : min(closing + 1, opening + 500)]
+        has_pipeline = bool(re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", region, re.I))
+        unrolls = list(re.finditer(r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)", region, re.I))
+        complete_unroll = any(not re.search(r"\bfactor\s*=\s*\d+", item.group(1), re.I) for item in unrolls)
+        if has_pipeline and complete_unroll:
+            conflicts.append(
+                {
+                    "loop_label": match.group("label"),
+                    "reason": "PIPELINE conflicts with complete UNROLL because complete unrolling removes the loop",
+                }
+            )
+    return conflicts
+
+
 def _loop_tail_bounds_safe(text: str) -> tuple[bool, list[dict[str, Any]]]:
     constants = {
         name: int(value)
@@ -208,6 +236,10 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
     partition_issues = _complete_partition_issues(candidate, top) if partition_guard else []
     conflict_guard = bool(validation_config.get("reject_dataflow_pipeline_conflict", True))
     dataflow_pipeline_conflict = _dataflow_pipeline_conflict(candidate, top) if conflict_guard else False
+    loop_pragma_guard = bool(validation_config.get("reject_pipeline_complete_unroll_conflict", True))
+    pipeline_unroll_conflicts = (
+        _pipeline_complete_unroll_conflicts(candidate, top) if loop_pragma_guard else []
+    )
     baseline_c, candidate_c = _has_c_linkage(baseline, top), _has_c_linkage(candidate, top)
 
     checks: dict[str, bool] = {
@@ -229,6 +261,8 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         checks["no_complete_partition_on_interface_arrays"] = not partition_issues
     if conflict_guard:
         checks["no_dataflow_pipeline_conflict"] = not dataflow_pipeline_conflict
+    if loop_pragma_guard:
+        checks["no_pipeline_complete_unroll_conflict"] = not pipeline_unroll_conflicts
 
     labels = list(validation_config.get("required_loop_labels", []))
     discovered = source_target.get("loop_label")
@@ -272,6 +306,8 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         "complete_partition_issues": partition_issues,
         "dataflow_pipeline_guard_enabled": conflict_guard,
         "dataflow_pipeline_conflict": dataflow_pipeline_conflict,
+        "pipeline_complete_unroll_guard_enabled": loop_pragma_guard,
+        "pipeline_complete_unroll_conflicts": pipeline_unroll_conflicts,
         "changed_diff_lines": changed_lines,
         "baseline_c_linkage": baseline_c,
         "candidate_c_linkage": candidate_c,
