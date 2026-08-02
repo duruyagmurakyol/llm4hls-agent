@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
-from agent.optimise.evaluate import dominates, evaluate_experiment
+from agent.optimise.evaluate import classify_candidate, dominates, evaluate_experiment
 from agent.optimise.generate import extract_cpp, generate_candidate
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
@@ -15,7 +15,12 @@ from agent.tools.synthesis import (
     run_candidate_csim,
     run_candidate_synthesis,
 )
-from agent.tools.validation import classify_failure, validate_ppa_candidate
+from agent.tools.validation import (
+    _complete_partition_issues,
+    _dataflow_pipeline_conflict,
+    classify_failure,
+    validate_ppa_candidate,
+)
 from agent.workspace import Workspace
 
 
@@ -51,6 +56,55 @@ def test_duplicate_digest_ignores_comments_and_whitespace() -> None:
     left = "int f() { return 1; } // comment\n"
     right = "/* note */ int  f(){return 1;}\n"
     assert source_digest(left) == source_digest(right)
+
+
+def test_complete_partition_guard_targets_interface_arrays() -> None:
+    source = """
+void vector_add(const float a[1024], float c[1024]) {
+#pragma HLS ARRAY_PARTITION variable=a complete
+#pragma HLS ARRAY_PARTITION variable=local complete
+float local[4];
+}
+"""
+    issues = _complete_partition_issues(source, "vector_add")
+    assert [item["variable"] for item in issues] == ["a"]
+
+
+def test_dataflow_pipeline_conflict_guard() -> None:
+    source = """
+void vector_add(const float a[16], float c[16]) {
+#pragma HLS DATAFLOW
+#pragma HLS PIPELINE II=1
+for (int i = 0; i < 16; ++i) c[i] = a[i];
+}
+"""
+    assert _dataflow_pipeline_conflict(source, "vector_add")
+
+
+def test_timeout_is_terminal_candidate_verdict(tmp_path: Path, monkeypatch) -> None:
+    candidate = tmp_path / "candidate_001.cpp"
+    candidate.write_text("void kernel() {}\n", encoding="utf-8")
+    (tmp_path / "candidate_001_static_validation.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
+    )
+    (tmp_path / "candidate_001_csim_validation.json").write_text(
+        json.dumps({"passed": True}), encoding="utf-8"
+    )
+    (tmp_path / "candidate_001_synthesis.json").write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "synthesis_run": True,
+                "timed_out": True,
+                "timeout_seconds": 600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent.optimise.evaluate.REPO_ROOT", tmp_path.parent)
+    record = classify_candidate(tmp_path, 1, {}, {})
+    assert record["verdict"] == "reject_synthesis_timeout"
+    assert record["synthesis_run"] is True
 
 
 def test_strategy_library_is_benchmark_independent() -> None:
