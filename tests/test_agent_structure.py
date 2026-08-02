@@ -7,6 +7,7 @@ from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
 from agent.optimise.evaluate import classify_candidate, dominates, evaluate_experiment
 from agent.optimise.generate import extract_cpp, generate_candidate
+from agent.optimise.runner import OptimisationRunResult, run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
 from agent.tools.synthesis import (
@@ -38,6 +39,18 @@ def test_clean_packages_import() -> None:
     assert callable(generate_candidate)
     assert callable(prepare_refinement_prompt)
     assert callable(prepare_tradeoff_prompt)
+    assert callable(run_optimisation)
+    assert OptimisationRunResult.__dataclass_fields__
+
+
+def test_autonomous_manifests_have_no_shell_commands() -> None:
+    for path in (
+        Path("configs/tasks/vector_add_track_a.json"),
+        Path("configs/tasks/atax_track_a.json"),
+    ):
+        task = json.loads(path.read_text(encoding="utf-8"))
+        assert task["adapter"]["kind"] == "autonomous_ppa"
+        assert set(task["adapter"]) == {"kind", "config"}
 
 
 def test_candidate_extraction_requires_configured_top() -> None:
@@ -84,21 +97,10 @@ for (int i = 0; i < 16; ++i) c[i] = a[i];
 def test_timeout_is_terminal_candidate_verdict(tmp_path: Path, monkeypatch) -> None:
     candidate = tmp_path / "candidate_001.cpp"
     candidate.write_text("void kernel() {}\n", encoding="utf-8")
-    (tmp_path / "candidate_001_static_validation.json").write_text(
-        json.dumps({"passed": True}), encoding="utf-8"
-    )
-    (tmp_path / "candidate_001_csim_validation.json").write_text(
-        json.dumps({"passed": True}), encoding="utf-8"
-    )
+    (tmp_path / "candidate_001_static_validation.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+    (tmp_path / "candidate_001_csim_validation.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
     (tmp_path / "candidate_001_synthesis.json").write_text(
-        json.dumps(
-            {
-                "passed": False,
-                "synthesis_run": True,
-                "timed_out": True,
-                "timeout_seconds": 600,
-            }
-        ),
+        json.dumps({"passed": False, "synthesis_run": True, "timed_out": True, "timeout_seconds": 600}),
         encoding="utf-8",
     )
     monkeypatch.setattr("agent.optimise.evaluate.REPO_ROOT", tmp_path.parent)
@@ -108,8 +110,7 @@ def test_timeout_is_terminal_candidate_verdict(tmp_path: Path, monkeypatch) -> N
 
 
 def test_strategy_library_is_benchmark_independent() -> None:
-    path = Path("agent/optimise/strategies.json")
-    strategies = json.loads(path.read_text(encoding="utf-8"))
+    strategies = json.loads(Path("agent/optimise/strategies.json").read_text(encoding="utf-8"))
     assert strategies
     text = json.dumps(strategies).lower()
     assert "vector_add" not in text
