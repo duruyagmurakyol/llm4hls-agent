@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from agent.optimise.evaluate import dominates
+from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
 from agent.tools.validation import classify_failure
 from agent.workspace import Workspace
@@ -12,6 +13,7 @@ from agent.workspace import Workspace
 def test_clean_packages_import() -> None:
     assert Workspace(Path("workspace")).resolve("src/kernel.cpp") == Path("workspace/src/kernel.cpp")
     assert classify_failure("FAIL index=0 expected=1 actual=0") == "functional"
+    assert callable(run_repair)
 
 
 def test_generic_pareto_dominance() -> None:
@@ -29,3 +31,13 @@ def test_strategy_library_is_benchmark_independent() -> None:
     assert "vector_add" not in text
     assert "atax" not in text
     assert "bicg" not in text
+
+
+def test_obsolete_repair_scripts_are_removed() -> None:
+    obsolete = [
+        "scripts/run_api_experiment.py",
+        "scripts/run_experiment.py",
+        "scripts/run_structured_experiment.py",
+        "scripts/run_suite.py",
+    ]
+    assert all(not Path(path).exists() for path in obsolete)
