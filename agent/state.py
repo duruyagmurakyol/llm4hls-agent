@@ -35,6 +35,39 @@ class BudgetState:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class SynthesisMetrics:
+    """Normalised metrics used by benchmark-independent PPA evaluation.
+
+    ``None`` is allowed because some failed or partial synthesis reports may not
+    contain every metric. Such records are not considered comparable by the
+    Pareto evaluator.
+    """
+
+    latency_cycles: int | None
+    interval_cycles: int | None
+    clock_period_ns: float | None
+    lut: int | None
+    ff: int | None
+    dsp: int | None
+    bram: int | None
+
+    @classmethod
+    def from_mapping(cls, metrics: dict[str, Any]) -> "SynthesisMetrics":
+        return cls(
+            latency_cycles=metrics.get("latency_cycles", metrics.get("latency_best_cycles")),
+            interval_cycles=metrics.get("interval_cycles", metrics.get("interval_min_cycles")),
+            clock_period_ns=metrics.get("clock_period_ns"),
+            lut=metrics.get("lut", metrics.get("resources_lut_used")),
+            ff=metrics.get("ff", metrics.get("resources_ff_used")),
+            dsp=metrics.get("dsp", metrics.get("resources_dsp_used")),
+            bram=metrics.get("bram", metrics.get("resources_bram_used")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class TrajectoryEvent:
     step: int
