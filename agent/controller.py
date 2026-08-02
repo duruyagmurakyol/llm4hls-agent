@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 
-"""Unified entry layer for repair and PPA task adapters.
-
-The first integration version deliberately delegates to proven legacy runners.
-This creates one public controller without rewriting working Vitis flows.
-"""
+"""Unified entry layer for repair and PPA task adapters."""
 
 from __future__ import annotations
 
@@ -12,11 +8,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 from agent.config import TaskManifest, load_task
 from agent.state import AgentResult, TrajectoryEvent
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -50,16 +44,11 @@ def _write_result(result: AgentResult) -> Path:
 
 
 def _run_legacy_ppa(task: TaskManifest, *, status_only: bool, max_steps: int | None) -> AgentResult:
-    command = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "run_track_a_agent.py"),
-        str(task.path),
-    ]
+    command = [sys.executable, str(REPO_ROOT / "scripts" / "run_track_a_agent.py"), str(task.path)]
     if status_only:
         command.append("--status-only")
     if max_steps is not None:
         command.extend(["--max-agent-steps", str(max_steps)])
-
     completed = _run(command, title="Unified PPA workflow")
     success = completed.returncode == 0
     return AgentResult(
@@ -68,63 +57,35 @@ def _run_legacy_ppa(task: TaskManifest, *, status_only: bool, max_steps: int | N
         status="completed" if success else "failed",
         termination_reason="legacy_ppa_adapter_completed" if success else "legacy_ppa_adapter_failed",
         output_dir=str(task.output_dir),
-        trajectory=[
-            TrajectoryEvent(
-                step=1,
-                stage="ppa_adapter",
-                status="passed" if success else "failed",
-                details={"return_code": completed.returncode},
-            )
-        ],
+        trajectory=[TrajectoryEvent(step=1, stage="ppa_adapter", status="passed" if success else "failed", details={"return_code": completed.returncode})],
     )
 
 
 def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
-    adapter = task.data["adapter"]
-    repair_config = _resolve(adapter["config"])
-    command = [
-        sys.executable,
-        str(REPO_ROOT / "scripts" / "run_api_experiment.py"),
-        str(repair_config),
-        "--keep-workspace",
-    ]
+    repair_config = _resolve(task.data["adapter"]["config"])
+    command = [sys.executable, "-m", "agent.repair.runner", str(repair_config), "--keep-workspace"]
     completed = _run(command, title="Unified repair workflow")
     success = completed.returncode == 0
     return AgentResult(
         task_id=task.task_id,
         success=success,
         status="correctness_established" if success else "repair_failed",
-        termination_reason="repair_adapter_completed" if success else "repair_adapter_failed",
+        termination_reason="repair_completed" if success else "repair_failed",
         output_dir=str(task.output_dir),
-        trajectory=[
-            TrajectoryEvent(
-                step=1,
-                stage="repair_adapter",
-                status="passed" if success else "failed",
-                details={"return_code": completed.returncode, "config": str(repair_config)},
-            )
-        ],
+        trajectory=[TrajectoryEvent(step=1, stage="repair", status="passed" if success else "failed", details={"return_code": completed.returncode, "config": str(repair_config)})],
     )
 
 
-def run_agent(
-    task_path: Path,
-    *,
-    status_only: bool = False,
-    max_steps: int | None = None,
-) -> AgentResult:
+def run_agent(task_path: Path, *, status_only: bool = False, max_steps: int | None = None) -> AgentResult:
     task = load_task(task_path)
-    kind = task.adapter_kind
-
-    if kind == "legacy_ppa":
+    if task.adapter_kind == "legacy_ppa":
         result = _run_legacy_ppa(task, status_only=status_only, max_steps=max_steps)
-    elif kind == "direct_api_repair":
+    elif task.adapter_kind == "direct_api_repair":
         if status_only:
             raise ValueError("status-only is not supported by direct_api_repair tasks")
         result = _run_direct_api_repair(task)
     else:
-        raise ValueError(f"Unsupported adapter kind: {kind}")
-
+        raise ValueError(f"Unsupported adapter kind: {task.adapter_kind}")
     result_path = _write_result(result)
     print(f"\nUnified result: {result_path.relative_to(REPO_ROOT)}")
     return result
