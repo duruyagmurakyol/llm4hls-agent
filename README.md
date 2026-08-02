@@ -1,114 +1,263 @@
 # LLM4HLS Agent
 
-A task-driven autonomous agent for repairing AMD/Xilinx HLS designs and performing synthesis-feedback-guided PPA optimisation.
+An autonomous, task-driven agent for repairing AMD/Xilinx HLS designs and improving performance, power and area through synthesis feedback.
 
-## Public command
-
-```bash
-python3 scripts/run_agent.py <task-manifest>
-```
-
-The controller is benchmark-independent. Vector add, ATAX and future benchmarks are task packages supplied through manifests; they are not separate agent implementations.
-
-## Core structure
-
-```text
-agent/
-├── controller.py            public orchestration entry point
-├── config.py                task-manifest loading and validation
-├── state.py                 shared result, metric and budget records
-├── workspace.py             isolated task workspace creation
-├── tools/
-│   ├── command_runner.py    external command execution
-│   ├── validation.py        generic failure classification
-│   ├── synthesis.py         synthesis adapter boundary
-│   └── reports.py           shared JSON input/output
-├── repair/
-│   ├── runner.py            complete direct-API repair workflow
-│   ├── diagnose.py          correctness diagnosis
-│   └── generate.py          repair generation through the provider
-├── optimise/
-│   ├── diagnose.py          Vitis report and bottleneck analysis
-│   ├── generate.py          PPA candidate-generation adapter
-│   ├── evaluate.py          generic Pareto comparison
-│   └── strategies.json      benchmark-independent strategy library
-├── analysis/                detailed Vitis analysis implementation
-└── providers/
-    └── siliconflow.py       model-provider implementation
-```
-
-Only `scripts/run_agent.py` is a public entry point.
-
-## Workflow
-
-```text
-task manifest
-    ↓
-isolated workspace
-    ↓
-initial validation
-    ├── failure → diagnose → repair → validate
-    └── pass
-          ↓
-baseline synthesis
-    ├── failure → synthesis diagnosis/repair
-    └── pass
-          ↓
-report diagnosis → candidate generation
-          ↓
-static checks → CSim → synthesis
-          ↓
-Pareto and budget decision
-```
-
-Correctness is established before optimisation. The controller and shared modules do not contain benchmark-name checks, fixed array sizes or vector-add-specific transformations.
-
-## Current implementation status
-
-- direct API repair now runs entirely from `agent/repair/runner.py`;
-- the old repair experiment entry points have been removed;
-- PPA task execution still delegates to `scripts/run_track_a_agent.py`;
-- candidate generation, CSim, synthesis and evaluation still use the existing PPA scripts;
-- Vitis diagnosis reuses the existing `agent/analysis/` modules.
-
-The next cleanup target is the PPA backend, not the repair path.
-
-## Quick validation
+The repository is organised around one public command:
 
 ```bash
-python3 -m pytest \
-  tests/test_unified_config.py \
-  tests/test_unified_state.py \
-  tests/test_agent_structure.py
+python3 scripts/run_agent.py <task-manifest-or-benchmark-directory>
 ```
 
-Inspect a task without spending synthesis calls:
+The controller is benchmark-independent. Vector addition, ATAX, BICG and future designs are inputs to the same agent rather than separate implementations.
+
+## What the agent does
+
+The agent supports two related workflows:
+
+1. **Correctness repair**: diagnose compilation, interface or functional failures; generate a repair; and revalidate the design.
+2. **PPA optimisation**: establish a correct baseline, analyse Vitis HLS reports, generate a constrained candidate, run static checks and CSim, synthesise the candidate, and compare it with the baseline.
+
+Correctness is always established before optimisation.
+
+## Quick start
+
+### 1. Create and activate a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip pytest
+```
+
+### 2. Load AMD/Xilinx tools
+
+The exact path depends on the installation:
+
+```bash
+source /path/to/Xilinx/Vitis/2025.2/settings64.sh
+```
+
+Confirm that Vitis is available:
+
+```bash
+vitis-run --version
+```
+
+### 3. Configure the model provider
+
+```bash
+export SILICONFLOW_API_KEY="your-key"
+```
+
+### 4. Run the tests
+
+```bash
+python -m pytest
+python -m compileall -q agent scripts tests
+```
+
+### 5. Run a task
+
+Using an existing manifest:
+
+```bash
+python3 scripts/run_agent.py configs/tasks/atax_track_a.json
+```
+
+Using a benchmark directory:
+
+```bash
+python3 scripts/run_agent.py benchmarks/vector_add
+python3 scripts/run_agent.py benchmarks/hls_eval/atax
+python3 scripts/run_agent.py benchmarks/bicg/golden
+```
+
+Directory onboarding accepts a supported HLS TCL flow or a repository `task.cfg`. It discovers the top function, source, testbench, part and clock, then creates generated task and optimisation configuration under `experiments/onboarding/<benchmark>/`.
+
+## Useful command options
+
+Generate configuration without running the agent:
+
+```bash
+python3 scripts/run_agent.py benchmarks/bicg/golden --onboard-only
+```
+
+Inspect the current optimisation state without generating or synthesising a new candidate:
 
 ```bash
 python3 scripts/run_agent.py configs/tasks/atax_track_a.json --status-only
 ```
 
-Run direct repair:
+Limit the number of optimisation transitions performed in one invocation:
 
 ```bash
-python3 scripts/run_agent.py configs/tasks/vector_add_repair.json
+python3 scripts/run_agent.py benchmarks/bicg/golden --max-agent-steps 1
 ```
 
-## Repository areas
+The optimisation workflow is resumable. Existing reports and completed candidate stages are reused where appropriate.
+
+## End-to-end workflow
 
 ```text
-agent/                    core reusable agent code
-scripts/run_agent.py      public CLI
-configs/tasks/            task manifests and specifications
-benchmarks/               task inputs and testbenches
-experiments/              generated trajectories and summaries
-results/                  selected experimental evidence
-scripts/                  remaining PPA compatibility implementation
+input task or benchmark directory
+          |
+          v
+manifest loading / automatic onboarding
+          |
+          v
+isolated output and workspace preparation
+          |
+          v
+correctness validation
+    | failure
+    +------> diagnosis -> model repair -> validation
+    |
+    v
+baseline CSim and synthesis
+          |
+          v
+hierarchical report diagnosis
+          |
+          v
+source-level target and cause mapping
+          |
+          v
+constrained model prompt and candidate generation
+          |
+          v
+static validation -> duplicate check -> CSim -> synthesis
+          |
+          v
+baseline comparison, verdict and budget decision
 ```
+
+A candidate cannot reach synthesis unless it passes the cheaper safety and correctness stages first.
+
+## Repository structure
+
+```text
+agent/                  reusable agent implementation
+  analysis/             detailed Vitis hierarchy and source-cause analysis
+  optimise/             autonomous PPA workflow
+  providers/            model-provider adapters
+  repair/               correctness-repair workflow
+  tools/                validation, command, report and synthesis utilities
+benchmarks/             source designs, headers, testbenches and build descriptions
+configs/                task manifests, schemas and explicit optimisation configs
+experiments/            generated runs, prompts, reports, candidates and results
+results/                selected evidence intended for retention
+scripts/                public CLI and limited compatibility/analysis utilities
+tests/                  lightweight structural and behavioural regression tests
+```
+
+See the README inside each major folder for ownership rules and file-level explanations.
+
+## Core modules
+
+- `scripts/run_agent.py`: public command-line entry point.
+- `agent/controller.py`: loads a task and dispatches to repair or optimisation.
+- `agent/onboarding.py` / `agent/onboarding_safe.py`: discovers benchmark metadata and generates manifests.
+- `agent/config.py`: validates unified task manifests.
+- `agent/optimise/runner.py`: budgeted, resumable PPA state machine.
+- `agent/optimise/diagnose.py`: prepares source-aware optimisation prompts.
+- `agent/optimise/generate.py`: calls the configured model and extracts candidate C/C++.
+- `agent/optimise/evaluate.py`: classifies candidates and compares synthesis metrics.
+- `agent/tools/validation.py`: static HLS safety checks and failure classification.
+- `agent/tools/synthesis.py`: portable CSim, synthesis and report extraction.
+- `agent/repair/runner.py`: direct correctness-repair workflow.
+
+## Benchmark build descriptions
+
+### TCL-based benchmark
+
+A synthesis TCL normally identifies:
+
+```tcl
+set_top kernel_name
+add_files src/kernel.cpp
+add_files -tb testbench/kernel_test.cpp
+open_solution -reset solution1
+set_part xczu3eg-sfvc784-2-e
+create_clock -period 10 -name default
+csim_design
+csynth_design
+```
+
+### `task.cfg`-based benchmark
+
+```ini
+[hls]
+flow_target=vivado
+syn.file=src/kernel.cpp
+syn.cflags=-Isrc
+syn.top=kernel_name
+tb.file=testbench/kernel_test.cpp
+tb.cflags=-Isrc
+part=xczu3eg-sfvc784-2-e
+clock=10ns
+```
+
+The agent converts either description into controlled internal TCL scripts. Candidate runs use isolated temporary projects and do not modify the baseline source.
+
+## Generated outputs
+
+Automatically onboarded runs are stored under:
+
+```text
+experiments/onboarding/<benchmark>/
+├── task.json
+├── optimisation.json
+├── onboarding_report.json
+├── autonomous_ppa/
+│   ├── baseline_*.json
+│   ├── candidate_001.cpp
+│   ├── candidate_001_prompt.txt
+│   ├── candidate_001_*_validation.json
+│   └── candidate_001_synthesis/
+└── agent_result/
+    └── unified_agent_result.json
+```
+
+These are generated artefacts, not source-of-truth configuration. Delete an incomplete generated run only when intentionally restarting that benchmark.
+
+## Candidate decision policy
+
+Typical terminal candidate verdicts include:
+
+- `accept`: candidate satisfies correctness and improves the configured objective.
+- `reject_static`: unsafe or contradictory HLS structure detected before Vitis.
+- `reject_duplicate`: candidate is equivalent to an existing source candidate.
+- `reject_csim`: candidate does not preserve testbench-observed behaviour.
+- `reject_synthesis`: Vitis could not synthesise the candidate.
+- `reject_synthesis_timeout`: synthesis exceeded the configured budget.
+- `reject_no_performance_gain`: candidate synthesised but did not improve latency or interval.
+
+Local loop II improvement alone is not sufficient. The final decision is based on extracted top-level synthesis metrics and configured trade-offs.
+
+## Design principles
+
+- One public agent interface.
+- No benchmark-name conditionals in core orchestration.
+- Baselines remain immutable.
+- Candidate projects are isolated.
+- Static and functional checks precede expensive synthesis.
+- Every run emits machine-readable evidence.
+- Budgets limit model and synthesis calls.
+- Runs can be resumed from existing artefacts.
 
 ## Requirements
 
 - Python 3.10 or later
-- AMD Vitis HLS 2025.2 for CSim and synthesis
-- `SILICONFLOW_API_KEY` for direct model calls
-- `pytest` for lightweight tests
+- AMD Vitis HLS 2025.2
+- `SILICONFLOW_API_KEY` for SiliconFlow model calls
+- `pytest` for the test suite
+
+## Current demonstrated coverage
+
+The unified workflow has been exercised on:
+
+- vector addition with an unlabeled source loop;
+- ATAX with a TCL-described HLS flow;
+- BICG with a Vitis `task.cfg` build description.
+
+These examples validate the same generic path across different source structures and build-description formats; they are not hard-coded agent modes.
