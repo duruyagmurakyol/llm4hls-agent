@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Unified entry layer for repair and PPA task adapters."""
+"""Unified entry layer for autonomous repair and PPA optimisation tasks."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from agent.config import TaskManifest, load_task
+from agent.optimise.runner import run_optimisation
 from agent.state import AgentResult, TrajectoryEvent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -23,16 +24,7 @@ def _resolve(path: str | Path) -> Path:
 def _run(command: list[str], *, title: str) -> subprocess.CompletedProcess[str]:
     print(f"\n=== {title} ===", flush=True)
     print("Command:", " ".join(command), flush=True)
-    completed = subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    print(completed.stdout or "", end="", flush=True)
-    return completed
+    return subprocess.run(command, cwd=REPO_ROOT, check=False)
 
 
 def _write_result(result: AgentResult) -> Path:
@@ -43,28 +35,43 @@ def _write_result(result: AgentResult) -> Path:
     return path
 
 
-def _run_legacy_ppa(task: TaskManifest, *, status_only: bool, max_steps: int | None) -> AgentResult:
-    command = [sys.executable, str(REPO_ROOT / "scripts" / "run_track_a_agent.py"), str(task.path)]
-    if status_only:
-        command.append("--status-only")
-    if max_steps is not None:
-        command.extend(["--max-agent-steps", str(max_steps)])
-    completed = _run(command, title="Unified PPA workflow")
-    success = completed.returncode == 0
+def _run_autonomous_ppa(
+    task: TaskManifest,
+    *,
+    status_only: bool,
+    max_steps: int | None,
+) -> AgentResult:
+    config_path = _resolve(task.data["adapter"]["config"])
+    optimisation = run_optimisation(
+        config_path,
+        status_only=status_only,
+        max_steps=max_steps,
+    )
+    trajectory = [
+        TrajectoryEvent(
+            step=index,
+            stage=str(item.get("stage", "optimisation")),
+            status="passed" if item.get("passed", True) else "failed",
+            details=item,
+        )
+        for index, item in enumerate(optimisation.trajectory, 1)
+    ]
     return AgentResult(
         task_id=task.task_id,
-        success=success,
-        status="completed" if success else "failed",
-        termination_reason="legacy_ppa_adapter_completed" if success else "legacy_ppa_adapter_failed",
+        success=optimisation.success,
+        status=optimisation.status,
+        termination_reason=optimisation.termination_reason,
         output_dir=str(task.output_dir),
-        trajectory=[TrajectoryEvent(step=1, stage="ppa_adapter", status="passed" if success else "failed", details={"return_code": completed.returncode})],
+        trajectory=trajectory,
     )
 
 
 def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
     repair_config = _resolve(task.data["adapter"]["config"])
-    command = [sys.executable, "-m", "agent.repair.runner", str(repair_config), "--keep-workspace"]
-    completed = _run(command, title="Unified repair workflow")
+    completed = _run(
+        [sys.executable, "-m", "agent.repair.runner", str(repair_config), "--keep-workspace"],
+        title="Unified repair workflow",
+    )
     success = completed.returncode == 0
     return AgentResult(
         task_id=task.task_id,
@@ -72,14 +79,26 @@ def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
         status="correctness_established" if success else "repair_failed",
         termination_reason="repair_completed" if success else "repair_failed",
         output_dir=str(task.output_dir),
-        trajectory=[TrajectoryEvent(step=1, stage="repair", status="passed" if success else "failed", details={"return_code": completed.returncode, "config": str(repair_config)})],
+        trajectory=[
+            TrajectoryEvent(
+                step=1,
+                stage="repair",
+                status="passed" if success else "failed",
+                details={"return_code": completed.returncode, "config": str(repair_config)},
+            )
+        ],
     )
 
 
-def run_agent(task_path: Path, *, status_only: bool = False, max_steps: int | None = None) -> AgentResult:
+def run_agent(
+    task_path: Path,
+    *,
+    status_only: bool = False,
+    max_steps: int | None = None,
+) -> AgentResult:
     task = load_task(task_path)
-    if task.adapter_kind == "legacy_ppa":
-        result = _run_legacy_ppa(task, status_only=status_only, max_steps=max_steps)
+    if task.adapter_kind in {"autonomous_ppa", "legacy_ppa"}:
+        result = _run_autonomous_ppa(task, status_only=status_only, max_steps=max_steps)
     elif task.adapter_kind == "direct_api_repair":
         if status_only:
             raise ValueError("status-only is not supported by direct_api_repair tasks")
