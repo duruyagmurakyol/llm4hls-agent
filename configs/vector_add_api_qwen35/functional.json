@@ -1,0 +1,49 @@
+{
+  "repair_mode": "direct_api",
+  "experiment_id": "vector_add_functional_repair_qwen35",
+
+  "benchmark_source": "benchmarks/vector_add/faults/functional_subtraction",
+
+  "editable_files": [
+    "src/vector_add.cpp"
+  ],
+
+  "protected_files": [
+    "src/vector_add.h",
+    "testbench/vector_add_test.cpp",
+    "task.cfg"
+  ],
+
+  "context_files": [
+    "src/vector_add.h",
+    "testbench/vector_add_test.cpp"
+  ],
+
+  "host_validation": {
+    "command": [
+      "g++",
+      "-std=c++17",
+      "src/vector_add.cpp",
+      "testbench/vector_add_test.cpp",
+      "-o",
+      "vector_add_test"
+    ],
+    "run_command": [
+      "./vector_add_test"
+    ]
+  },
+
+  "independent_validation": {
+    "enabled": true,
+    "command": [
+      "bash",
+      "-lc",
+      "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+    ]
+  },
+
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "temperature": 0.0,
+  "max_output_tokens": 1024,
+  "api_timeout_seconds": 120
+}
