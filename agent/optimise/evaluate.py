@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.state import SynthesisMetrics
+from agent.tools.synthesis import parse_csynth_xml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 METRIC_KEYS = (
@@ -80,10 +81,49 @@ def duplicate_map(output_dir: Path, indices: list[int]) -> dict[int, int]:
     return duplicates
 
 
+def _baseline_project_metrics(config: dict[str, Any]) -> dict[str, Any] | None:
+    baseline = config.get("baseline", {})
+    project_value = baseline.get("project_dir")
+    top = str(config.get("top_function", "")).strip()
+    if not project_value or not top:
+        return None
+    project_dir = Path(str(project_value))
+    if not project_dir.is_absolute():
+        project_dir = REPO_ROOT / project_dir
+    if not project_dir.is_dir():
+        return None
+    exact = sorted(project_dir.rglob(f"{top}_csynth.xml"))
+    candidates = exact or sorted(project_dir.rglob("*_csynth.xml"))
+    for path in candidates:
+        try:
+            metrics = parse_csynth_xml(path)
+        except (OSError, ValueError):
+            continue
+        if any(value is not None for value in metrics.values()):
+            return metrics
+    return None
+
+
 def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     configured = config.get("baseline", {}).get("metrics")
     if isinstance(configured, dict) and configured:
         return configured
+
+    persisted_path = output_dir / "baseline_metrics.json"
+    if persisted_path.is_file():
+        persisted = load_json(persisted_path)
+        metrics = persisted.get("metrics") if isinstance(persisted.get("metrics"), dict) else persisted
+        if isinstance(metrics, dict) and metrics:
+            return metrics
+
+    project_metrics = _baseline_project_metrics(config)
+    if project_metrics:
+        persisted_path.write_text(
+            json.dumps({"top_function": config.get("top_function"), "metrics": project_metrics}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return project_metrics
+
     diagnosis_path = output_dir / "baseline_hierarchical_diagnosis.json"
     if diagnosis_path.is_file():
         diagnosis = load_json(diagnosis_path)
@@ -98,6 +138,7 @@ def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]
             for item in diagnosis.get(key, []) if isinstance(diagnosis.get(key), list) else []:
                 if isinstance(item, dict) and isinstance(item.get("metrics"), dict) and item["metrics"]:
                     return item["metrics"]
+
     candidate_one = output_dir / "candidate_001_synthesis.json"
     if candidate_one.is_file():
         metrics = load_json(candidate_one).get("metrics")
@@ -160,24 +201,19 @@ def classify_candidate(
         record.update(verdict="reject_static", reason="Static validation failed: " + ", ".join(failed))
         return record
     if csim and csim.get("passed") is False:
-        verdict = "reject_csim_timeout" if csim.get("timed_out") is True else "reject_csim"
-        reason = (
-            "Vitis CSim exceeded its timeout."
-            if verdict == "reject_csim_timeout"
-            else "Vitis CSim failed or the candidate was not compiled."
-        )
-        record.update(verdict=verdict, reason=reason)
+        record.update(verdict="reject_csim", reason="Vitis CSim failed or the candidate was not compiled.")
         return record
-    if synthesis and synthesis.get("timed_out") is True:
+    if synthesis_attempted and synthesis and synthesis.get("timed_out") is True:
+        timeout = synthesis.get("timeout_seconds")
         record.update(
             verdict="reject_synthesis_timeout",
-            reason=f"Vitis synthesis exceeded {synthesis.get('timeout_seconds')} seconds.",
+            reason=f"Vitis synthesis exceeded the {timeout}-second timeout and its process group was terminated.",
         )
         return record
     if synthesis_attempted and synthesis and synthesis.get("passed") is False:
         record.update(
             verdict="reject_synthesis_failed",
-            reason="Vitis synthesis failed before producing complete top-level metrics.",
+            reason="Vitis synthesis failed before a valid top-level report was produced.",
         )
         return record
     if not synthesis_completed:
@@ -199,6 +235,7 @@ def classify_candidate(
     improves_interval = isinstance(interval_delta, (int, float)) and interval_delta < 0
     same_performance = latency_delta == 0 and interval_delta == 0
     no_resource_increase = all(value <= 0 for value in numeric_resources)
+
     if same_performance and all(value == 0 for value in numeric_resources):
         record.update(verdict="reject_no_change", reason="Synthesis metrics are identical to the baseline.")
     elif (improves_latency or improves_interval) and no_resource_increase:
@@ -241,11 +278,7 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
         "verdict": "baseline",
     }
     pool = [baseline_record, *eligible]
-    pareto = [
-        item
-        for item in pool
-        if not any(other is not item and record_dominates(other, item) for other in pool)
-    ]
+    pareto = [item for item in pool if not any(other is not item and record_dominates(other, item) for other in pool)]
     synthesis_calls_used = sum(1 for record in records if record.get("synthesis_run"))
     maximum = int(config["budget"]["max_synthesis_calls"])
     summary = {
@@ -269,10 +302,7 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
             for item in pareto
         ],
     }
-    (output_dir / "experiment_summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    (output_dir / "experiment_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary
 
 
@@ -293,12 +323,7 @@ def main() -> None:
     for item in summary["pareto_archive"]:
         label = "baseline" if item["candidate_index"] == 0 else f"candidate_{item['candidate_index']:03d}"
         metrics = item["metrics"]
-        print(
-            f"  {label}: latency={metrics.get('latency_best_cycles')}, "
-            f"LUT={metrics.get('resources_lut_used')}, "
-            f"FF={metrics.get('resources_ff_used')}, "
-            f"DSP={metrics.get('resources_dsp_used')}"
-        )
+        print(f"  {label}: latency={metrics.get('latency_best_cycles')}, LUT={metrics.get('resources_lut_used')}, FF={metrics.get('resources_ff_used')}, DSP={metrics.get('resources_dsp_used')}")
     print("No model call, CSim, or synthesis was run.")
 
 
