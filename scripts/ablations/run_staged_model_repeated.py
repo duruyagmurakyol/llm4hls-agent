@@ -27,7 +27,7 @@ MODES = (("one_shot", 1), ("iterative", 3))
 
 
 def result_directories(experiment_id: str) -> set[Path]:
-    root = ROOT / "results/experiments" / experiment_id
+    root = ROOT / "runs/experiments" / experiment_id
     if not root.exists():
         return set()
     return {path.resolve() for path in root.iterdir() if path.is_dir()}

@@ -25,16 +25,6 @@ def slugify(value: str) -> str:
     return slug
 
 
-def default_thinking_budget(model: str) -> int | None:
-    """Return a provider-compatible default while minimizing model-specific confounds."""
-    if "kimi" in model.lower():
-        # SiliconFlow rejects thinking_budget=0 for Kimi. Omitting the field lets
-        # the provider use the model's supported default rather than inventing a
-        # non-comparable arbitrary budget.
-        return None
-    return 0
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Exact SiliconFlow model identifier")
@@ -43,19 +33,15 @@ def main() -> None:
         "--thinking-budget",
         type=int,
         default=None,
-        help="Optional positive model-specific thinking budget; omit to use a safe default",
+        help="Optional non-negative thinking budget; omit to leave it unset",
     )
     args = parser.parse_args()
 
-    if args.thinking_budget is not None and args.thinking_budget <= 0:
-        raise SystemExit("--thinking-budget must be a positive integer when supplied")
+    if args.thinking_budget is not None and args.thinking_budget < 0:
+        raise SystemExit("--thinking-budget must be non-negative when supplied")
 
     model_slug = args.slug or slugify(args.model.split("/")[-1])
-    thinking_budget = (
-        args.thinking_budget
-        if args.thinking_budget is not None
-        else default_thinking_budget(args.model)
-    )
+    thinking_budget = args.thinking_budget
     created = 0
 
     for benchmark in BENCHMARKS:

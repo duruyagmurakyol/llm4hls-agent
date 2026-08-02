@@ -1,7 +1,7 @@
 open_project -reset atax_candidate_3b_project
 set_top kernel_atax
 
-add_files -cflags "-I../src" ../../../../logs/hls_eval/atax/optimisation/atax_candidate_3b.cpp
+add_files -cflags "-I../src" ../candidates/atax_candidate_3b.cpp
 add_files ../src/atax.h
 add_files -tb -cflags "-I../src" ../testbench/atax_tb.cpp
 

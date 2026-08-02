@@ -86,7 +86,7 @@ def main() -> None:
 
     source_workspace = ROOT / config["workspace"]
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output_dir = ROOT / "results/experiments/vector_add_ppa_interface_frozen_qwen35" / timestamp
+    output_dir = ROOT / "runs/experiments/vector_add_ppa_interface_frozen_qwen35" / timestamp
     workspace = output_dir / "workspace"
     output_dir.mkdir(parents=True)
     shutil.copytree(source_workspace, workspace)

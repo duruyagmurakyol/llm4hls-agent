@@ -8,7 +8,6 @@ import argparse
 import difflib
 import hashlib
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -17,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from agent.siliconflow import complete  # noqa: E402
+from agent.siliconflow import complete, extract_source_response  # noqa: E402
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -68,37 +67,6 @@ def concise_evidence(output: str, limit: int = 1800) -> str:
     ]
     text = "\n".join(selected[-16:] or lines[-16:])
     return text[-limit:]
-
-
-def clean_source(text: str) -> str:
-    """Extract a complete C/C++ source file from a model response safely."""
-    text = text.strip()
-
-    # Prefer the contents of the first fenced C/C++ block even when the model
-    # adds a filename label before the fence, for example:
-    #   src/bicg.cpp
-    #   ```cpp
-    #   ...
-    #   ```
-    fenced = re.search(
-        r"```(?:cpp|c\+\+|cc|cxx|c)?\s*\n?(.*?)\n?```",
-        text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if fenced:
-        text = fenced.group(1).strip()
-    else:
-        lines = text.splitlines()
-        if lines and re.fullmatch(r"[A-Za-z0-9_./-]+\.(?:c|cc|cpp|cxx|h|hpp)", lines[0].strip()):
-            text = "\n".join(lines[1:]).strip()
-
-    if "```" in text:
-        raise ValueError("Model response still contains Markdown fences after parsing")
-    if not text:
-        raise ValueError("Model response did not contain source code")
-    if not text.endswith("\n"):
-        text += "\n"
-    return text
 
 
 def make_prompt(
@@ -172,7 +140,7 @@ def main() -> None:
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     experiment_id = str(config["experiment_id"])
-    run_dir = root / "results" / "experiments" / experiment_id / timestamp
+    run_dir = root / "runs" / "experiments" / experiment_id / timestamp
     workspace = run_dir / "workspace"
     run_dir.mkdir(parents=True)
     benchmark_source = root / config["benchmark_source"]
@@ -235,7 +203,7 @@ def main() -> None:
         )
 
         try:
-            candidate = clean_source(response.content)
+            candidate = extract_source_response(response.content)
         except ValueError as exc:
             validation_code = 1
             validation_output = f"Response parsing error: {exc}\n"

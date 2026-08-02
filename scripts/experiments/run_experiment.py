@@ -200,7 +200,7 @@ def main() -> None:
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     experiment_id = str(config["experiment_id"])
-    run_dir = repository_root / "results" / "experiments" / experiment_id / timestamp
+    run_dir = repository_root / "runs" / "experiments" / experiment_id / timestamp
     workspace = run_dir / "workspace"
     run_dir.mkdir(parents=True, exist_ok=False)
     shutil.copytree(source_dir, workspace)

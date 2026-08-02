@@ -14,9 +14,10 @@ optimising Xilinx HLS code using large language models.
 ## Repository structure
 
 - `benchmarks/`: HLS source code and testbenches
-- `experiments/`: individual experimental runs and metadata
+- `runs/`: ignored, complete per-run bundles (logs, intermediate output, and workspaces)
+- `results/`: tracked, compact derived summaries and comparison tables
+- `evidence/`: tracked, deliberately selected artifacts that support a reported result
 - `prompts/`: exact prompts supplied to language models
-- `results/`: selected simulation and synthesis results
 - `scripts/`: automation, grouped by workflow:
   - `analysis/`: HLS evidence extraction and diagnosis
   - `experiments/`: repair experiment runners and suites
@@ -24,7 +25,6 @@ optimising Xilinx HLS code using large language models.
   - `ablations/`: repeated-run ablations and result comparisons
   - `track_a/`: Track A task preparation and autonomous runs
   - `setup/`: benchmark and configuration setup
-  - `utilities/`: one-off maintenance and model-discovery tools
 - `notes/`: environment details, decisions and laboratory logs
 
 ## First experiment
@@ -44,10 +44,10 @@ Keep the source of truth needed to run or reproduce an experiment:
 - prompts, concise documentation, and selected result summaries needed to
   support reported conclusions
 
-The `results/`, `logs/`, and `experiments/` directories are research records,
-not runtime dependencies. Keep a small, intentional set of summaries there;
-archive detailed run outputs elsewhere when they are not required for a paper
-or a reproducibility release.
+`runs/` is the operational record for an execution and is intentionally ignored
+by Git. `results/` and `evidence/` are the small, reviewed record retained in
+Git; neither is a runtime dependency. See `docs/output-storage.md` for the
+promotion rules.
 
 ### Do not add generated local artifacts
 
@@ -61,7 +61,7 @@ committed in new changes:
 - autonomous-run and validation logs
 
 The ignore rules now cover `host_test` and `*.app`; the existing rules already
-cover `work/`, `*.log`, and `results/experiments/`.
+cover `work/`, `*.log`, and `runs/`.
 
 ### Audit recorded 2026-08-02
 

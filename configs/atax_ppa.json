@@ -18,7 +18,7 @@
     "Preserve all 42 dot-product elements exactly once, including any explicit remainder handling.",
     "Do not modify init_y, update_y, or unrelated loops unless the diagnosis explicitly selects them."
   ],
-  "output_dir": "experiments/atax/autonomous_ppa",
+  "output_dir": "runs/ppa/atax/autonomous_ppa",
   "model": {
     "provider": "siliconflow",
     "name": "Qwen/Qwen3.5-122B-A10B",

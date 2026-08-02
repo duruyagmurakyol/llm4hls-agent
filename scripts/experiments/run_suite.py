@@ -29,7 +29,7 @@ def run_command(command: list[str], cwd: Path) -> subprocess.CompletedProcess[st
 
 
 def latest_result(repository_root: Path, experiment_id: str) -> Path | None:
-    experiment_root = repository_root / "results" / "experiments" / experiment_id
+    experiment_root = repository_root / "runs" / "experiments" / experiment_id
     if not experiment_root.is_dir():
         return None
     candidates = sorted(experiment_root.glob("*/result.json"))

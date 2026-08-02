@@ -22,7 +22,7 @@ CASES = [
 
 
 def latest_result(experiment_id: str) -> Path:
-    root = ROOT / "results/experiments" / experiment_id
+    root = ROOT / "runs/experiments" / experiment_id
     candidates = sorted(path for path in root.iterdir() if path.is_dir())
     if not candidates:
         raise RuntimeError(f"No results found for {experiment_id}")

@@ -31,7 +31,7 @@ def experiment_id(case: str) -> str:
 
 
 def result_directories(case: str) -> set[Path]:
-    root = ROOT / "results/experiments" / experiment_id(case)
+    root = ROOT / "runs/experiments" / experiment_id(case)
     if not root.exists():
         return set()
     return {path.resolve() for path in root.iterdir() if path.is_dir()}

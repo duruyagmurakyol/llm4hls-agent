@@ -38,8 +38,11 @@ solution*/
 # Python cache
 __pycache__/
 *.pyc
+# Full, verbose output from an individual execution.  Keep final summaries in
+# results/ and selectively promote supporting material to evidence/.
 runs/
 work/
+# Legacy location retained locally only; new runners use runs/.
 results/experiments/
 
 # Disposable Vitis execution workspaces

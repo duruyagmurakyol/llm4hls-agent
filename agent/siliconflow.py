@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import time
 import urllib.error
@@ -14,11 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
-NON_THINKING_MODELS = {
-    "Qwen/Qwen3.5-122B-A10B",
-    "Qwen/Qwen3.6-27B",
-}
+BASE_URL = "https://api.siliconflow.com/v1"
 
 
 @dataclass(frozen=True)
@@ -42,8 +39,67 @@ def _api_key() -> str:
 
 
 def _endpoint() -> str:
-    base_url = os.environ.get("SILICONFLOW_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
-    return f"{base_url}/chat/completions"
+    return f"{BASE_URL}/chat/completions"
+
+
+def list_models(
+    *,
+    timeout_seconds: int = 30,
+) -> list[dict[str, Any]]:
+    """Return the model descriptors available to the configured SiliconFlow account."""
+
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be greater than zero")
+
+    request = urllib.request.Request(
+        f"{BASE_URL}/models",
+        headers={"Authorization": f"Bearer {_api_key()}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"SiliconFlow HTTP {error.code}: {body}") from error
+    except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+        raise RuntimeError(f"SiliconFlow model-list request failed: {error}") from error
+
+    models = payload.get("data")
+    if not isinstance(models, list):
+        raise RuntimeError(f"SiliconFlow returned an invalid models response: {payload}")
+    return [model for model in models if isinstance(model, dict)]
+
+
+def extract_source_response(content: str) -> str:
+    """Extract C/C++ source from a SiliconFlow model response.
+
+    Repair models may prepend a filename or wrap source in Markdown despite
+    instructions not to. Prefer the first C/C++ fence, remove a standalone
+    source-file label when present, and reject any remaining fences.
+    """
+
+    text = content.strip()
+    fenced = re.search(
+        r"```(?:(?:cpp|c\+\+|cc|cxx|c)[ \t]*\r?\n|\r?\n)(.*?)\r?\n?```",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if fenced:
+        text = fenced.group(1).strip()
+    else:
+        lines = text.splitlines()
+        if lines and re.fullmatch(
+            r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:c|cc|cpp|cxx|h|hpp)",
+            lines[0].strip(),
+        ):
+            text = "\n".join(lines[1:]).strip()
+
+    if "```" in text:
+        raise ValueError("Model response still contains Markdown fences after parsing")
+    if not text:
+        raise ValueError("Model response did not contain source code")
+    return text + "\n"
 
 
 def complete(
@@ -54,7 +110,6 @@ def complete(
     temperature: float = 0.0,
     max_tokens: int = 2048,
     timeout_seconds: int = 180,
-    endpoint: str | None = None,
     max_attempts: int = 3,
     thinking_budget: int | None = None,
     enable_thinking: bool | None = None,
@@ -66,10 +121,6 @@ def complete(
     if thinking_budget is not None and thinking_budget < 0:
         raise ValueError("thinking_budget must be non-negative")
 
-    effective_enable_thinking = enable_thinking
-    if effective_enable_thinking is None and model in NON_THINKING_MODELS:
-        effective_enable_thinking = False
-
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -80,13 +131,13 @@ def complete(
         "max_tokens": max_tokens,
         "stream": False,
     }
-    if thinking_budget is not None and effective_enable_thinking is not False:
+    if thinking_budget is not None:
         payload["thinking_budget"] = thinking_budget
-    if effective_enable_thinking is not None:
-        payload["enable_thinking"] = effective_enable_thinking
+    if enable_thinking is not None:
+        payload["enable_thinking"] = enable_thinking
 
     request_body = json.dumps(payload).encode("utf-8")
-    request_url = endpoint or _endpoint()
+    request_url = _endpoint()
     overall_started = time.monotonic()
     last_error: Exception | None = None
 

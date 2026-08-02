@@ -60,5 +60,5 @@
     ],
     "summary": "experiments/atax/autonomous_ppa/experiment_summary.json"
   },
-  "output_dir": "experiments/track_a/hls_eval_atax_001"
+  "output_dir": "runs/track_a/hls_eval_atax_001"
 }
