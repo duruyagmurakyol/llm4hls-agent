@@ -51,6 +51,43 @@ def _record(summary: dict[str, Any], index: int) -> dict[str, Any] | None:
     )
 
 
+def _status_summary(config: dict[str, Any], output_dir: Path) -> tuple[str, dict[str, Any]]:
+    """Return status without forcing baseline initialisation or synthesis."""
+    summary_path = output_dir / "experiment_summary.json"
+    if summary_path.is_file():
+        return "status_only", _load_json(summary_path)
+
+    baseline = config.get("baseline", {})
+    configured_metrics = baseline.get("metrics")
+    diagnosis_path = output_dir / "baseline_hierarchical_diagnosis.json"
+    baseline_ready = bool(
+        isinstance(configured_metrics, dict) and configured_metrics
+    ) or diagnosis_path.is_file()
+    status = "ready" if baseline_ready else "uninitialised"
+    summary = {
+        "experiment_name": config.get("experiment_name"),
+        "benchmark": config.get("benchmark"),
+        "status": status,
+        "baseline_ready": baseline_ready,
+        "baseline_metrics_available": bool(
+            isinstance(configured_metrics, dict) and configured_metrics
+        ),
+        "diagnosis_available": diagnosis_path.is_file(),
+        "candidate_count": len(_candidate_indices(output_dir)),
+        "budget": {
+            "max_candidates": config.get("budget", {}).get("max_candidates"),
+            "max_synthesis_calls": config.get("budget", {}).get("max_synthesis_calls"),
+            "synthesis_calls_used": 0,
+        },
+        "message": (
+            "Baseline is ready; no experiment summary has been generated yet."
+            if baseline_ready
+            else "Baseline has not been initialised. Run without --status-only to synthesise and diagnose it."
+        ),
+    }
+    return f"status_{status}", summary
+
+
 def _initialise(config_path: Path, output_dir: Path) -> None:
     baseline = ensure_baseline_synthesis(config_path)
     if baseline.get("passed") is not True:
@@ -127,8 +164,8 @@ def run_optimisation(
     trajectory: list[dict[str, Any]] = []
 
     if status_only:
-        summary = evaluate_experiment(config_path)
-        return OptimisationRunResult(True, "status_only", "status_requested", summary, trajectory)
+        status, summary = _status_summary(config, output_dir)
+        return OptimisationRunResult(True, status, "status_requested", summary, trajectory)
 
     _initialise(config_path, output_dir)
     summary = evaluate_experiment(config_path)
