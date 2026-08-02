@@ -17,7 +17,14 @@ optimising Xilinx HLS code using large language models.
 - `experiments/`: individual experimental runs and metadata
 - `prompts/`: exact prompts supplied to language models
 - `results/`: selected simulation and synthesis results
-- `scripts/`: experiment automation and report parsing
+- `scripts/`: automation, grouped by workflow:
+  - `analysis/`: HLS evidence extraction and diagnosis
+  - `experiments/`: repair experiment runners and suites
+  - `ppa/`: PPA candidate generation, validation, synthesis, and refinement
+  - `ablations/`: repeated-run ablations and result comparisons
+  - `track_a/`: Track A task preparation and autonomous runs
+  - `setup/`: benchmark and configuration setup
+  - `utilities/`: one-off maintenance and model-discovery tools
 - `notes/`: environment details, decisions and laboratory logs
 
 ## First experiment
