@@ -128,11 +128,23 @@ def main() -> None:
         raise SystemExit(1)
 
     adapter = task["adapter"]
+    adapter_config_path = resolve(adapter["config"])
     summary_path = resolve(adapter["summary"])
     if not summary_path.is_file() and not args.status_only:
         if run_python(adapter["initialise_command"], "Diagnose and initialise baseline") != 0:
             write_ledger(task_path, task, None, "failed_initialisation")
             raise SystemExit(1)
+        if run_python(
+            ["scripts/evaluate_ppa_experiment.py", str(adapter_config_path)],
+            "Create initial experiment summary",
+        ) != 0:
+            write_ledger(task_path, task, None, "failed_summary_initialisation")
+            raise SystemExit(1)
+        if not summary_path.is_file():
+            write_ledger(task_path, task, None, "failed_summary_initialisation")
+            raise FileNotFoundError(
+                f"Initialisation completed but did not create summary: {summary_path}"
+            )
 
     summary = load_json(summary_path) if summary_path.is_file() else None
     if args.status_only:
