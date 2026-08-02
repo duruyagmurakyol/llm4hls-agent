@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+
+"""Run isolated Vitis HLS CSim for one generated PPA candidate."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shlex
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"JSON file not found: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def find_vitis_run() -> str:
+    executable = shutil.which("vitis-run")
+    if executable:
+        return executable
+    raise RuntimeError(
+        "vitis-run was not found in PATH. Source the AMD/Xilinx settings64.sh file first."
+    )
+
+
+def first_command(lines: list[str], pattern: str, description: str) -> str:
+    command = next((line.strip() for line in lines if re.match(pattern, line.strip())), None)
+    if command is None:
+        raise ValueError(f"Could not find {description} in baseline TCL.")
+    return command
+
+
+def parse_add_files(command: str) -> tuple[bool, list[str], str]:
+    """Return testbench flag, non-path options, and source path from add_files."""
+    tokens = shlex.split(command)
+    if not tokens or tokens[0] != "add_files":
+        raise ValueError(f"Not an add_files command: {command}")
+
+    is_testbench = "-tb" in tokens
+    source_index = next(
+        (
+            index
+            for index in range(len(tokens) - 1, 0, -1)
+            if re.search(r"\.(?:c|cc|cpp|cxx|h|hpp)$", tokens[index], re.IGNORECASE)
+        ),
+        None,
+    )
+    if source_index is None:
+        raise ValueError(f"Could not parse source path from: {command}")
+    return is_testbench, tokens[1:source_index], tokens[source_index]
+
+
+def absolutise_cflags(options: list[str], tcl_dir: Path) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(options):
+        token = options[index]
+        if token == "-cflags" and index + 1 < len(options):
+            flags = shlex.split(options[index + 1])
+            rewritten: list[str] = []
+            for flag in flags:
+                if flag.startswith("-I") and len(flag) > 2:
+                    include = Path(flag[2:])
+                    if not include.is_absolute():
+                        include = (tcl_dir / include).resolve()
+                    rewritten.append(f"-I{include.as_posix()}")
+                else:
+                    rewritten.append(flag)
+            result.extend(["-cflags", " ".join(rewritten)])
+            index += 2
+            continue
+        result.append(token)
+        index += 1
+    return result
+
+
+def absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = None) -> str:
+    is_testbench, options, source_text = parse_add_files(command)
+    source = replacement.resolve() if replacement is not None else Path(source_text)
+    if replacement is None and not source.is_absolute():
+        source = (tcl_dir / source).resolve()
+    options = absolutise_cflags(options, tcl_dir)
+
+    tokens = ["add_files"]
+    if is_testbench and "-tb" not in options:
+        tokens.append("-tb")
+    tokens.extend(options)
+    tokens.append(source.as_posix())
+    return " ".join(shlex.quote(token) for token in tokens)
+
+
+def temporary_project_dir(config_path: Path, candidate_index: int) -> Path:
+    """Use /tmp because Vitis 2025.2 omitted external design files in /home projects."""
+    run_key = hashlib.sha256(str(config_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return (
+        Path(tempfile.gettempdir())
+        / "llm4hls-agent"
+        / run_key
+        / f"candidate_{candidate_index:03d}_csim"
+    )
+
+
+def make_csim_tcl(
+    baseline_tcl: Path,
+    candidate: Path,
+    project_dir: Path,
+) -> tuple[str, str, list[str]]:
+    """Generate a location-independent CSim TCL using absolute artifact paths."""
+    source_lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
+    tcl_dir = baseline_tcl.parent.resolve()
+
+    set_top = first_command(source_lines, r"^set_top\b", "set_top")
+    open_solution = first_command(
+        source_lines, r"^open_solution(?:\s+-reset)?\b", "open_solution"
+    )
+    set_part = first_command(source_lines, r"^set_part\b", "set_part")
+    create_clock = first_command(source_lines, r"^create_clock\b", "create_clock")
+
+    design_line = next(
+        (
+            line.strip()
+            for line in source_lines
+            if re.match(r"^add_files\b", line.strip())
+            and "-tb" not in line
+            and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())
+        ),
+        None,
+    )
+    if design_line is None:
+        raise ValueError("Could not find baseline design-source add_files command.")
+
+    auxiliary_lines = [
+        line.strip()
+        for line in source_lines
+        if re.match(r"^add_files\b", line.strip())
+        and (
+            "-tb" in line
+            or re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())
+        )
+    ]
+    if not any("-tb" in line for line in auxiliary_lines):
+        raise ValueError("Could not find baseline testbench add_files command.")
+
+    baseline_csim = next(
+        (line.strip() for line in source_lines if re.match(r"^csim_design\b", line.strip())),
+        "csim_design",
+    )
+
+    design_command = absolute_add_files(design_line, tcl_dir, candidate)
+    auxiliary_commands = [absolute_add_files(line, tcl_dir) for line in auxiliary_lines]
+
+    canonical = [
+        f'open_project -reset "{project_dir.resolve().as_posix()}"',
+        set_top,
+        design_command,
+        *auxiliary_commands,
+        open_solution,
+        set_part,
+        create_clock,
+        baseline_csim,
+        "exit",
+    ]
+    return "\n".join(canonical) + "\n", design_command, auxiliary_commands
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run isolated Vitis HLS CSim for a PPA candidate."
+    )
+    parser.add_argument("config", type=Path, help="PPA optimisation JSON config")
+    parser.add_argument("--candidate-index", type=int, default=1)
+    args = parser.parse_args()
+
+    config_path = args.config.resolve()
+    config = load_json(config_path)
+    output_dir = REPO_ROOT / config["output_dir"]
+    candidate = output_dir / f"candidate_{args.candidate_index:03d}.cpp"
+    validation = output_dir / f"candidate_{args.candidate_index:03d}_static_validation.json"
+
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Candidate not found: {candidate}")
+    if not validation.is_file():
+        raise FileNotFoundError(
+            f"Static validation report not found: {validation}\n"
+            "Run scripts/validate_ppa_candidate.py first."
+        )
+    if load_json(validation).get("passed") is not True:
+        raise RuntimeError("Static validation did not pass; refusing to run CSim.")
+
+    baseline_tcl = REPO_ROOT / config["baseline"]["tcl"]
+    if not baseline_tcl.is_file():
+        raise FileNotFoundError(f"Baseline TCL not found: {baseline_tcl}")
+
+    csim_dir = output_dir / f"candidate_{args.candidate_index:03d}_csim"
+    project_dir = temporary_project_dir(config_path, args.candidate_index)
+    generated_tcl = csim_dir / "run_csim.tcl"
+    log_path = csim_dir / "vitis_csim.log"
+    report_path = output_dir / f"candidate_{args.candidate_index:03d}_csim_validation.json"
+    csim_dir.mkdir(parents=True, exist_ok=True)
+
+    # Vitis open_project -reset did not reliably clear bad source metadata.
+    shutil.rmtree(project_dir, ignore_errors=True)
+    project_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    tcl_text, design_command, auxiliary_commands = make_csim_tcl(
+        baseline_tcl, candidate.resolve(), project_dir
+    )
+    generated_tcl.write_text(tcl_text, encoding="utf-8")
+
+    command = [find_vitis_run(), "--mode", "hls", "--tcl", str(generated_tcl.resolve())]
+    print("\nCandidate CSim validation")
+    print(f"Candidate: {candidate.relative_to(REPO_ROOT)}")
+    print(f"Temporary Vitis project: {project_dir}")
+    print(f"Generated TCL: {generated_tcl.relative_to(REPO_ROOT)}")
+    print(f"Design source command: {design_command}")
+    for auxiliary in auxiliary_commands:
+        print(f"Auxiliary source command: {auxiliary}")
+    print("Running Vitis HLS CSim only...")
+
+    completed = subprocess.run(
+        command,
+        cwd=baseline_tcl.parent,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    log_path.write_text(completed.stdout, encoding="utf-8")
+
+    candidate_compile_pattern = re.compile(
+        rf"Compiling\s+.*{re.escape(candidate.name)}\b", re.IGNORECASE
+    )
+    candidate_compiled = bool(candidate_compile_pattern.search(completed.stdout))
+    passed = completed.returncode == 0 and candidate_compiled
+
+    report = {
+        "candidate_index": args.candidate_index,
+        "candidate_file": str(candidate.relative_to(REPO_ROOT)),
+        "generated_tcl": str(generated_tcl.relative_to(REPO_ROOT)),
+        "design_source_command": design_command,
+        "auxiliary_source_commands": auxiliary_commands,
+        "project_dir": str(project_dir),
+        "project_storage": "temporary",
+        "log_file": str(log_path.relative_to(REPO_ROOT)),
+        "return_code": completed.returncode,
+        "candidate_compiled": candidate_compiled,
+        "passed": passed,
+        "synthesis_run": False,
+        "baseline_modified": False,
+    }
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    print(f"Return code: {completed.returncode}")
+    print(f"Candidate compiled: {candidate_compiled}")
+    print(f"Log: {log_path.relative_to(REPO_ROOT)}")
+    print(f"Report: {report_path.relative_to(REPO_ROOT)}")
+    print(f"Overall: {'PASS' if passed else 'FAIL'}")
+    print("No synthesis was run and the baseline source was not modified.")
+
+    if not passed:
+        tail = completed.stdout.splitlines()[-35:]
+        if tail:
+            print("\nLast log lines")
+            print("\n".join(tail))
+        raise SystemExit(completed.returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

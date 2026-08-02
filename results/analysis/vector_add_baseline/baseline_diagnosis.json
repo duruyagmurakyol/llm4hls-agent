@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "primary_diagnosis": {
+    "category": "near_sequential_lower_bound",
+    "target": "loop_1",
+    "confidence": 0.9,
+    "evidence": [
+      "achieved_ii=1",
+      "latency=1024 cycles is close to trip_count=1024"
+    ],
+    "recommended_transformations": [
+      "test bounded parallelism only if memory access concurrency exists",
+      "otherwise stop and report limited optimisation headroom"
+    ],
+    "forbidden_transformations": [
+      "add another pipeline pragma as the primary optimisation",
+      "change external interface architecture"
+    ],
+    "expected_tradeoffs": [
+      "unrolling without matching memory bandwidth may increase resources with no speedup"
+    ]
+  },
+  "ranked_diagnoses": [
+    {
+      "category": "near_sequential_lower_bound",
+      "target": "loop_1",
+      "confidence": 0.9,
+      "evidence": [
+        "achieved_ii=1",
+        "latency=1024 cycles is close to trip_count=1024"
+      ],
+      "recommended_transformations": [
+        "test bounded parallelism only if memory access concurrency exists",
+        "otherwise stop and report limited optimisation headroom"
+      ],
+      "forbidden_transformations": [
+        "add another pipeline pragma as the primary optimisation",
+        "change external interface architecture"
+      ],
+      "expected_tradeoffs": [
+        "unrolling without matching memory bandwidth may increase resources with no speedup"
+      ]
+    },
+    {
+      "category": "dominant_latency_region",
+      "target": "loop_1",
+      "confidence": 0.95,
+      "evidence": [
+        "loop contributes approximately 100% of total latency"
+      ],
+      "recommended_transformations": [
+        "prioritise this loop before modifying minor regions"
+      ],
+      "forbidden_transformations": [],
+      "expected_tradeoffs": []
+    }
+  ],
+  "stop_recommended": true
+}

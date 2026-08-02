@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -41,9 +42,14 @@ def _loops(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in loops if isinstance(item, dict)]
 
 
+def _bus_ports(warnings: str) -> list[str]:
+    return sorted(set(re.findall(r"port ['\"]([^'\"]+)['\"]", warnings, re.I)))
+
+
 CATEGORY_PRIORITY = {
     "dataflow_stall": 100,
     "critical_path": 95,
+    "external_memory_bandwidth_contention": 92,
     "memory_port_contention": 90,
     "loop_carried_dependency": 88,
     "pipeline_ii_violation": 80,
@@ -56,28 +62,66 @@ CATEGORY_PRIORITY = {
 
 
 def _ranking_key(item: Diagnosis) -> tuple[int, float]:
-    """Rank causal diagnoses above contextual observations.
-
-    A dominant region identifies where time is spent, but it does not explain why
-    the region is slow or whether it is already close to an architectural bound.
-    """
-
+    """Rank causal diagnoses above contextual observations."""
     return (CATEGORY_PRIORITY.get(item.category, 10), item.confidence)
 
 
 def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
-    """Return ranked diagnoses from generic synthesis/source evidence.
-
-    The input intentionally contains no benchmark name. Useful fields include:
-    top_function, loops, arrays, clock, resources, warnings and constraints.
-    Missing fields are tolerated and lower diagnosis confidence.
-    """
+    """Return ranked diagnoses from generic synthesis/source evidence."""
 
     diagnoses: list[Diagnosis] = []
     warnings = _warning_text(evidence)
     loops = _loops(evidence)
     constraints = evidence.get("constraints", {}) or {}
     interface_frozen = bool(constraints.get("interface_frozen", False))
+    top = evidence.get("top_function", {}) or {}
+    top_interval = _number(top.get("interval_cycles"))
+
+    # Vitis can expose decisive bus/interface scheduling evidence even when the
+    # csynth XML does not contain a per-loop table (for example after aggressive
+    # unrolling or function-level pipelining). Treat this as causal evidence.
+    bus_lower_bound = re.search(
+        r"lower bound of ii is\s+([0-9]+).*?(?:multiple bus|m_axi)",
+        warnings,
+        re.I | re.S,
+    )
+    bus_contention = bool(bus_lower_bound) or (
+        "lower bound of ii" in warnings
+        and ("bus read operation" in warnings or "bus write operation" in warnings)
+    )
+    if bus_contention:
+        lower_bound = _number(bus_lower_bound.group(1)) if bus_lower_bound else top_interval
+        ports = _bus_ports(warnings)
+        evidence_items = ["Vitis reports an II lower bound caused by repeated AXI bus accesses"]
+        if lower_bound is not None:
+            evidence_items.append(f"reported_ii_lower_bound={lower_bound:g}")
+        if top_interval is not None:
+            evidence_items.append(f"top_interval={top_interval:g} cycles")
+        if ports:
+            evidence_items.append("contended_ports=" + ",".join(ports))
+
+        recommendations = [
+            "remove accidental full unrolling or function-level pipelining that exposes all accesses concurrently",
+            "restore a sequential or bounded loop pipeline matched to interface bandwidth",
+            "use local buffering or burst-friendly access only when the interface contract permits it",
+        ]
+        forbidden = []
+        if interface_frozen:
+            forbidden.append("change external AXI interface architecture")
+
+        diagnoses.append(
+            Diagnosis(
+                category="external_memory_bandwidth_contention",
+                target=",".join(ports) if ports else "external_memory_interfaces",
+                confidence=0.98,
+                evidence=evidence_items,
+                recommended_transformations=recommendations,
+                forbidden_transformations=forbidden,
+                expected_tradeoffs=[
+                    "more requested parallel accesses cannot improve throughput when AXI service rate is the bound"
+                ],
+            )
+        )
 
     for loop in loops:
         name = str(loop.get("name") or loop.get("label") or "unknown_loop")
@@ -101,7 +145,7 @@ def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
                         ],
                         recommended_transformations=[
                             "match controlled unrolling to available memory ports",
-                            "partition or reshape the contended array",
+                            "partition or reshape the contended local array",
                             "restructure accesses or introduce local tiling",
                         ],
                         forbidden_transformations=(

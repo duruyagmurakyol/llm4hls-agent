@@ -1,0 +1,33 @@
+{
+  "experiment_name": "atax_ppa",
+  "benchmark": "atax",
+  "top_function": "kernel_atax",
+  "target_loop_label": "dot_loop",
+  "baseline": {
+    "source": "benchmarks/hls_eval/atax/candidates/atax_candidate_3b.cpp",
+    "tcl": "benchmarks/hls_eval/atax/scripts/run_candidate_3b.tcl",
+    "project_dir": "benchmarks/hls_eval/atax/scripts/atax_candidate_3b_project"
+  },
+  "validation": {
+    "constant_loop_tail_bounds": true,
+    "required_loop_labels": ["dot_loop"],
+    "preserve_diagnosed_loop_label": true
+  },
+  "prompt_constraints": [
+    "Keep all accesses within A[38][42], x[42], y[42], and tmp[38].",
+    "Preserve all 42 dot-product elements exactly once, including any explicit remainder handling.",
+    "Do not modify init_y, update_y, or unrelated loops unless the diagnosis explicitly selects them."
+  ],
+  "output_dir": "experiments/atax/autonomous_ppa",
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "budget": {
+    "max_candidates": 5,
+    "max_synthesis_calls": 4
+  }
+}

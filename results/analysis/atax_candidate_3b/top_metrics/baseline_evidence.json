@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "source_report": "/home/xilinx/projects/llm4hls-agent/benchmarks/hls_eval/atax/scripts/atax_candidate_3b_project/solution1/syn/report/kernel_atax_csynth.xml",
+  "top_function": {
+    "name": "kernel_atax",
+    "latency_best_cycles": 5936,
+    "latency_worst_cycles": 5936,
+    "latency_cycles": 5936,
+    "interval_min_cycles": 5937,
+    "interval_max_cycles": 5937,
+    "interval_cycles": 5937
+  },
+  "loops": [
+    {
+      "name": "loop_1",
+      "trip_count": 38,
+      "latency_cycles": 5890,
+      "achieved_ii": null,
+      "target_ii": null,
+      "pipelined": null,
+      "contribution_to_total_latency": 0.9922506738544474
+    }
+  ],
+  "resources": {
+    "lut_used": 1868,
+    "ff_used": 1823,
+    "dsp_used": 14,
+    "bram_used": 0,
+    "lut_available": null,
+    "ff_available": null,
+    "dsp_available": null,
+    "bram_available": null
+  },
+  "clock": {
+    "target_period_ns": 10,
+    "estimated_period_ns": 10.565
+  },
+  "warnings": [
+    "| config_compile -design_size_maximum_warning | 100000 | Show a warning when total design instructions exceeds this value |"
+  ],
+  "constraints": {
+    "interface_frozen": false
+  },
+  "extraction": {
+    "loop_count": 1,
+    "warning_count": 1,
+    "missing_fields": []
+  }
+}

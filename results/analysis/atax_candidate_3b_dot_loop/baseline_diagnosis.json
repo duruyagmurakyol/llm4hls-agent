@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "primary_diagnosis": {
+    "category": "critical_path",
+    "target": "top_function",
+    "confidence": 0.93,
+    "evidence": [
+      "estimated_period_ns=10.565",
+      "target_period_ns=10"
+    ],
+    "recommended_transformations": [
+      "split long expressions into pipeline stages",
+      "use balanced arithmetic trees",
+      "reduce fan-out or operator chaining"
+    ],
+    "forbidden_transformations": [],
+    "expected_tradeoffs": [
+      "extra pipeline stages can increase latency cycles and FF use"
+    ]
+  },
+  "ranked_diagnoses": [
+    {
+      "category": "critical_path",
+      "target": "top_function",
+      "confidence": 0.93,
+      "evidence": [
+        "estimated_period_ns=10.565",
+        "target_period_ns=10"
+      ],
+      "recommended_transformations": [
+        "split long expressions into pipeline stages",
+        "use balanced arithmetic trees",
+        "reduce fan-out or operator chaining"
+      ],
+      "forbidden_transformations": [],
+      "expected_tradeoffs": [
+        "extra pipeline stages can increase latency cycles and FF use"
+      ]
+    },
+    {
+      "category": "pipeline_ii_violation",
+      "target": "loop_1",
+      "confidence": 0.72,
+      "evidence": [
+        "achieved_ii=4"
+      ],
+      "recommended_transformations": [
+        "inspect scheduling constraints and loop dependencies",
+        "inspect memory access conflicts",
+        "pipeline or restructure the limiting loop body"
+      ],
+      "forbidden_transformations": [],
+      "expected_tradeoffs": [
+        "lower II can require duplicated operators or memories"
+      ]
+    },
+    {
+      "category": "dominant_latency_region",
+      "target": "loop_1",
+      "confidence": 0.95,
+      "evidence": [
+        "loop contributes approximately 98% of total latency"
+      ],
+      "recommended_transformations": [
+        "prioritise this loop before modifying minor regions"
+      ],
+      "forbidden_transformations": [],
+      "expected_tradeoffs": []
+    }
+  ],
+  "stop_recommended": false
+}

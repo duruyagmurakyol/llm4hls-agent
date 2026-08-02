@@ -1,0 +1,64 @@
+{
+  "task_id": "hls_eval_atax_001",
+  "task_kind": "correct_unoptimised",
+  "artifacts": {
+    "source": "benchmarks/hls_eval/atax/candidates/atax_candidate_3b.cpp",
+    "testbench": [
+      "benchmarks/hls_eval/atax/testbench/atax_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval/atax/src/atax.h"
+    ],
+    "specification": "configs/tasks/specifications/atax.md",
+    "build_files": [
+      "benchmarks/hls_eval/atax/scripts/run_candidate_3b.tcl"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_atax",
+    "language": "cpp",
+    "numerical_tolerance": null,
+    "protected_contract": [
+      "Preserve the kernel_atax function signature and C linkage.",
+      "Preserve output semantics checked by the supplied testbench.",
+      "Keep all accesses within A[38][42], x[42], tmp[38], and y[42]."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 5,
+    "max_csim_calls": 5,
+    "max_cosim_calls": 0,
+    "max_synthesis_calls": 4,
+    "max_model_calls": 5,
+    "max_total_tokens": null
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "adapter": {
+    "kind": "legacy_ppa",
+    "config": "configs/atax_ppa.json",
+    "initialise_command": [
+      "scripts/run_ppa_optimisation.py",
+      "configs/atax_ppa.json"
+    ],
+    "iteration_command": [
+      "scripts/run_ppa_agent_iteration.py",
+      "configs/atax_ppa.json",
+      "--allow-synthesis"
+    ],
+    "summary": "experiments/atax/autonomous_ppa/experiment_summary.json"
+  },
+  "output_dir": "experiments/track_a/hls_eval_atax_001"
+}
