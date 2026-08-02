@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
 from agent.optimise.evaluate import dominates, evaluate_experiment
+from agent.optimise.generate import extract_cpp, generate_candidate
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
 from agent.tools.synthesis import (
@@ -28,6 +30,14 @@ def test_clean_packages_import() -> None:
     assert callable(parse_csynth_xml)
     assert callable(evaluate_experiment)
     assert callable(check_candidate_duplicate)
+    assert callable(generate_candidate)
+    assert callable(prepare_refinement_prompt)
+    assert callable(prepare_tradeoff_prompt)
+
+
+def test_candidate_extraction_requires_configured_top() -> None:
+    source = '#include "kernel.h"\nvoid kernel(int *a) { a[0] = 1; }\n'
+    assert extract_cpp(source, "kernel") == source
 
 
 def test_generic_pareto_dominance() -> None:
@@ -65,5 +75,8 @@ def test_obsolete_scripts_are_removed() -> None:
         "scripts/ensure_ppa_baseline_synthesis.py",
         "scripts/evaluate_ppa_experiment.py",
         "scripts/detect_ppa_candidate_duplicate.py",
+        "scripts/generate_ppa_candidate.py",
+        "scripts/prepare_ppa_refinement.py",
+        "scripts/prepare_ppa_tradeoff_refinement.py",
     ]
     assert all(not Path(path).exists() for path in obsolete)
