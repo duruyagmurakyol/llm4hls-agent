@@ -20,6 +20,7 @@ from agent.tools.synthesis import (
 from agent.tools.validation import (
     _complete_partition_issues,
     _dataflow_pipeline_conflict,
+    _pipeline_complete_unroll_conflicts,
     classify_failure,
     validate_ppa_candidate,
 )
@@ -119,6 +120,36 @@ for (int i = 0; i < 16; ++i) c[i] = a[i];
 }
 """
     assert _dataflow_pipeline_conflict(source, "vector_add")
+
+
+def test_pipeline_complete_unroll_conflict_guard() -> None:
+    source = """
+void kernel(double a[42]) {
+dot_loop:
+for (int j = 0; j < 42; ++j) {
+#pragma HLS PIPELINE
+#pragma HLS UNROLL
+    a[j] += 1.0;
+}
+}
+"""
+    conflicts = _pipeline_complete_unroll_conflicts(source, "kernel")
+    assert conflicts
+    assert conflicts[0]["loop_label"] == "dot_loop"
+
+
+def test_partial_unroll_can_coexist_with_pipeline() -> None:
+    source = """
+void kernel(double a[42]) {
+dot_loop:
+for (int j = 0; j < 42; ++j) {
+#pragma HLS PIPELINE
+#pragma HLS UNROLL factor=2
+    a[j] += 1.0;
+}
+}
+"""
+    assert not _pipeline_complete_unroll_conflicts(source, "kernel")
 
 
 def test_timeout_is_terminal_candidate_verdict(tmp_path: Path, monkeypatch) -> None:
