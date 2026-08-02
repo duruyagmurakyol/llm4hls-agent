@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = REPO_ROOT / "scripts"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -28,10 +27,6 @@ def run_stage(name: str, arguments: list[str], allow_failure: bool = False) -> i
     if completed.returncode != 0 and not allow_failure:
         raise SystemExit(completed.returncode)
     return completed.returncode
-
-
-def script(name: str, *arguments: object) -> list[str]:
-    return [str(SCRIPTS / name), *[str(value) for value in arguments]]
 
 
 def module(name: str, *arguments: object) -> list[str]:
@@ -95,12 +90,12 @@ def prepare_prompt(config_path: Path, previous_index: int, next_index: int, prev
     if previous.get("verdict") in {"keep_pareto_candidate", "accept_dominates_baseline"}:
         run_stage(
             "Prepare Pareto trade-off refinement prompt",
-            script("prepare_ppa_tradeoff_refinement.py", config_path, "--source-index", previous_index, "--next-index", next_index),
+            module("agent.optimise.diagnose", "tradeoff", config_path, "--source-index", previous_index, "--next-index", next_index),
         )
     else:
         run_stage(
             "Prepare evidence-driven repair prompt",
-            script("prepare_ppa_refinement.py", config_path, "--previous-index", previous_index, "--next-index", next_index),
+            module("agent.optimise.diagnose", "refine", config_path, "--previous-index", previous_index, "--next-index", next_index),
         )
 
 
@@ -158,7 +153,7 @@ def main() -> None:
         print("Next candidate: 001")
         budget = summary["budget"]
         print(f"Synthesis budget: {budget.get('synthesis_calls_used')}/{budget.get('max_synthesis_calls')} used")
-        run_stage("Generate candidate", script("generate_ppa_candidate.py", config_path, "--candidate-index", 1))
+        run_stage("Generate candidate", module("agent.optimise.generate", config_path, "--candidate-index", 1))
         evaluate_generated_candidate(config_path, output_dir, 1, allow_synthesis=args.allow_synthesis)
         return
 
@@ -194,7 +189,7 @@ def main() -> None:
     print(f"Next candidate: {next_index:03d}")
     print(f"Synthesis budget: {budget.get('synthesis_calls_used')}/{budget.get('max_synthesis_calls')} used")
     prepare_prompt(config_path, previous_index, next_index, previous)
-    run_stage("Generate candidate", script("generate_ppa_candidate.py", config_path, "--candidate-index", next_index))
+    run_stage("Generate candidate", module("agent.optimise.generate", config_path, "--candidate-index", next_index))
     evaluate_generated_candidate(config_path, output_dir, next_index, allow_synthesis=args.allow_synthesis)
 
 
