@@ -9,7 +9,7 @@
     "headers": [
       "benchmarks/hls_eval/vector_add/src/vector_add.h"
     ],
-    "specification": null,
+    "specification": "configs/tasks/specifications/vector_add.md",
     "build_files": [
       "benchmarks/hls_eval/vector_add/scripts/run_agent_baseline.tcl"
     ]
