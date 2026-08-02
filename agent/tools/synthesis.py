@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import os
 import queue
@@ -108,11 +109,105 @@ def _absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = 
     return " ".join(shlex.quote(token) for token in tokens)
 
 
+def _cfg_parts(
+    cfg_path: Path,
+    candidate: Path,
+    include_testbench: bool,
+) -> tuple[list[str], str, list[str], str]:
+    parser = configparser.ConfigParser()
+    parser.read(cfg_path, encoding="utf-8")
+
+    if "hls" not in parser:
+        raise ValueError(f"Missing [hls] section in {cfg_path}")
+
+    hls = parser["hls"]
+    required = ("syn.top", "syn.file", "part", "clock")
+    missing = [key for key in required if not hls.get(key, "").strip()]
+    if missing:
+        raise ValueError(
+            f"Missing required task.cfg fields: {', '.join(missing)}"
+        )
+
+    cfg_dir = cfg_path.parent.resolve()
+    top_name = hls["syn.top"].strip()
+    source = (cfg_dir / hls["syn.file"].strip()).resolve()
+
+    syn_cflags = hls.get("syn.cflags", "").strip()
+    tb_cflags = hls.get("tb.cflags", "").strip()
+
+    def absolute_cflags(value: str) -> str:
+        flags = []
+        for flag in shlex.split(value):
+            if flag.startswith("-I") and len(flag) > 2:
+                include = Path(flag[2:])
+                if not include.is_absolute():
+                    include = (cfg_dir / include).resolve()
+                flag = f"-I{include.as_posix()}"
+            flags.append(flag)
+        return " ".join(flags)
+
+    design_tokens = ["add_files"]
+    absolute_syn_cflags = absolute_cflags(syn_cflags)
+    if absolute_syn_cflags:
+        design_tokens.extend(["-cflags", absolute_syn_cflags])
+    design_tokens.append(candidate.resolve().as_posix())
+    design = " ".join(shlex.quote(token) for token in design_tokens)
+
+    auxiliaries: list[str] = []
+
+    for header in sorted(source.parent.glob("*.h*")):
+        auxiliaries.append(
+            f"add_files {shlex.quote(header.resolve().as_posix())}"
+        )
+
+    if include_testbench:
+        tb_value = hls.get("tb.file", "").strip()
+        if not tb_value:
+            raise ValueError("task.cfg is missing tb.file")
+
+        testbench = (cfg_dir / tb_value).resolve()
+        tb_tokens = ["add_files", "-tb"]
+        absolute_tb_cflags = absolute_cflags(tb_cflags)
+        if absolute_tb_cflags:
+            tb_tokens.extend(["-cflags", absolute_tb_cflags])
+        tb_tokens.append(testbench.as_posix())
+        auxiliaries.append(
+            " ".join(shlex.quote(token) for token in tb_tokens)
+        )
+
+    clock_match = re.fullmatch(
+        r"\s*([0-9]+(?:\.[0-9]+)?)\s*ns\s*",
+        hls["clock"],
+        re.IGNORECASE,
+    )
+    if not clock_match:
+        raise ValueError(
+            f"Unsupported task.cfg clock value: {hls['clock']}"
+        )
+
+    parts = [
+        f"set_top {top_name}",
+        "open_solution -reset solution1",
+        f"set_part {hls['part'].strip()}",
+        f"create_clock -period {clock_match.group(1)} -name default",
+    ]
+
+    return parts, design, auxiliaries, top_name
+
+
+
 def _tcl_parts(
     baseline_tcl: Path,
     candidate: Path,
     include_testbench: bool,
 ) -> tuple[list[str], str, list[str], str]:
+    if baseline_tcl.suffix.lower() == ".cfg":
+        return _cfg_parts(
+            baseline_tcl,
+            candidate,
+            include_testbench,
+        )
+
     lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     tcl_dir = baseline_tcl.parent.resolve()
     set_top = _first(lines, r"^set_top\b", "set_top")

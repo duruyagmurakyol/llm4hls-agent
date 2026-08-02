@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import json
 import re
 from dataclasses import dataclass
@@ -125,10 +126,83 @@ def _choose_tcl(root: Path) -> Path:
     return best[0][0]
 
 
+
+def _discover_from_task_cfg(root: Path, cfg_path: Path) -> DiscoveredBenchmark:
+    parser = configparser.ConfigParser()
+    parser.read(cfg_path, encoding="utf-8")
+
+    if "hls" not in parser:
+        raise ValueError(f"Missing [hls] section in {cfg_path}")
+
+    hls = parser["hls"]
+    required = ("syn.file", "syn.top", "tb.file", "part", "clock")
+    missing = [key for key in required if not hls.get(key, "").strip()]
+    if missing:
+        raise ValueError(
+            f"Missing required task.cfg fields: {', '.join(missing)}"
+        )
+
+    source = (root / hls["syn.file"].strip()).resolve()
+    testbench = (root / hls["tb.file"].strip()).resolve()
+
+    if not source.is_file():
+        raise ValueError(f"Configured design source does not exist: {source}")
+    if not testbench.is_file():
+        raise ValueError(f"Configured testbench does not exist: {testbench}")
+
+    clock_match = re.fullmatch(
+        r"\s*([0-9]+(?:\.[0-9]+)?)\s*ns\s*",
+        hls["clock"],
+        re.IGNORECASE,
+    )
+    if not clock_match:
+        raise ValueError(
+            f"Unsupported task.cfg clock value: {hls['clock']}"
+        )
+
+    headers = tuple(
+        sorted(
+            path
+            for path in source.parent.iterdir()
+            if path.is_file() and path.suffix.lower() in HEADER_SUFFIXES
+        )
+    )
+
+    benchmark_name = root.parent.name if root.name == "golden" else root.name
+
+    return DiscoveredBenchmark(
+        name=benchmark_name,
+        root=root,
+        tcl=cfg_path,
+        source=source,
+        testbenches=(testbench,),
+        headers=headers,
+        top_function=hls["syn.top"].strip(),
+        part=hls["part"].strip(),
+        clock_period_ns=float(clock_match.group(1)),
+        project_dir=(
+            REPO_ROOT
+            / "experiments"
+            / "onboarding"
+            / benchmark_name
+            / "baseline_project"
+        ),
+    )
+
 def discover_benchmark(root: Path) -> DiscoveredBenchmark:
     root = root.resolve()
     if not root.is_dir():
         raise ValueError(f"Benchmark directory not found: {root}")
+    tcl_files = sorted(root.rglob("*.tcl"))
+    task_cfg = root / "task.cfg"
+
+    if not tcl_files:
+        if task_cfg.is_file():
+            return _discover_from_task_cfg(root, task_cfg)
+        raise ValueError(
+            f"No HLS TCL or task.cfg build configuration found under {root}"
+        )
+
     tcl = _choose_tcl(root)
     lines = tcl.read_text(encoding="utf-8", errors="replace").splitlines()
 
@@ -285,7 +359,7 @@ def onboard_benchmark(root: Path) -> Path:
 
     print("Automatic benchmark onboarding")
     print(f"Benchmark: {benchmark.name}")
-    print(f"TCL: {_repo_relative(benchmark.tcl)}")
+    print(f"Build configuration: {_repo_relative(benchmark.tcl)}")
     print(f"Top function: {benchmark.top_function}")
     print(f"Source: {_repo_relative(benchmark.source)}")
     print(f"Testbench files: {len(benchmark.testbenches)}")

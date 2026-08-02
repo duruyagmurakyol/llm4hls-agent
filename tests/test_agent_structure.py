@@ -193,3 +193,15 @@ def test_obsolete_scripts_are_removed() -> None:
         "scripts/prepare_ppa_tradeoff_refinement.py",
     ]
     assert all(not Path(path).exists() for path in obsolete)
+
+
+def test_bicg_benchmark_is_discovered_from_task_cfg() -> None:
+    benchmark = discover_benchmark(Path("benchmarks/bicg/golden"))
+
+    assert benchmark.name == "bicg"
+    assert benchmark.top_function == "kernel_bicg"
+    assert benchmark.part == "xczu3eg-sfvc784-2-e"
+    assert benchmark.clock_period_ns == 10.0
+    assert benchmark.source.name == "bicg.cpp"
+    assert [path.name for path in benchmark.testbenches] == ["bicg_test.cpp"]
+    assert benchmark.tcl.name == "task.cfg"
