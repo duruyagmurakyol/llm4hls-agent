@@ -50,15 +50,15 @@
     "kind": "legacy_ppa",
     "config": "configs/atax_ppa.json",
     "initialise_command": [
-      "scripts/run_ppa_optimisation.py",
+      "scripts/ppa/run_ppa_optimisation.py",
       "configs/atax_ppa.json"
     ],
     "iteration_command": [
-      "scripts/run_ppa_agent_iteration.py",
+      "scripts/ppa/run_ppa_agent_iteration.py",
       "configs/atax_ppa.json",
       "--allow-synthesis"
     ],
     "summary": "experiments/atax/autonomous_ppa/experiment_summary.json"
   },
-  "output_dir": "experiments/track_a/hls_eval_atax_001"
+  "output_dir": "runs/track_a/hls_eval_atax_001"
 }
