@@ -47,18 +47,8 @@
     "enable_thinking": false
   },
   "adapter": {
-    "kind": "legacy_ppa",
-    "config": "configs/vector_add_ppa.json",
-    "initialise_command": [
-      "scripts/run_ppa_optimisation.py",
-      "configs/vector_add_ppa.json"
-    ],
-    "iteration_command": [
-      "scripts/run_ppa_agent_iteration.py",
-      "configs/vector_add_ppa.json",
-      "--allow-synthesis"
-    ],
-    "summary": "experiments/vector_add/autonomous_ppa/experiment_summary.json"
+    "kind": "autonomous_ppa",
+    "config": "configs/vector_add_ppa.json"
   },
   "output_dir": "experiments/track_a/hls_eval_vector_add_001"
 }
