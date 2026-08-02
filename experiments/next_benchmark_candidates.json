@@ -1,8 +1,0 @@
-{
-  "benchmark_root": "benchmarks/hls_eval",
-  "excluded": [
-    "atax"
-  ],
-  "benchmarks_found": 0,
-  "ranked_benchmarks": []
-}

@@ -47,3 +47,10 @@ results/experiments/
 experiments/atax/autonomous_ppa/
 experiments/track_a/
 experiments/track_a_runs/
+.venv
+*.tcl
+
+# Generated autonomous-agent evidence
+experiments/
+logs/
+results/
