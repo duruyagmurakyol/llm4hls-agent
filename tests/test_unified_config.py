@@ -8,7 +8,10 @@ from agent.config import load_task, validate_task
 def test_vector_add_ppa_manifest_loads() -> None:
     task = load_task(Path("configs/tasks/vector_add_track_a.json"))
     assert task.task_id == "hls_eval_vector_add_001"
-    assert task.adapter_kind == "legacy_ppa"
+    assert task.adapter_kind == "autonomous_ppa"
+    assert task.data["adapter"]["config"] == "configs/vector_add_ppa.json"
+    assert "initialise_command" not in task.data["adapter"]
+    assert "iteration_command" not in task.data["adapter"]
 
 
 def test_vector_add_repair_manifest_loads() -> None:
