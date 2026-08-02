@@ -64,23 +64,65 @@ def _single(values: list[Any], description: str) -> Any:
     return unique[0]
 
 
+def _tcl_score(path: Path, text: str) -> tuple[int, list[str]]:
+    """Score likely baseline synthesis scripts and explain the decision."""
+    reasons: list[str] = []
+    score = 0
+    required = ("set_top", "set_part", "create_clock", "csynth_design")
+    for marker in required:
+        if marker in text:
+            score += 10
+            reasons.append(marker)
+
+    lower_name = path.name.lower()
+    lower_parts = {part.lower() for part in path.parts}
+    if "add_files -tb" in text or re.search(r"add_files\s+.*-tb", text):
+        score += 8
+        reasons.append("testbench")
+    if "add_files" in text:
+        score += 3
+        reasons.append("design_files")
+    if "baseline" in lower_name:
+        score += 6
+        reasons.append("baseline_name")
+    if lower_name.startswith("run_candidate_"):
+        score += 4
+        reasons.append("candidate_run")
+    if "scripts" in lower_parts:
+        score += 1
+        reasons.append("scripts_dir")
+
+    generated_markers = ("diagnosis", "diagnostic", "hierarchy", "analysis", "report")
+    for marker in generated_markers:
+        if marker in lower_name:
+            score -= 20
+            reasons.append(f"penalty:{marker}")
+    if "experiments" in lower_parts or "tmp" in lower_parts:
+        score -= 5
+        reasons.append("penalty:generated_dir")
+    return score, reasons
+
+
 def _choose_tcl(root: Path) -> Path:
     files = sorted(root.rglob("*.tcl"))
     if not files:
         raise ValueError(f"No HLS TCL file found under {root}")
-    scored: list[tuple[int, Path]] = []
+
+    scored: list[tuple[int, Path, list[str]]] = []
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
-        score = sum(marker in text for marker in ("set_top", "set_part", "create_clock", "csynth_design"))
-        scored.append((score, path))
-    best_score = max(score for score, _ in scored)
-    best = [path for score, path in scored if score == best_score]
-    if best_score < 3 or len(best) != 1:
-        raise ValueError(
-            "Could not uniquely choose an HLS synthesis TCL file: "
-            + ", ".join(str(path) for path in best)
+        score, reasons = _tcl_score(path, text)
+        scored.append((score, path, reasons))
+
+    best_score = max(score for score, _, _ in scored)
+    best = [(path, reasons) for score, path, reasons in scored if score == best_score]
+    if best_score < 30 or len(best) != 1:
+        detail = "; ".join(
+            f"{path} score={score} ({', '.join(reasons)})"
+            for score, path, reasons in sorted(scored, key=lambda item: (-item[0], str(item[1])))
         )
-    return best[0]
+        raise ValueError(f"Could not uniquely choose an HLS synthesis TCL file: {detail}")
+    return best[0][0]
 
 
 def discover_benchmark(root: Path) -> DiscoveredBenchmark:
@@ -243,6 +285,7 @@ def onboard_benchmark(root: Path) -> Path:
 
     print("Automatic benchmark onboarding")
     print(f"Benchmark: {benchmark.name}")
+    print(f"TCL: {_repo_relative(benchmark.tcl)}")
     print(f"Top function: {benchmark.top_function}")
     print(f"Source: {_repo_relative(benchmark.source)}")
     print(f"Testbench files: {len(benchmark.testbenches)}")
