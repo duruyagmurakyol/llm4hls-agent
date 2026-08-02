@@ -74,38 +74,62 @@ def duplicate_map(output_dir: Path, indices: list[int]) -> dict[int, int]:
     return duplicates
 
 
-def baseline_metrics(output_dir: Path) -> dict[str, Any]:
+def complete_metrics(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not value:
+        return None
+    metrics = {key: value.get(key) for key in METRIC_KEYS}
+    return metrics if any(item is not None for item in metrics.values()) else None
+
+
+def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]:
+    """Resolve benchmark-independent baseline metrics.
+
+    Prefer explicit task configuration because it is the stable experiment contract.
+    Fall back to generated diagnosis or synthesis records for older configurations.
+    """
+    configured = complete_metrics(config.get("baseline", {}).get("metrics"))
+    if configured is not None:
+        return configured
+
     diagnosis_path = output_dir / "baseline_hierarchical_diagnosis.json"
-    diagnosis = load_json(diagnosis_path)
-    candidates = [
-        diagnosis.get("top_function"),
-        diagnosis.get("top_level"),
-        diagnosis.get("recommended_focus"),
-    ]
-    for item in candidates:
-        if isinstance(item, dict):
-            metrics = item.get("metrics")
-            if isinstance(metrics, dict) and metrics:
+    if diagnosis_path.is_file():
+        diagnosis = load_json(diagnosis_path)
+        top_function = str(config.get("top_function", ""))
+
+        for key in ("top_function", "top_level", "recommended_focus"):
+            item = diagnosis.get(key)
+            metrics = complete_metrics(item.get("metrics") if isinstance(item, dict) else None)
+            if metrics is not None:
                 return metrics
-    for key in ("reports", "functions", "ranked_targets"):
-        items = diagnosis.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
+
+        for key in ("reports", "functions", "ranked_targets"):
+            items = diagnosis.get(key)
+            if not isinstance(items, list):
                 continue
-            metrics = item.get("metrics")
-            if isinstance(metrics, dict) and metrics and (
-                item.get("function") or item.get("name") or item.get("report_name")
-            ):
-                if "kernel_atax" in str(item):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = str(
+                    item.get("function")
+                    or item.get("name")
+                    or item.get("report_name")
+                    or item.get("target")
+                    or ""
+                )
+                metrics = complete_metrics(item.get("metrics"))
+                if metrics is not None and (not top_function or name == top_function):
                     return metrics
+
     candidate_one = output_dir / "candidate_001_synthesis.json"
     if candidate_one.is_file():
-        metrics = load_json(candidate_one).get("metrics")
-        if isinstance(metrics, dict) and metrics:
+        metrics = complete_metrics(load_json(candidate_one).get("metrics"))
+        if metrics is not None:
             return metrics
-    raise ValueError("Could not locate baseline top-level metrics.")
+
+    raise ValueError(
+        "Could not locate baseline top-level metrics. Add baseline.metrics to the PPA config "
+        "or generate a diagnosis containing top-function metrics."
+    )
 
 
 def percent_change(value: Any, baseline: Any) -> float | None:
@@ -222,7 +246,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     indices = candidate_indices(output_dir)
     duplicates = duplicate_map(output_dir, indices)
-    baseline = baseline_metrics(output_dir)
+    baseline = baseline_metrics(config, output_dir)
     records = [classify_candidate(output_dir, index, baseline, duplicates) for index in indices]
     pareto_candidates = [record for record in records if record.get("verdict") in PARETO_ELIGIBLE_VERDICTS]
     baseline_record = {
