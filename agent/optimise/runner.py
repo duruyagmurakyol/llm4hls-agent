@@ -51,6 +51,23 @@ def _record(summary: dict[str, Any], index: int) -> dict[str, Any] | None:
     )
 
 
+def _print_stage(index: int, stage: str, passed: bool, detail: str | None = None) -> None:
+    status = "PASS" if passed else "FAIL"
+    suffix = f" — {detail}" if detail else ""
+    print(f"Candidate {index:03d} {stage}: {status}{suffix}", flush=True)
+
+
+def _print_verdict(summary: dict[str, Any], index: int) -> None:
+    record = _record(summary, index)
+    if not record:
+        print(f"Candidate {index:03d} verdict: unavailable", flush=True)
+        return
+    print(
+        f"Candidate {index:03d} verdict: {record.get('verdict')} — {record.get('reason')}",
+        flush=True,
+    )
+
+
 def _status_summary(config: dict[str, Any], output_dir: Path) -> tuple[str, dict[str, Any]]:
     """Return status without forcing baseline initialisation or synthesis."""
     summary_path = output_dir / "experiment_summary.json"
@@ -126,20 +143,33 @@ def _evaluate_candidate(
     index: int,
     trajectory: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    print(f"\n=== Evaluate candidate {index:03d} ===", flush=True)
+
     static = validate_ppa_candidate(config_path, index)
     trajectory.append({"candidate": index, "stage": "static_validation", "passed": static["passed"]})
+    failed_checks = [name for name, passed in (static.get("checks") or {}).items() if not passed]
+    _print_stage(index, "static validation", static["passed"], ", ".join(failed_checks) or None)
     if not static["passed"]:
-        return evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_path)
+        _print_verdict(summary, index)
+        return summary
 
     duplicate = check_candidate_duplicate(config_path, index)
     trajectory.append({"candidate": index, "stage": "duplicate_check", "passed": duplicate["passed"]})
+    detail = f"duplicates candidate_{duplicate['duplicate_of']:03d}" if not duplicate["passed"] else None
+    _print_stage(index, "duplicate check", duplicate["passed"], detail)
     if not duplicate["passed"]:
-        return evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_path)
+        _print_verdict(summary, index)
+        return summary
 
     csim = run_candidate_csim(config_path, index)
     trajectory.append({"candidate": index, "stage": "csim", "passed": csim["passed"]})
+    _print_stage(index, "CSim", csim["passed"], f"return code {csim.get('return_code')}")
     if not csim["passed"]:
-        return evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_path)
+        _print_verdict(summary, index)
+        return summary
 
     synthesis = run_candidate_synthesis(config_path, index)
     trajectory.append({
@@ -148,7 +178,15 @@ def _evaluate_candidate(
         "passed": synthesis["passed"],
         "timed_out": synthesis.get("timed_out", False),
     })
-    return evaluate_experiment(config_path)
+    synth_detail = (
+        f"timed out after {synthesis.get('timeout_seconds')} seconds"
+        if synthesis.get("timed_out")
+        else f"return code {synthesis.get('return_code')}"
+    )
+    _print_stage(index, "synthesis", synthesis["passed"], synth_detail)
+    summary = evaluate_experiment(config_path)
+    _print_verdict(summary, index)
+    return summary
 
 
 def run_optimisation(
@@ -193,14 +231,18 @@ def run_optimisation(
                     continue
                 if _load_json(static_path).get("passed") is not True:
                     summary = evaluate_experiment(config_path)
+                    _print_verdict(summary, latest)
                     continue
                 if not csim_path.is_file() or _load_json(csim_path).get("passed") is not True:
                     summary = _evaluate_candidate(config_path, latest, trajectory)
                     continue
                 if not synthesis_path.is_file():
+                    print(f"\n=== Resume candidate {latest:03d} synthesis ===", flush=True)
                     synthesis = run_candidate_synthesis(config_path, latest)
                     trajectory.append({"candidate": latest, "stage": "synthesis", "passed": synthesis["passed"], "timed_out": synthesis.get("timed_out", False)})
+                    _print_stage(latest, "synthesis", synthesis["passed"])
                     summary = evaluate_experiment(config_path)
+                    _print_verdict(summary, latest)
                     continue
             index = latest + 1
             if index > maximum_candidates:
@@ -216,6 +258,7 @@ def run_optimisation(
             return OptimisationRunResult(True, "terminated_budget", "model_call_budget_exhausted", summary, trajectory)
         generate_candidate(config_path, index)
         trajectory.append({"candidate": index, "stage": "generation", "passed": True})
+        _print_stage(index, "generation", True)
         summary = _evaluate_candidate(config_path, index, trajectory)
 
         record = _record(summary, index)
