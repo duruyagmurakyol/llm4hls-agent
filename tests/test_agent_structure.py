@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agent.onboarding import discover_benchmark, onboard_benchmark
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
 from agent.optimise.evaluate import classify_candidate, dominates, evaluate_experiment
@@ -40,6 +41,8 @@ def test_clean_packages_import() -> None:
     assert callable(prepare_refinement_prompt)
     assert callable(prepare_tradeoff_prompt)
     assert callable(run_optimisation)
+    assert callable(discover_benchmark)
+    assert callable(onboard_benchmark)
     assert OptimisationRunResult.__dataclass_fields__
 
 
@@ -51,6 +54,17 @@ def test_autonomous_manifests_have_no_shell_commands() -> None:
         task = json.loads(path.read_text(encoding="utf-8"))
         assert task["adapter"]["kind"] == "autonomous_ppa"
         assert set(task["adapter"]) == {"kind", "config"}
+
+
+def test_atax_benchmark_is_discovered_from_tcl() -> None:
+    benchmark = discover_benchmark(Path("benchmarks/hls_eval/atax"))
+    assert benchmark.name == "atax"
+    assert benchmark.top_function == "kernel_atax"
+    assert benchmark.part == "xczu3eg-sfvc784-2-e"
+    assert benchmark.clock_period_ns == 10.0
+    assert benchmark.source.name == "atax_candidate_3b.cpp"
+    assert [path.name for path in benchmark.testbenches] == ["atax_tb.cpp"]
+    assert benchmark.tcl.name == "run_candidate_3b.tcl"
 
 
 def test_uninitialised_status_does_not_require_baseline_metrics(tmp_path: Path) -> None:
