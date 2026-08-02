@@ -1,4 +1,4 @@
-"""Repair-generation helpers using the existing SiliconFlow provider."""
+"""Repair-generation helpers using the SiliconFlow provider."""
 
 from __future__ import annotations
 
@@ -22,13 +22,17 @@ def generate_repair(
     user_prompt: str,
     temperature: float = 0.0,
     max_tokens: int = 2048,
+    timeout_seconds: int = 120,
+    thinking_budget: int | None = None,
 ):
-    """Delegate model access to the existing proven provider."""
+    """Generate one repaired source file and return the provider response."""
     response = complete(
         model=model,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_seconds=timeout_seconds,
+        thinking_budget=thinking_budget,
     )
     return clean_source(response.content), response
