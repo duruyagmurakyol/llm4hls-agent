@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
 
@@ -31,143 +30,74 @@ def run_stage(name: str, arguments: list[str], allow_failure: bool = False) -> i
     return completed.returncode
 
 
+def script(name: str, *arguments: object) -> list[str]:
+    return [str(SCRIPTS / name), *[str(value) for value in arguments]]
+
+
+def module(name: str, *arguments: object) -> list[str]:
+    return ["-m", name, *[str(value) for value in arguments]]
+
+
 def candidate_indices(output_dir: Path) -> list[int]:
     pattern = re.compile(r"candidate_(\d{3})\.cpp$")
-    indices: set[int] = set()
-    for path in output_dir.glob("candidate_*.cpp"):
-        match = pattern.match(path.name)
-        if match:
-            indices.add(int(match.group(1)))
-    return sorted(indices)
+    return sorted({int(match.group(1)) for path in output_dir.glob("candidate_*.cpp") if (match := pattern.match(path.name))})
 
 
 def refresh_summary(config_path: Path) -> dict[str, Any]:
-    run_stage(
-        "Evaluate current experiment",
-        [str(SCRIPTS / "evaluate_ppa_experiment.py"), str(config_path)],
-    )
+    run_stage("Evaluate current experiment", script("evaluate_ppa_experiment.py", config_path))
     config = load_json(config_path)
     return load_json(REPO_ROOT / config["output_dir"] / "experiment_summary.json")
 
 
 def record_for(summary: dict[str, Any], index: int) -> dict[str, Any] | None:
-    return next(
-        (
-            item
-            for item in summary.get("candidates", [])
-            if item.get("candidate_index") == index
-        ),
-        None,
-    )
+    return next((item for item in summary.get("candidates", []) if item.get("candidate_index") == index), None)
 
 
 def duplicate_gate(config_path: Path, index: int) -> bool:
-    rc = run_stage(
-        "Duplicate detection",
-        [
-            str(SCRIPTS / "detect_ppa_candidate_duplicate.py"),
-            str(config_path),
-            "--candidate-index",
-            str(index),
-        ],
-        allow_failure=True,
-    )
-    return rc == 0
+    return run_stage("Duplicate detection", script("detect_ppa_candidate_duplicate.py", config_path, "--candidate-index", index), allow_failure=True) == 0
 
 
-def synthesize_existing(
-    config_path: Path,
-    output_dir: Path,
-    index: int,
-    summary: dict[str, Any],
-) -> None:
+def synthesise_existing(config_path: Path, output_dir: Path, index: int, summary: dict[str, Any]) -> None:
     budget = summary["budget"]
-    used = int(budget["synthesis_calls_used"])
-    maximum = int(budget["max_synthesis_calls"])
+    used, maximum = int(budget["synthesis_calls_used"]), int(budget["max_synthesis_calls"])
     if used >= maximum:
         print(f"\nSTOP: synthesis budget exhausted ({used}/{maximum}).")
         return
-
     if not duplicate_gate(config_path, index):
         print(f"\nSTOP: candidate {index:03d} rejected as a duplicate. No synthesis was run.")
         refresh_summary(config_path)
         return
-
-    run_stage(
-        "Vitis synthesis",
-        [
-            str(SCRIPTS / "run_ppa_candidate_synthesis.py"),
-            str(config_path),
-            "--candidate-index",
-            str(index),
-        ],
-    )
-    final_summary = refresh_summary(config_path)
-    record = record_for(final_summary, index)
+    run_stage("Vitis synthesis", module("agent.tools.synthesis", "synth", config_path, "--candidate-index", index))
+    final = refresh_summary(config_path)
+    record = record_for(final, index)
     print("\n=== Iteration complete ===")
     if record:
         print(f"Candidate {index:03d}: {record.get('verdict')}")
         print(record.get("reason"))
-    final_budget = final_summary.get("budget", {})
-    print(
-        "Synthesis budget: "
-        f"{final_budget.get('synthesis_calls_used')}/"
-        f"{final_budget.get('max_synthesis_calls')} used"
-    )
+    final_budget = final.get("budget", {})
+    print(f"Synthesis budget: {final_budget.get('synthesis_calls_used')}/{final_budget.get('max_synthesis_calls')} used")
     print(f"Summary: {(output_dir / 'experiment_summary.json').relative_to(REPO_ROOT)}")
 
 
-def prepare_prompt(
-    config_path: Path,
-    previous_index: int,
-    next_index: int,
-    previous_record: dict[str, Any],
-) -> None:
-    verdict = previous_record.get("verdict")
-    if verdict in {"keep_pareto_candidate", "accept_dominates_baseline"}:
-        run_stage(
-            "Prepare Pareto trade-off refinement prompt",
-            [
-                str(SCRIPTS / "prepare_ppa_tradeoff_refinement.py"),
-                str(config_path),
-                "--source-index",
-                str(previous_index),
-                "--next-index",
-                str(next_index),
-            ],
-        )
-        return
-
-    run_stage(
-        "Prepare evidence-driven repair prompt",
-        [
-            str(SCRIPTS / "prepare_ppa_refinement.py"),
-            str(config_path),
-            "--previous-index",
-            str(previous_index),
-            "--next-index",
-            str(next_index),
-        ],
-    )
+def prepare_prompt(config_path: Path, previous_index: int, next_index: int, previous_record: dict[str, Any]) -> None:
+    if previous_record.get("verdict") in {"keep_pareto_candidate", "accept_dominates_baseline"}:
+        args = script("prepare_ppa_tradeoff_refinement.py", config_path, "--source-index", previous_index, "--next-index", next_index)
+        run_stage("Prepare Pareto trade-off refinement prompt", args)
+    else:
+        args = script("prepare_ppa_refinement.py", config_path, "--previous-index", previous_index, "--next-index", next_index)
+        run_stage("Prepare evidence-driven repair prompt", args)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate, validate, and optionally synthesize one autonomous HLS PPA candidate."
-    )
-    parser.add_argument("config", type=Path, help="PPA optimisation JSON config")
-    parser.add_argument(
-        "--allow-synthesis",
-        action="store_true",
-        help="Permit one synthesis call after all cheap gates pass",
-    )
+    parser = argparse.ArgumentParser(description="Generate, validate, and optionally synthesise one HLS PPA candidate.")
+    parser.add_argument("config", type=Path)
+    parser.add_argument("--allow-synthesis", action="store_true")
     args = parser.parse_args()
 
     config_path = args.config.resolve()
     config = load_json(config_path)
     output_dir = REPO_ROOT / config["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
-
     summary = refresh_summary(config_path)
     indices = candidate_indices(output_dir)
     if not indices:
@@ -175,8 +105,6 @@ def main() -> None:
 
     latest_index = indices[-1]
     latest_record = record_for(summary, latest_index)
-
-    # Resume a candidate that already passed cheap gates instead of generating another one.
     if latest_record and latest_record.get("verdict") == "incomplete":
         static_path = output_dir / f"candidate_{latest_index:03d}_static_validation.json"
         csim_path = output_dir / f"candidate_{latest_index:03d}_csim_validation.json"
@@ -184,99 +112,52 @@ def main() -> None:
         static_ok = static_path.is_file() and load_json(static_path).get("passed") is True
         csim_ok = csim_path.is_file() and load_json(csim_path).get("passed") is True
         synthesis_done = synthesis_path.is_file() and load_json(synthesis_path).get("passed") is True
-
         if static_ok and csim_ok and not synthesis_done:
             print(f"\nResuming pre-synthesis candidate {latest_index:03d}")
             if not args.allow_synthesis:
-                if duplicate_gate(config_path, latest_index):
-                    print("\nSTOP: candidate passed all cheap gates and is unique.")
-                    print("Rerun with --allow-synthesis to spend one synthesis call.")
-                else:
-                    print("\nSTOP: duplicate candidate rejected before synthesis.")
+                print("\nSTOP: candidate passed all cheap gates and is unique." if duplicate_gate(config_path, latest_index) else "\nSTOP: duplicate candidate rejected before synthesis.")
                 return
-            synthesize_existing(config_path, output_dir, latest_index, summary)
+            synthesise_existing(config_path, output_dir, latest_index, summary)
             return
 
-    max_candidates = int(config["budget"]["max_candidates"])
     next_index = latest_index + 1
+    max_candidates = int(config["budget"]["max_candidates"])
     if next_index > max_candidates:
         print(f"\nSTOP: candidate budget exhausted ({max_candidates}).")
         return
-
-    # Refine the latest completed candidate, not a failed/incomplete duplicate.
-    completed_records = [
-        item
-        for item in summary.get("candidates", [])
-        if item.get("verdict") != "incomplete"
-    ]
-    if not completed_records:
+    completed = [item for item in summary.get("candidates", []) if item.get("verdict") != "incomplete"]
+    if not completed:
         raise RuntimeError("No completed candidate is available for feedback refinement.")
-    previous_record = completed_records[-1]
-    previous_index = int(previous_record["candidate_index"])
-
+    previous = completed[-1]
+    previous_index = int(previous["candidate_index"])
     budget = summary["budget"]
     print("\nAutonomous iteration plan")
-    print(f"Feedback source candidate: {previous_index:03d} ({previous_record.get('verdict')})")
+    print(f"Feedback source candidate: {previous_index:03d} ({previous.get('verdict')})")
     print(f"Next candidate: {next_index:03d}")
-    print(
-        "Synthesis budget: "
-        f"{budget.get('synthesis_calls_used')}/{budget.get('max_synthesis_calls')} used"
-    )
+    print(f"Synthesis budget: {budget.get('synthesis_calls_used')}/{budget.get('max_synthesis_calls')} used")
 
-    prepare_prompt(config_path, previous_index, next_index, previous_record)
-    run_stage(
-        "Generate candidate",
-        [
-            str(SCRIPTS / "generate_ppa_candidate.py"),
-            str(config_path),
-            "--candidate-index",
-            str(next_index),
-        ],
-    )
-
-    static_rc = run_stage(
-        "Static validation",
-        [
-            str(SCRIPTS / "validate_ppa_candidate.py"),
-            str(config_path),
-            "--candidate-index",
-            str(next_index),
-        ],
-        allow_failure=True,
-    )
+    prepare_prompt(config_path, previous_index, next_index, previous)
+    run_stage("Generate candidate", script("generate_ppa_candidate.py", config_path, "--candidate-index", next_index))
+    static_rc = run_stage("Static validation", module("agent.tools.validation", config_path, "--candidate-index", next_index), allow_failure=True)
     if static_rc != 0:
         print("\nSTOP: candidate rejected by the static gate. No CSim or synthesis was run.")
         refresh_summary(config_path)
         return
-
     if not duplicate_gate(config_path, next_index):
         print("\nSTOP: candidate rejected as a duplicate. No CSim or synthesis was run.")
         refresh_summary(config_path)
         return
-
-    csim_rc = run_stage(
-        "Vitis CSim",
-        [
-            str(SCRIPTS / "run_ppa_candidate_csim.py"),
-            str(config_path),
-            "--candidate-index",
-            str(next_index),
-        ],
-        allow_failure=True,
-    )
+    csim_rc = run_stage("Vitis CSim", module("agent.tools.synthesis", "csim", config_path, "--candidate-index", next_index), allow_failure=True)
     if csim_rc != 0:
         print("\nSTOP: candidate rejected by CSim. No synthesis was run.")
         refresh_summary(config_path)
         return
-
     if not args.allow_synthesis:
         print("\nSTOP: candidate passed all pre-synthesis gates.")
         print("Rerun with --allow-synthesis; the controller will resume this candidate.")
         refresh_summary(config_path)
         return
-
-    summary = refresh_summary(config_path)
-    synthesize_existing(config_path, output_dir, next_index, summary)
+    synthesise_existing(config_path, output_dir, next_index, refresh_summary(config_path))
 
 
 if __name__ == "__main__":
