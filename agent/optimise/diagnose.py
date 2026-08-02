@@ -28,59 +28,82 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_optional(path: Path) -> dict[str, Any] | None:
+    return load_json(path) if path.is_file() else None
+
+
 def metric_summary(metrics: dict[str, Any]) -> str:
     return "\n".join(f"- {key}: {metrics.get(key)}" for key in METRIC_KEYS)
 
 
-def prepare_refinement_prompt(
-    config_path: Path,
-    previous_index: int,
-    next_index: int,
-) -> Path:
+def _failure_evidence(report: dict[str, Any] | None) -> str:
+    if not report:
+        return "- No detailed report was produced."
+    evidence = report.get("evidence") or report.get("bounds_issues") or []
+    if isinstance(evidence, list) and evidence:
+        return "\n".join(f"- {item}" for item in evidence[-12:])
+    log = report.get("log_file")
+    return f"- See tool log: {log}" if log else "- The stage returned a failed result."
+
+
+def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index: int) -> Path:
     if next_index <= previous_index:
         raise ValueError("next_index must be greater than previous_index")
     config = load_json(config_path.resolve())
     output_dir = REPO_ROOT / config["output_dir"]
     baseline_path = REPO_ROOT / config["baseline"]["source"]
     previous_path = output_dir / f"candidate_{previous_index:03d}.cpp"
-    static_path = output_dir / f"candidate_{previous_index:03d}_static_validation.json"
     target_path = output_dir / "baseline_source_target.json"
     cause_path = output_dir / "baseline_source_cause.json"
-    for path in (baseline_path, previous_path, static_path, target_path, cause_path):
+    for path in (baseline_path, previous_path, target_path, cause_path):
         if not path.is_file():
             raise FileNotFoundError(f"Required refinement input not found: {path}")
 
-    static = load_json(static_path)
-    target = load_json(target_path)
-    cause = load_json(cause_path)
-    previous = previous_path.read_text(encoding="utf-8")
-    baseline = baseline_path.read_text(encoding="utf-8")
-    checks = static.get("checks") or {}
-    bounds_failed = checks.get("constant_loop_tail_bounds_safe") is False
-    top = config["top_function"]
+    static = load_optional(output_dir / f"candidate_{previous_index:03d}_static_validation.json")
+    duplicate = load_optional(output_dir / f"candidate_{previous_index:03d}_duplicate_check.json")
+    csim = load_optional(output_dir / f"candidate_{previous_index:03d}_csim_validation.json")
+    synthesis = load_optional(output_dir / f"candidate_{previous_index:03d}_synthesis.json")
+    summary = load_optional(output_dir / "experiment_summary.json") or {}
+    record = next(
+        (item for item in summary.get("candidates", []) if item.get("candidate_index") == previous_index),
+        {},
+    )
+    verdict = str(record.get("verdict") or "incomplete")
 
-    if bounds_failed:
-        evidence = "\n".join(f"- {item}" for item in static.get("bounds_issues", [])) or "- Static bounds analysis found an unsafe loop tail."
-        verdict = "reject_static_bounds_failure"
-        direction = "repair the structural optimisation with safe remainder handling"
-        measured = f"Static validation failed before CSim or synthesis.\n\nBounds evidence:\n{evidence}"
-    else:
-        csim_path = output_dir / f"candidate_{previous_index:03d}_csim_validation.json"
-        synthesis_path = output_dir / f"candidate_{previous_index:03d}_synthesis.json"
-        if not csim_path.is_file() or not synthesis_path.is_file():
-            raise FileNotFoundError("Previous candidate passed static validation but CSim/synthesis evidence is missing.")
-        csim, synthesis = load_json(csim_path), load_json(synthesis_path)
-        if csim.get("passed") is not True or synthesis.get("passed") is not True:
-            raise RuntimeError("Previous candidate did not complete CSim and synthesis successfully.")
-        summary = load_json(output_dir / "experiment_summary.json")
+    if static and static.get("passed") is False:
+        failed = [name for name, passed in (static.get("checks") or {}).items() if not passed]
+        measured = "Static validation failed before expensive tools.\n- Failed checks: " + ", ".join(failed)
+        measured += "\n" + _failure_evidence(static)
+        direction = "repair the rejected source structure and remove unsafe or conflicting pragmas"
+    elif duplicate and duplicate.get("passed") is False:
+        measured = f"The source duplicates candidate {duplicate.get('duplicate_of')}."
+        direction = "produce a materially different implementation rather than a formatting or comment change"
+    elif csim and csim.get("passed") is False:
+        measured = "Static validation passed, but Vitis CSim failed.\n" + _failure_evidence(csim)
+        direction = "repair functional, compile, interface or bounds correctness before attempting PPA optimisation"
+    elif synthesis and synthesis.get("timed_out") is True:
         measured = (
-            "Static validation, CSim, and synthesis passed, but the candidate did not improve top-level PPA.\n\n"
+            f"CSim passed, but synthesis exceeded the configured {synthesis.get('timeout_seconds')} second timeout.\n"
+            + _failure_evidence(synthesis)
+        )
+        direction = "reduce compiler and hardware expansion; avoid complete partitioning, excessive unrolling, conflicting dataflow, or other explosive transformations"
+    elif synthesis and synthesis.get("passed") is False:
+        measured = "CSim passed, but Vitis synthesis failed.\n" + _failure_evidence(synthesis)
+        direction = "repair synthesizability while preserving the verified functional behaviour"
+    elif synthesis and synthesis.get("passed") is True:
+        measured = (
+            "Static validation, CSim, and synthesis passed, but the candidate did not provide the required PPA result.\n\n"
             f"Baseline metrics:\n{metric_summary(summary.get('baseline_metrics') or {})}\n\n"
             f"Candidate metrics:\n{metric_summary(synthesis.get('metrics') or {})}"
         )
-        verdict = "reject_no_ppa_improvement"
         direction = "apply a genuinely different structural transformation rather than a pragma-only change"
+    else:
+        measured = f"Candidate evaluation is incomplete. Current verdict: {verdict}."
+        direction = "produce a conservative, synthesizable structural alternative"
 
+    target = load_json(target_path)
+    cause = load_json(cause_path)
+    top = config["top_function"]
     prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
 
 Benchmark: {config.get('benchmark')}
@@ -98,22 +121,24 @@ Selected target:
 
 Required direction:
 - {direction}.
-- Preserve the useful structural intent of the previous candidate where safe.
 - Keep every input element exactly once and all accesses in bounds.
 - Do not repeat an implementation already evaluated.
+- Prefer a focused transformation whose expected hardware effect can be explained from the measured evidence.
 
 Constraints:
 1. Preserve the exact {top} signature and algorithmic behaviour.
 2. Preserve required loop labels and the existing HLS interface contract.
 3. Modify only declarations and source regions directly required by the optimisation.
-4. Return one complete compilable C++ source file only.
-5. Do not include Markdown fences or explanations.
+4. Avoid complete partitioning of top-level interface arrays.
+5. Do not combine DATAFLOW and PIPELINE in a conflicting single-process region.
+6. Return one complete compilable C++ source file only.
+7. Do not include Markdown fences or explanations.
 
 Previous candidate source:
-{previous}
+{previous_path.read_text(encoding='utf-8')}
 
 Original baseline source:
-{baseline}
+{baseline_path.read_text(encoding='utf-8')}
 """
     prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
     feedback_path = output_dir / f"candidate_{previous_index:03d}_feedback.json"
@@ -124,13 +149,11 @@ Original baseline source:
         "verdict": verdict,
         "required_direction": direction,
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
-        "bounds_issues": static.get("bounds_issues", []) if bounds_failed else [],
     }, indent=2) + "\n", encoding="utf-8")
     print("\nPPA refinement prompt")
     print(f"Previous candidate: {previous_path.relative_to(REPO_ROOT)}")
     print(f"Next prompt: {prompt_path.relative_to(REPO_ROOT)}")
     print(f"Required direction: {direction}")
-    print("No model call, CSim, or synthesis was run.")
     return prompt_path
 
 
@@ -163,6 +186,7 @@ Required direction:
 - Do not reproduce candidate {source_index:03d} verbatim.
 - Use a lower-cost structural alternative or lower parallelism.
 - Preserve every input element exactly once and keep all accesses in bounds.
+- Avoid complete partitioning of top-level interface arrays and conflicting DATAFLOW/PIPELINE regions.
 
 Constraints:
 1. Preserve the exact {top} signature and algorithmic behaviour.
@@ -188,11 +212,6 @@ Original baseline source:
         "required_direction": "retain performance gain with lower resource cost",
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
     }, indent=2) + "\n", encoding="utf-8")
-    print("\nPPA trade-off refinement prompt")
-    print(f"Source Pareto candidate: {source_path.relative_to(REPO_ROOT)}")
-    print(f"Next prompt: {prompt_path.relative_to(REPO_ROOT)}")
-    print("Required direction: retain performance gain with lower resource cost")
-    print("No model call, CSim, or synthesis was run.")
     return prompt_path
 
 
