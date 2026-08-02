@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from agent.providers.siliconflow import complete  # noqa: E402
 
 
@@ -116,7 +116,7 @@ def main() -> None:
     parser.add_argument("--keep-workspace", action="store_true")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     config_path = args.config.resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     if config.get("repair_mode") != "direct_api":

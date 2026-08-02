@@ -6,7 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "benchmarks/bicg/golden"
 FAULT_ROOT = ROOT / "benchmarks/bicg/faults"
 CONFIG_ROOT = ROOT / "configs/bicg_api_qwen35"

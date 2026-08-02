@@ -95,7 +95,7 @@ def main() -> None:
     parser.add_argument("--keep-workspace", action="store_true")
     args = parser.parse_args()
 
-    repository_root = Path(__file__).resolve().parent.parent
+    repository_root = Path(__file__).resolve().parents[2]
     config_path = args.config.expanduser().resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     if config.get("repair_mode") != "structured_feedback":

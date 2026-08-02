@@ -169,7 +169,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    repository_root = Path(__file__).resolve().parent.parent
+    repository_root = Path(__file__).resolve().parents[2]
     config_path = args.config.expanduser().resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
@@ -205,8 +205,6 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=False)
     shutil.copytree(source_dir, workspace)
 
-    # Preserve fault metadata in the immutable benchmark source, but do not
-    # expose it to the autonomous repair agent.
     fault_metadata = workspace / "fault.txt"
     if fault_metadata.exists():
         fault_metadata.unlink()

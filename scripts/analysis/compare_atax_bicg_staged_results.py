@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 BENCHMARKS = {
     "BICG": ROOT / "results/ablations/bicg_staged_feedback_repeated",
     "ATAX": ROOT / "results/ablations/atax_staged_feedback_repeated",

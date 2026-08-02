@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
-RUNNER = ROOT / "scripts/run_iterative_api_experiment.py"
+ROOT = Path(__file__).resolve().parents[2]
+RUNNER = ROOT / "scripts/experiments/run_iterative_api_experiment.py"
 BENCHMARKS = ("bicg", "atax")
 CASES = (
     "staged_compile_then_functional",

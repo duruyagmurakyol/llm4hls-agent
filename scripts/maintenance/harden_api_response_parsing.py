@@ -8,16 +8,18 @@ to span the entire response, so labels such as ``src/bicg.cpp`` were written
 into the source file. This utility installs a parser that extracts the first
 C/C++ fenced block wherever it occurs, removes a standalone filename label,
 and rejects remaining Markdown fences.
+
+This is a maintenance/migration utility, not a normal experiment entry point.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TARGETS = [
-    ROOT / "scripts" / "run_api_experiment.py",
-    ROOT / "scripts" / "run_iterative_api_experiment.py",
+    ROOT / "scripts" / "experiments" / "run_api_experiment.py",
+    ROOT / "scripts" / "experiments" / "run_iterative_api_experiment.py",
 ]
 
 OLD = '''def clean_source(text: str) -> str:\n    text = text.strip()\n    fenced = re.fullmatch(r"```(?:cpp|c\\+\\+|c)?\\s*(.*?)\\s*```", text, re.DOTALL)\n    if fenced:\n        text = fenced.group(1).strip()\n    if not text.endswith("\\n"):\n        text += "\\n"\n    return text\n'''

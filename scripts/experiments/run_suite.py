@@ -39,11 +39,11 @@ def latest_result(repository_root: Path, experiment_id: str) -> Path | None:
 def runner_for(config: dict[str, Any]) -> str:
     mode = config.get("repair_mode")
     if mode == "autonomous":
-        return "scripts/run_experiment.py"
+        return "scripts/experiments/run_experiment.py"
     if mode == "structured_feedback":
-        return "scripts/run_structured_experiment.py"
+        return "scripts/experiments/run_structured_experiment.py"
     if mode == "direct_api":
-        return "scripts/run_api_experiment.py"
+        return "scripts/experiments/run_api_experiment.py"
     raise SystemExit(f"Unsupported repair_mode: {mode}")
 
 
@@ -59,7 +59,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    repository_root = Path(__file__).resolve().parent.parent
+    repository_root = Path(__file__).resolve().parents[2]
     config_dir = args.config_dir.expanduser().resolve()
     if not config_dir.is_dir():
         raise SystemExit(f"Config directory not found: {config_dir}")

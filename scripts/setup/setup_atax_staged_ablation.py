@@ -8,7 +8,7 @@ import json
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "benchmarks/atax/golden"
 FAULT_ROOT = ROOT / "benchmarks/atax/faults"
 CONFIG_ROOT = ROOT / "configs/atax_iterative_qwen35"

@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 BENCHMARKS = ("bicg", "atax")
 CASES = (
     "staged_compile_then_functional",
@@ -28,9 +28,6 @@ def slugify(value: str) -> str:
 def default_thinking_budget(model: str) -> int | None:
     """Return a provider-compatible default while minimizing model-specific confounds."""
     if "kimi" in model.lower():
-        # SiliconFlow rejects thinking_budget=0 for Kimi. Omitting the field lets
-        # the provider use the model's supported default rather than inventing a
-        # non-comparable arbitrary budget.
         return None
     return 0
 

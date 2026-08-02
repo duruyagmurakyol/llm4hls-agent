@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 MODELS = [
     ("Qwen3.5-122B-A10B", "qwen35", None),
     ("DeepSeek-V4-Pro", "deepseek_v4_pro", "staged_deepseek_v4_pro_repeated"),
@@ -21,7 +21,6 @@ MODELS = [
 
 def latest_summary(model_slug: str, directory_name: str | None) -> Path:
     if model_slug == "qwen35":
-        # Qwen was run with benchmark-specific repeated suites.
         raise ValueError("Qwen summaries are benchmark-specific")
     root = ROOT / "results/ablations" / str(directory_name)
     candidates = sorted(p for p in root.iterdir() if p.is_dir() and (p / "summary.json").is_file())

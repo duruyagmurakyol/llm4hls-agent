@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from agent.providers.siliconflow import complete  # noqa: E402
 
 
@@ -74,12 +74,6 @@ def clean_source(text: str) -> str:
     """Extract a complete C/C++ source file from a model response safely."""
     text = text.strip()
 
-    # Prefer the contents of the first fenced C/C++ block even when the model
-    # adds a filename label before the fence, for example:
-    #   src/bicg.cpp
-    #   ```cpp
-    #   ...
-    #   ```
     fenced = re.search(
         r"```(?:cpp|c\+\+|cc|cxx|c)?\s*\n?(.*?)\n?```",
         text,
@@ -160,7 +154,7 @@ def main() -> None:
     parser.add_argument("--keep-workspace", action="store_true")
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     config_path = args.config.resolve()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     if config.get("repair_mode") != "iterative_direct_api":
