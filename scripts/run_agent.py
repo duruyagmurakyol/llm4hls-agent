@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from agent.controller import run_agent  # noqa: E402
-from agent.onboarding import onboard_benchmark  # noqa: E402
+from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 
 
 def main() -> None:
