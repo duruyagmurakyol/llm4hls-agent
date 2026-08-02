@@ -36,6 +36,21 @@ class BudgetState:
 
 
 @dataclass(frozen=True)
+class ValidationResult:
+    """Normalised result of a host, CSim, co-sim or static validation step."""
+
+    passed: bool
+    failure_class: str
+    return_code: int
+    evidence: tuple[str, ...] | list[str] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["evidence"] = list(self.evidence)
+        return data
+
+
+@dataclass(frozen=True)
 class SynthesisMetrics:
     """Normalised metrics used by benchmark-independent PPA evaluation.
 
