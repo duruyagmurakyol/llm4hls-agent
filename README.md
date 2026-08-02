@@ -14,33 +14,30 @@ The controller is benchmark-independent. Vector add, ATAX and future benchmarks 
 
 ```text
 agent/
-├── controller.py            state-machine entry point
+├── controller.py            public orchestration entry point
 ├── config.py                task-manifest loading and validation
 ├── state.py                 shared result, metric and budget records
 ├── workspace.py             isolated task workspace creation
-│
 ├── tools/
 │   ├── command_runner.py    external command execution
 │   ├── validation.py        generic failure classification
 │   ├── synthesis.py         synthesis adapter boundary
 │   └── reports.py           shared JSON input/output
-│
 ├── repair/
+│   ├── runner.py            complete direct-API repair workflow
 │   ├── diagnose.py          correctness diagnosis
 │   └── generate.py          repair generation through the provider
-│
 ├── optimise/
 │   ├── diagnose.py          Vitis report and bottleneck analysis
 │   ├── generate.py          PPA candidate-generation adapter
 │   ├── evaluate.py          generic Pareto comparison
-│   └── strategies.json      small benchmark-independent strategy library
-│
-├── analysis/                existing detailed Vitis analysis implementation
+│   └── strategies.json      benchmark-independent strategy library
+├── analysis/                detailed Vitis analysis implementation
 └── providers/
-    └── siliconflow.py       existing model-provider implementation
+    └── siliconflow.py       model-provider implementation
 ```
 
-Only `scripts/run_agent.py` is a public entry point. Existing scripts remain temporarily as compatibility implementations behind the clean package boundaries. They should not be treated as alternative architectures.
+Only `scripts/run_agent.py` is a public entry point.
 
 ## Workflow
 
@@ -66,16 +63,15 @@ Pareto and budget decision
 
 Correctness is established before optimisation. The controller and shared modules do not contain benchmark-name checks, fixed array sizes or vector-add-specific transformations.
 
-## Current compatibility adapters
+## Current implementation status
 
-The refactor preserves proven behaviour while code is moved gradually:
-
-- direct API repair currently delegates to `scripts/run_api_experiment.py`;
-- PPA task execution currently delegates to `scripts/run_track_a_agent.py`;
-- candidate generation and synthesis use the existing PPA scripts behind `agent/optimise/` and `agent/tools/` boundaries;
+- direct API repair now runs entirely from `agent/repair/runner.py`;
+- the old repair experiment entry points have been removed;
+- PPA task execution still delegates to `scripts/run_track_a_agent.py`;
+- candidate generation, CSim, synthesis and evaluation still use the existing PPA scripts;
 - Vitis diagnosis reuses the existing `agent/analysis/` modules.
 
-These wrappers can be archived after the clean modules reproduce the same results.
+The next cleanup target is the PPA backend, not the repair path.
 
 ## Quick validation
 
@@ -89,10 +85,10 @@ python3 -m pytest \
 Inspect a task without spending synthesis calls:
 
 ```bash
-python3 scripts/run_agent.py configs/tasks/vector_add_track_a.json --status-only
+python3 scripts/run_agent.py configs/tasks/atax_track_a.json --status-only
 ```
 
-Run the existing repair adapter through the unified command:
+Run direct repair:
 
 ```bash
 python3 scripts/run_agent.py configs/tasks/vector_add_repair.json
@@ -107,14 +103,8 @@ configs/tasks/            task manifests and specifications
 benchmarks/               task inputs and testbenches
 experiments/              generated trajectories and summaries
 results/                  selected experimental evidence
-scripts/                  temporary compatibility implementations
+scripts/                  remaining PPA compatibility implementation
 ```
-
-Historical experiments and generated Vitis workspaces are not part of the core runtime and will be archived or ignored after regression validation.
-
-## Refactor rule
-
-Do not rewrite working repair or PPA logic merely to move it. First expose it through the clean package, add tests, and then replace each compatibility wrapper one at a time.
 
 ## Requirements
 
