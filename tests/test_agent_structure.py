@@ -7,7 +7,7 @@ from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
 from agent.optimise.evaluate import classify_candidate, dominates, evaluate_experiment
 from agent.optimise.generate import extract_cpp, generate_candidate
-from agent.optimise.runner import OptimisationRunResult, run_optimisation
+from agent.optimise.runner import OptimisationRunResult, _status_summary, run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
 from agent.tools.synthesis import (
@@ -51,6 +51,19 @@ def test_autonomous_manifests_have_no_shell_commands() -> None:
         task = json.loads(path.read_text(encoding="utf-8"))
         assert task["adapter"]["kind"] == "autonomous_ppa"
         assert set(task["adapter"]) == {"kind", "config"}
+
+
+def test_uninitialised_status_does_not_require_baseline_metrics(tmp_path: Path) -> None:
+    config = {
+        "experiment_name": "fresh",
+        "benchmark": "fresh_benchmark",
+        "baseline": {},
+        "budget": {"max_candidates": 3, "max_synthesis_calls": 2},
+    }
+    status, summary = _status_summary(config, tmp_path)
+    assert status == "status_uninitialised"
+    assert summary["baseline_ready"] is False
+    assert summary["candidate_count"] == 0
 
 
 def test_candidate_extraction_requires_configured_top() -> None:
