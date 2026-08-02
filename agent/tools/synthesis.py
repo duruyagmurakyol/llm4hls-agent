@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
+import queue
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
+import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -18,6 +24,17 @@ from agent.tools.reports import load_json, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP_ROOT = Path(tempfile.gettempdir()) / "llm4hls-agent"
+DEFAULT_CSIM_TIMEOUT_SECONDS = 300
+DEFAULT_SYNTHESIS_TIMEOUT_SECONDS = 600
+
+
+@dataclass(frozen=True)
+class VitisResult:
+    returncode: int
+    output: str
+    timed_out: bool
+    timeout_seconds: int
+    elapsed_seconds: float
 
 
 def run_synthesis_adapter(command: Sequence[str | Path], *, repository_root: Path) -> CommandResult:
@@ -42,7 +59,14 @@ def _parse_add_files(command: str) -> tuple[bool, list[str], str]:
     tokens = shlex.split(command)
     if not tokens or tokens[0] != "add_files":
         raise ValueError(f"Not an add_files command: {command}")
-    source_index = next((i for i in range(len(tokens) - 1, 0, -1) if re.search(r"\.(?:c|cc|cpp|cxx|h|hpp)$", tokens[i], re.I)), None)
+    source_index = next(
+        (
+            i
+            for i in range(len(tokens) - 1, 0, -1)
+            if re.search(r"\.(?:c|cc|cpp|cxx|h|hpp)$", tokens[i], re.I)
+        ),
+        None,
+    )
     if source_index is None:
         raise ValueError(f"Could not parse source path from: {command}")
     return "-tb" in tokens, tokens[1:source_index], tokens[source_index]
@@ -84,7 +108,11 @@ def _absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = 
     return " ".join(shlex.quote(token) for token in tokens)
 
 
-def _tcl_parts(baseline_tcl: Path, candidate: Path, include_testbench: bool) -> tuple[list[str], str, list[str], str]:
+def _tcl_parts(
+    baseline_tcl: Path,
+    candidate: Path,
+    include_testbench: bool,
+) -> tuple[list[str], str, list[str], str]:
     lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     tcl_dir = baseline_tcl.parent.resolve()
     set_top = _first(lines, r"^set_top\b", "set_top")
@@ -92,23 +120,127 @@ def _tcl_parts(baseline_tcl: Path, candidate: Path, include_testbench: bool) -> 
     open_solution = _first(lines, r"^open_solution(?:\s+-reset)?\b", "open_solution")
     set_part = _first(lines, r"^set_part\b", "set_part")
     create_clock = _first(lines, r"^create_clock\b", "create_clock")
-    design = next((line.strip() for line in lines if re.match(r"^add_files\b", line.strip()) and "-tb" not in line and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())), None)
+    design = next(
+        (
+            line.strip()
+            for line in lines
+            if re.match(r"^add_files\b", line.strip())
+            and "-tb" not in line
+            and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())
+        ),
+        None,
+    )
     if design is None:
         raise ValueError("Could not find baseline design-source add_files command.")
-    auxiliaries = [line.strip() for line in lines if re.match(r"^add_files\b", line.strip()) and ((include_testbench and "-tb" in line) or ("-tb" not in line and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip())))]
+    auxiliaries = [
+        line.strip()
+        for line in lines
+        if re.match(r"^add_files\b", line.strip())
+        and (
+            (include_testbench and "-tb" in line)
+            or ("-tb" not in line and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip()))
+        )
+    ]
     if include_testbench and not any("-tb" in line for line in auxiliaries):
         raise ValueError("Could not find baseline testbench add_files command.")
-    design_command = _absolute_add_files(design, tcl_dir, candidate)
-    auxiliary_commands = [_absolute_add_files(line, tcl_dir) for line in auxiliaries]
-    return [set_top, open_solution, set_part, create_clock], design_command, auxiliary_commands, top_name
+    return (
+        [set_top, open_solution, set_part, create_clock],
+        _absolute_add_files(design, tcl_dir, candidate),
+        [_absolute_add_files(line, tcl_dir) for line in auxiliaries],
+        top_name,
+    )
 
 
 def _project_key(value: Path) -> str:
     return hashlib.sha256(str(value.resolve()).encode()).hexdigest()[:12]
 
 
-def _run_vitis(tcl: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([find_vitis_run(), "--mode", "hls", "--tcl", str(tcl.resolve())], cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+def _terminate_process_group(process: subprocess.Popen[str], grace_seconds: float = 5.0) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def _run_vitis(tcl: Path, cwd: Path, log_path: Path, timeout_seconds: int) -> VitisResult:
+    command = [find_vitis_run(), "--mode", "hls", "--tcl", str(tcl.resolve())]
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    output_queue: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for line in process.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    started = time.monotonic()
+    timed_out = False
+    lines: list[str] = []
+    stream_closed = False
+
+    with log_path.open("w", encoding="utf-8", buffering=1) as log:
+        while True:
+            elapsed = time.monotonic() - started
+            if process.poll() is None and elapsed >= timeout_seconds:
+                timed_out = True
+                message = f"\nTIMEOUT: Vitis exceeded {timeout_seconds} seconds; terminating process group.\n"
+                print(message, end="", flush=True)
+                log.write(message)
+                lines.append(message)
+                _terminate_process_group(process)
+
+            try:
+                item = output_queue.get(timeout=0.2)
+            except queue.Empty:
+                item = ""
+            if item is None:
+                stream_closed = True
+            elif item:
+                print(item, end="", flush=True)
+                log.write(item)
+                lines.append(item)
+
+            if process.poll() is not None and stream_closed and output_queue.empty():
+                break
+
+    reader.join(timeout=1.0)
+    return VitisResult(
+        returncode=process.returncode if process.returncode is not None else -1,
+        output="".join(lines),
+        timed_out=timed_out,
+        timeout_seconds=timeout_seconds,
+        elapsed_seconds=round(time.monotonic() - started, 3),
+    )
+
+
+def _timeout(config: dict[str, Any], key: str, default: int) -> int:
+    value = config.get("timeouts", {}).get(key, default)
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"timeouts.{key} must be a positive integer")
+    return value
 
 
 def run_candidate_csim(config_path: Path, candidate_index: int = 1) -> dict[str, Any]:
@@ -130,11 +262,33 @@ def run_candidate_csim(config_path: Path, candidate_index: int = 1) -> dict[str,
     shutil.rmtree(project_dir, ignore_errors=True)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
     generated_tcl = csim_dir / "run_csim.tcl"
-    generated_tcl.write_text("\n".join([f'open_project -reset "{project_dir.resolve().as_posix()}"', set_top, design, *auxiliaries, open_solution, set_part, create_clock, "csim_design", "exit"]) + "\n", encoding="utf-8")
-    completed = _run_vitis(generated_tcl, baseline_tcl.parent)
+    generated_tcl.write_text(
+        "\n".join(
+            [
+                f'open_project -reset "{project_dir.resolve().as_posix()}"',
+                set_top,
+                design,
+                *auxiliaries,
+                open_solution,
+                set_part,
+                create_clock,
+                "csim_design",
+                "exit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     log_path = csim_dir / "vitis_csim.log"
-    log_path.write_text(completed.stdout or "", encoding="utf-8")
-    candidate_compiled = bool(re.search(rf"Compiling\s+.*{re.escape(candidate.name)}\b", completed.stdout or "", re.I))
+    completed = _run_vitis(
+        generated_tcl,
+        baseline_tcl.parent,
+        log_path,
+        _timeout(config, "csim_seconds", DEFAULT_CSIM_TIMEOUT_SECONDS),
+    )
+    candidate_compiled = bool(
+        re.search(rf"Compiling\s+.*{re.escape(candidate.name)}\b", completed.output, re.I)
+    )
     report = {
         "candidate_index": candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
@@ -146,7 +300,10 @@ def run_candidate_csim(config_path: Path, candidate_index: int = 1) -> dict[str,
         "log_file": str(log_path.relative_to(REPO_ROOT)),
         "return_code": completed.returncode,
         "candidate_compiled": candidate_compiled,
-        "passed": completed.returncode == 0 and candidate_compiled,
+        "timed_out": completed.timed_out,
+        "timeout_seconds": completed.timeout_seconds,
+        "elapsed_seconds": completed.elapsed_seconds,
+        "passed": completed.returncode == 0 and candidate_compiled and not completed.timed_out,
         "synthesis_run": False,
         "baseline_modified": False,
     }
@@ -185,7 +342,11 @@ def parse_csynth_xml(path: Path) -> dict[str, Any]:
     }
 
 
-def run_candidate_synthesis(config_path: Path, candidate_index: int = 1, extract_only: bool = False) -> dict[str, Any]:
+def run_candidate_synthesis(
+    config_path: Path,
+    candidate_index: int = 1,
+    extract_only: bool = False,
+) -> dict[str, Any]:
     config = load_json(config_path.resolve())
     output_dir = REPO_ROOT / config["output_dir"]
     candidate = output_dir / f"candidate_{candidate_index:03d}.cpp"
@@ -204,23 +365,47 @@ def run_candidate_synthesis(config_path: Path, candidate_index: int = 1, extract
         shutil.rmtree(project_dir, ignore_errors=True)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
     generated_tcl = synthesis_dir / "run_synthesis.tcl"
-    generated_tcl.write_text("\n".join([f'open_project -reset "{project_dir.resolve().as_posix()}"', set_top, design, *headers, open_solution, set_part, create_clock, "csynth_design", "exit"]) + "\n", encoding="utf-8")
+    generated_tcl.write_text(
+        "\n".join(
+            [
+                f'open_project -reset "{project_dir.resolve().as_posix()}"',
+                set_top,
+                design,
+                *headers,
+                open_solution,
+                set_part,
+                create_clock,
+                "csynth_design",
+                "exit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     log_path = synthesis_dir / "vitis_synthesis.log"
     return_code: int | None = None
+    timed_out = False
+    elapsed_seconds: float | None = None
+    timeout_seconds = _timeout(config, "synthesis_seconds", DEFAULT_SYNTHESIS_TIMEOUT_SECONDS)
     if not extract_only:
-        completed = _run_vitis(generated_tcl, baseline_tcl.parent)
+        completed = _run_vitis(generated_tcl, baseline_tcl.parent, log_path, timeout_seconds)
         return_code = completed.returncode
-        log_path.write_text(completed.stdout or "", encoding="utf-8")
+        timed_out = completed.timed_out
+        elapsed_seconds = completed.elapsed_seconds
+
     report_dir = project_dir / "solution1/syn/report"
     hierarchy: dict[str, dict[str, Any]] = {}
     parse_error: str | None = None
     try:
         for xml_path in sorted(report_dir.glob("*_csynth.xml")):
             name = xml_path.name.removesuffix("_csynth.xml")
-            hierarchy[name] = {"csynth_xml": str(xml_path), "metrics": parse_csynth_xml(xml_path)}
+            hierarchy[name] = {
+                "csynth_xml": str(xml_path),
+                "metrics": parse_csynth_xml(xml_path),
+            }
     except (ET.ParseError, OSError, ValueError) as error:
         parse_error = str(error)
-    top_report = report_dir / f"{top_name}_csynth.xml"
+    top_report: Path | None = report_dir / f"{top_name}_csynth.xml"
     if not top_report.is_file():
         top_report = None
     report = {
@@ -235,7 +420,11 @@ def run_candidate_synthesis(config_path: Path, candidate_index: int = 1, extract
         "top_csynth_xml": str(top_report) if top_report else None,
         "return_code": return_code,
         "extract_only": extract_only,
-        "passed": top_report is not None and (extract_only or return_code == 0),
+        "timed_out": timed_out,
+        "timeout_seconds": timeout_seconds,
+        "elapsed_seconds": elapsed_seconds,
+        "failure_class": "synthesis_timeout" if timed_out else ("synthesis_failed" if not extract_only and return_code != 0 else None),
+        "passed": top_report is not None and (extract_only or (return_code == 0 and not timed_out)),
         "metrics": hierarchy.get(top_name, {}).get("metrics", {}),
         "hierarchical_reports": hierarchy,
         "parse_error": parse_error,
@@ -261,12 +450,43 @@ def ensure_baseline_synthesis(config_path: Path) -> dict[str, Any]:
     run_dir = output_dir / "baseline_run"
     run_dir.mkdir(parents=True, exist_ok=True)
     generated_tcl = run_dir / "run_baseline.tcl"
-    generated_tcl.write_text("\n".join([f'open_project -reset "{project_dir.resolve().as_posix()}"', set_top, design, *auxiliaries, open_solution, set_part, create_clock, "csim_design", "csynth_design", "exit"]) + "\n", encoding="utf-8")
-    completed = _run_vitis(generated_tcl, baseline_tcl.parent)
+    generated_tcl.write_text(
+        "\n".join(
+            [
+                f'open_project -reset "{project_dir.resolve().as_posix()}"',
+                set_top,
+                design,
+                *auxiliaries,
+                open_solution,
+                set_part,
+                create_clock,
+                "csim_design",
+                "csynth_design",
+                "exit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     log_path = run_dir / "vitis_baseline.log"
-    log_path.write_text(completed.stdout or "", encoding="utf-8")
+    completed = _run_vitis(
+        generated_tcl,
+        baseline_tcl.parent,
+        log_path,
+        _timeout(config, "baseline_seconds", DEFAULT_SYNTHESIS_TIMEOUT_SECONDS),
+    )
     reports = sorted(project_dir.rglob("*_csynth.xml")) if project_dir.is_dir() else []
-    return {"passed": completed.returncode == 0 and bool(reports), "cached": False, "reports": len(reports), "project_dir": str(project_dir), "return_code": completed.returncode, "log_file": str(log_path.relative_to(REPO_ROOT))}
+    return {
+        "passed": completed.returncode == 0 and bool(reports) and not completed.timed_out,
+        "cached": False,
+        "reports": len(reports),
+        "project_dir": str(project_dir),
+        "return_code": completed.returncode,
+        "timed_out": completed.timed_out,
+        "timeout_seconds": completed.timeout_seconds,
+        "elapsed_seconds": completed.elapsed_seconds,
+        "log_file": str(log_path.relative_to(REPO_ROOT)),
+    }
 
 
 def main() -> None:
