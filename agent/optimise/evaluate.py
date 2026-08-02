@@ -84,7 +84,6 @@ def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]
     configured = config.get("baseline", {}).get("metrics")
     if isinstance(configured, dict) and configured:
         return configured
-
     diagnosis_path = output_dir / "baseline_hierarchical_diagnosis.json"
     if diagnosis_path.is_file():
         diagnosis = load_json(diagnosis_path)
@@ -99,7 +98,6 @@ def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]
             for item in diagnosis.get(key, []) if isinstance(diagnosis.get(key), list) else []:
                 if isinstance(item, dict) and isinstance(item.get("metrics"), dict) and item["metrics"]:
                     return item["metrics"]
-
     candidate_one = output_dir / "candidate_001_synthesis.json"
     if candidate_one.is_file():
         metrics = load_json(candidate_one).get("metrics")
@@ -131,6 +129,7 @@ def classify_candidate(
     static = load_optional(output_dir / f"{prefix}_static_validation.json")
     csim = load_optional(output_dir / f"{prefix}_csim_validation.json")
     synthesis = load_optional(output_dir / f"{prefix}_synthesis.json")
+    synthesis_attempted = bool(synthesis and synthesis.get("synthesis_run") is True)
     synthesis_completed = bool(
         synthesis
         and synthesis.get("passed") is True
@@ -143,7 +142,7 @@ def classify_candidate(
         "static_validation": static.get("passed") if static else None,
         "csim": csim.get("passed") if csim else None,
         "synthesis": synthesis.get("passed") if synthesis else None,
-        "synthesis_run": synthesis_completed,
+        "synthesis_run": synthesis_attempted,
         "metrics": {},
         "deltas_percent": {},
         "verdict": "incomplete",
@@ -161,7 +160,25 @@ def classify_candidate(
         record.update(verdict="reject_static", reason="Static validation failed: " + ", ".join(failed))
         return record
     if csim and csim.get("passed") is False:
-        record.update(verdict="reject_csim", reason="Vitis CSim failed or the candidate was not compiled.")
+        verdict = "reject_csim_timeout" if csim.get("timed_out") is True else "reject_csim"
+        reason = (
+            "Vitis CSim exceeded its timeout."
+            if verdict == "reject_csim_timeout"
+            else "Vitis CSim failed or the candidate was not compiled."
+        )
+        record.update(verdict=verdict, reason=reason)
+        return record
+    if synthesis and synthesis.get("timed_out") is True:
+        record.update(
+            verdict="reject_synthesis_timeout",
+            reason=f"Vitis synthesis exceeded {synthesis.get('timeout_seconds')} seconds.",
+        )
+        return record
+    if synthesis_attempted and synthesis and synthesis.get("passed") is False:
+        record.update(
+            verdict="reject_synthesis_failed",
+            reason="Vitis synthesis failed before producing complete top-level metrics.",
+        )
         return record
     if not synthesis_completed:
         return record
@@ -182,7 +199,6 @@ def classify_candidate(
     improves_interval = isinstance(interval_delta, (int, float)) and interval_delta < 0
     same_performance = latency_delta == 0 and interval_delta == 0
     no_resource_increase = all(value <= 0 for value in numeric_resources)
-
     if same_performance and all(value == 0 for value in numeric_resources):
         record.update(verdict="reject_no_change", reason="Synthesis metrics are identical to the baseline.")
     elif (improves_latency or improves_interval) and no_resource_increase:
@@ -215,7 +231,8 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     indices = candidate_indices(output_dir)
     baseline = baseline_metrics(config, output_dir)
-    records = [classify_candidate(output_dir, index, baseline, duplicate_map(output_dir, indices)) for index in indices]
+    duplicates = duplicate_map(output_dir, indices)
+    records = [classify_candidate(output_dir, index, baseline, duplicates) for index in indices]
     eligible = [record for record in records if record.get("verdict") in PARETO_ELIGIBLE_VERDICTS]
     baseline_record = {
         "candidate_index": 0,
@@ -224,7 +241,11 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
         "verdict": "baseline",
     }
     pool = [baseline_record, *eligible]
-    pareto = [item for item in pool if not any(other is not item and record_dominates(other, item) for other in pool)]
+    pareto = [
+        item
+        for item in pool
+        if not any(other is not item and record_dominates(other, item) for other in pool)
+    ]
     synthesis_calls_used = sum(1 for record in records if record.get("synthesis_run"))
     maximum = int(config["budget"]["max_synthesis_calls"])
     summary = {
@@ -248,7 +269,10 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
             for item in pareto
         ],
     }
-    (output_dir / "experiment_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "experiment_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return summary
 
 
@@ -269,7 +293,12 @@ def main() -> None:
     for item in summary["pareto_archive"]:
         label = "baseline" if item["candidate_index"] == 0 else f"candidate_{item['candidate_index']:03d}"
         metrics = item["metrics"]
-        print(f"  {label}: latency={metrics.get('latency_best_cycles')}, LUT={metrics.get('resources_lut_used')}, FF={metrics.get('resources_ff_used')}, DSP={metrics.get('resources_dsp_used')}")
+        print(
+            f"  {label}: latency={metrics.get('latency_best_cycles')}, "
+            f"LUT={metrics.get('resources_lut_used')}, "
+            f"FF={metrics.get('resources_ff_used')}, "
+            f"DSP={metrics.get('resources_dsp_used')}"
+        )
     print("No model call, CSim, or synthesis was run.")
 
 
