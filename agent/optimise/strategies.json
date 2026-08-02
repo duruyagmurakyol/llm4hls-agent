@@ -1,0 +1,27 @@
+[
+  {
+    "id": "pipeline_independent_loop",
+    "bottleneck": "sequential_loop",
+    "actions": ["pipeline_loop"]
+  },
+  {
+    "id": "bounded_parallelism",
+    "bottleneck": "insufficient_parallelism",
+    "actions": ["bounded_unrolling", "matching_memory_banking"]
+  },
+  {
+    "id": "reduce_memory_contention",
+    "bottleneck": "memory_port_contention",
+    "actions": ["local_buffering", "array_partitioning", "array_reshaping"]
+  },
+  {
+    "id": "reduce_dependency",
+    "bottleneck": "loop_carried_dependency",
+    "actions": ["partial_accumulators", "tree_reduction", "loop_restructure"]
+  },
+  {
+    "id": "reduce_overprovisioning",
+    "bottleneck": "resource_pressure",
+    "actions": ["reduce_unroll_factor", "reduce_partition_factor", "remove_redundant_pragmas"]
+  }
+]
