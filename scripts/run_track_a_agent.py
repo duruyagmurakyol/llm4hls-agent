@@ -27,7 +27,10 @@ def resolve(path_text: str) -> Path:
 
 
 def run_python(arguments: list[str], title: str) -> int:
-    command = [sys.executable, *[str(resolve(item)) if i == 0 else item for i, item in enumerate(arguments)]]
+    if arguments and arguments[0] == "-m":
+        command = [sys.executable, *arguments]
+    else:
+        command = [sys.executable, *[str(resolve(item)) if i == 0 else item for i, item in enumerate(arguments)]]
     print(f"\n=== {title} ===", flush=True)
     print("Command:", " ".join(command), flush=True)
     return subprocess.run(command, cwd=REPO_ROOT, check=False).returncode
@@ -37,18 +40,16 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def model_usage(adapter_output: Path) -> dict[str, Any]:
-    files = sorted(adapter_output.glob("candidate_*_model_metadata.json"))
-    records = []
+def model_usage(output_dir: Path) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
     totals = {"model_calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    for path in files:
+    for path in sorted(output_dir.glob("candidate_*_model_metadata.json")):
         data = load_json(path)
         records.append({"file": str(path.relative_to(REPO_ROOT)), **data})
         totals["model_calls"] += 1
         for key in ("input_tokens", "output_tokens", "total_tokens"):
-            value = data.get(key)
-            if isinstance(value, int):
-                totals[key] += value
+            if isinstance(data.get(key), int):
+                totals[key] += data[key]
     return {"totals": totals, "calls": records}
 
 
@@ -56,8 +57,7 @@ def derive_phase(summary: dict[str, Any], task: dict[str, Any]) -> str:
     candidates = summary.get("candidates", [])
     if not candidates:
         return "diagnose_initial_design"
-    latest = candidates[-1]
-    verdict = latest.get("verdict")
+    verdict = candidates[-1].get("verdict")
     if verdict in {"reject_static", "reject_csim", "reject_duplicate"}:
         return "repair_correctness"
     budget = summary.get("budget", {})
@@ -73,11 +73,9 @@ def derive_phase(summary: dict[str, Any], task: dict[str, Any]) -> str:
 def write_ledger(task_path: Path, task: dict[str, Any], summary: dict[str, Any] | None, status: str) -> Path:
     output_dir = resolve(task["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
-    adapter = task["adapter"]
-    adapter_config = load_json(resolve(adapter["config"]))
+    adapter_config = load_json(resolve(task["adapter"]["config"]))
     adapter_output = resolve(adapter_config["output_dir"])
     usage = model_usage(adapter_output)
-
     tool_usage = {
         "csim_calls": sum(1 for path in adapter_output.glob("candidate_*_csim_validation.json") if load_json(path).get("passed") is not None),
         "cosim_calls": sum(1 for _ in adapter_output.glob("candidate_*_cosim_validation.json")),
@@ -114,7 +112,7 @@ def write_ledger(task_path: Path, task: dict[str, Any], summary: dict[str, Any] 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a budgeted FPT Track A LLM4HLS task.")
-    parser.add_argument("task", type=Path, help="Track A task manifest")
+    parser.add_argument("task", type=Path)
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--max-agent-steps", type=int, default=None)
     args = parser.parse_args()
@@ -123,7 +121,6 @@ def main() -> None:
     task = load_json(task_path)
     if task.get("adapter", {}).get("kind") != "legacy_ppa":
         raise ValueError("This controller currently requires a legacy_ppa adapter.")
-
     if run_python(["scripts/validate_track_a_task.py", str(task_path)], "Validate task package") != 0:
         raise SystemExit(1)
 
@@ -134,17 +131,12 @@ def main() -> None:
         if run_python(adapter["initialise_command"], "Diagnose and initialise baseline") != 0:
             write_ledger(task_path, task, None, "failed_initialisation")
             raise SystemExit(1)
-        if run_python(
-            ["scripts/evaluate_ppa_experiment.py", str(adapter_config_path)],
-            "Create initial experiment summary",
-        ) != 0:
+        if run_python(["-m", "agent.optimise.evaluate", str(adapter_config_path)], "Create initial experiment summary") != 0:
             write_ledger(task_path, task, None, "failed_summary_initialisation")
             raise SystemExit(1)
         if not summary_path.is_file():
             write_ledger(task_path, task, None, "failed_summary_initialisation")
-            raise FileNotFoundError(
-                f"Initialisation completed but did not create summary: {summary_path}"
-            )
+            raise FileNotFoundError(f"Initialisation completed but did not create summary: {summary_path}")
 
     summary = load_json(summary_path) if summary_path.is_file() else None
     if args.status_only:
@@ -153,9 +145,8 @@ def main() -> None:
         return
 
     step_limit = args.max_agent_steps or task["budgets"]["max_iterations"]
-    previous_fingerprint = None
+    previous_fingerprint: str | None = None
     final_status = "terminated_no_progress"
-
     for step in range(1, step_limit + 1):
         summary = load_json(summary_path)
         phase = derive_phase(summary, task)
@@ -165,7 +156,6 @@ def main() -> None:
             "budget": summary.get("budget", {}),
             "latest": summary.get("candidates", [])[-1] if summary.get("candidates") else None,
         }, sort_keys=True)
-
         print(f"\nTrack A step {step}: {phase}")
         if phase.startswith("terminated_"):
             final_status = phase
@@ -174,11 +164,9 @@ def main() -> None:
             final_status = "terminated_no_progress"
             break
         previous_fingerprint = fingerprint
-
         if run_python(adapter["iteration_command"], "Autonomous repair/optimisation iteration") != 0:
             final_status = "iteration_failed"
             break
-
         updated = load_json(summary_path)
         if json.dumps(updated, sort_keys=True) == json.dumps(summary, sort_keys=True):
             final_status = "terminated_no_progress"
