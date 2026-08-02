@@ -19,7 +19,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from agent.providers.siliconflow import complete  # noqa: E402
+from agent.siliconflow import complete  # noqa: E402
 
 METRICS = (
     "latency_best_cycles",

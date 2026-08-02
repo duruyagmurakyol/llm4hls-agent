@@ -5,10 +5,12 @@
 
 # Local test executables
 add_test
+host_test
 
 # Vitis HLS generated projects
 *_project/
 solution*/
+*.app
 .vitis_hls/
 .Xil/
 .ipcache/
