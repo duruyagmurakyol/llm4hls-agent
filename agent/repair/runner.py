@@ -21,6 +21,13 @@ from agent.tools.validation import classify_failure, extract_evidence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_config(config: dict[str, Any] | str | Path) -> dict[str, Any]:
+    if isinstance(config, dict):
+        return config
+    config_path = Path(config).resolve()
+    return json.loads(config_path.read_text(encoding="utf-8"))
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -68,9 +75,12 @@ def _prompts(config: dict[str, Any], workspace: Path, validation: ValidationResu
     return system, user
 
 
-def run_repair(config_path: Path, *, keep_workspace: bool = False) -> tuple[bool, Path, dict[str, Any]]:
-    config_path = config_path.resolve()
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+def run_repair(
+    config_source: dict[str, Any] | str | Path,
+    *,
+    keep_workspace: bool = False,
+) -> tuple[bool, Path, dict[str, Any]]:
+    config = _load_config(config_source)
     if config.get("repair_mode") != "direct_api":
         raise ValueError("Config must use repair_mode=direct_api")
 
