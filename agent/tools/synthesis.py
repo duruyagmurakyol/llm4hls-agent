@@ -313,7 +313,15 @@ def run_csim(task: TaskManifest, candidate: Path) -> dict[str, Any]:
         "passed": passed,
         "timed_out": completed.timed_out,
         "return_code": completed.return_code,
-        "failure_class": "none" if passed else classify_failure(completed.output),
+        "failure_class": (
+            "none"
+            if passed
+            else classify_failure(
+                completed.output,
+                stage="csim",
+                timed_out=completed.timed_out,
+            )
+        ),
         "evidence": [] if passed else extract_evidence(completed.output),
         "command": list(completed.command),
         "duration_seconds": completed.elapsed_seconds,
@@ -392,7 +400,15 @@ def run_candidate_csim(config_path: Path, candidate_index: int = 1) -> dict[str,
         "timed_out": completed.timed_out,
         "timeout_seconds": completed.timeout_seconds,
         "elapsed_seconds": completed.elapsed_seconds,
-        "failure_class": "none" if passed else classify_failure(completed.output),
+        "failure_class": (
+            "none"
+            if passed
+            else classify_failure(
+                completed.output,
+                stage="csim",
+                timed_out=completed.timed_out,
+            )
+        ),
         "evidence": [] if passed else extract_evidence(completed.output),
         "passed": passed,
         "synthesis_run": False,
@@ -453,6 +469,26 @@ def _read_synthesis_reports(
     return hierarchy, top_report if top_report.is_file() else None, parse_error
 
 
+def _synthesis_failure(
+    *,
+    output: str,
+    timed_out: bool,
+    parse_error: str | None,
+    process_passed: bool,
+    top_report: Path | None,
+) -> tuple[str, list[str]]:
+    if timed_out:
+        return (
+            classify_failure(output, stage="synthesis", timed_out=True),
+            extract_evidence(output),
+        )
+    if parse_error:
+        return "report_parse", [parse_error]
+    if process_passed and top_report is None:
+        return "tool_report_missing", ["The expected top-level synthesis report was not generated."]
+    return classify_failure(output, stage="synthesis"), extract_evidence(output)
+
+
 def run_synthesis(task: TaskManifest, candidate: Path) -> dict[str, Any]:
     """Synthesise one candidate using an authoritative task manifest."""
     candidate = candidate.resolve()
@@ -506,18 +542,16 @@ def run_synthesis(task: TaskManifest, candidate: Path) -> dict[str, Any]:
     if passed:
         failure_class = "none"
         evidence: list[str] = []
-    elif completed.timed_out:
-        failure_class = "synthesis_timeout"
-        evidence = extract_evidence(completed.output)
-    elif parse_error:
-        failure_class = "report_parse"
-        evidence = [parse_error]
-    elif completed.passed:
-        failure_class = "missing_synthesis_report"
-        evidence = [f"Missing top synthesis report for {top_name}"]
     else:
-        failure_class = "synthesis_failed"
-        evidence = extract_evidence(completed.output)
+        failure_class, evidence = _synthesis_failure(
+            output=completed.output,
+            timed_out=completed.timed_out,
+            parse_error=parse_error,
+            process_passed=completed.passed,
+            top_report=top_report,
+        )
+        if failure_class == "tool_report_missing":
+            evidence = [f"Missing top synthesis report for {top_name}"]
 
     report = {
         "passed": passed,
@@ -589,14 +623,39 @@ def run_candidate_synthesis(
     return_code: int | None = None
     timed_out = False
     elapsed_seconds: float | None = None
+    output = ""
     timeout_seconds = _timeout(config, "synthesis_seconds", DEFAULT_SYNTHESIS_TIMEOUT_SECONDS)
     if not extract_only:
         completed = _run_vitis(generated_tcl, baseline_tcl.parent, log_path, timeout_seconds)
         return_code = completed.return_code
         timed_out = completed.timed_out
         elapsed_seconds = completed.elapsed_seconds
+        output = completed.output
 
     hierarchy, top_report, parse_error = _read_synthesis_reports(project_dir, top_name)
+    passed = top_report is not None and parse_error is None and (
+        extract_only or (return_code == 0 and not timed_out)
+    )
+    if passed:
+        failure_class = "none"
+        evidence: list[str] = []
+    elif extract_only and parse_error:
+        failure_class = "report_parse"
+        evidence = [parse_error]
+    elif extract_only:
+        failure_class = "tool_report_missing"
+        evidence = [f"Missing top synthesis report for {top_name}"]
+    else:
+        failure_class, evidence = _synthesis_failure(
+            output=output,
+            timed_out=timed_out,
+            parse_error=parse_error,
+            process_passed=return_code == 0,
+            top_report=top_report,
+        )
+        if failure_class == "tool_report_missing":
+            evidence = [f"Missing top synthesis report for {top_name}"]
+
     report = {
         "candidate_index": candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
@@ -612,8 +671,9 @@ def run_candidate_synthesis(
         "timed_out": timed_out,
         "timeout_seconds": timeout_seconds,
         "elapsed_seconds": elapsed_seconds,
-        "failure_class": "synthesis_timeout" if timed_out else ("synthesis_failed" if not extract_only and return_code != 0 else None),
-        "passed": top_report is not None and (extract_only or (return_code == 0 and not timed_out)),
+        "failure_class": failure_class,
+        "evidence": evidence,
+        "passed": passed,
         "metrics": hierarchy.get(top_name, {}).get("metrics", {}),
         "hierarchical_reports": hierarchy,
         "parse_error": parse_error,
