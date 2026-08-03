@@ -92,7 +92,7 @@ def test_run_cosim_returns_structured_result(tmp_path: Path, monkeypatch) -> Non
     [
         ("FAIL index=0 expected=17 actual=-15\nSimulation failed\n", False, "cosim_mismatch"),
         ("ERROR: deadlock detected; no progress\n", False, "cosim_deadlock"),
-        ("ERROR: failed to compile RTL wrapper\n", False, "cosim_compile"),
+        ("ERROR: failed to compile RTL wrapper\n", False, "syntax_or_compile"),
         ("TIMEOUT: command exceeded 900 seconds\n", True, "cosim_timeout"),
     ],
 )
@@ -147,7 +147,7 @@ def test_run_cosim_requires_report(tmp_path: Path, monkeypatch) -> None:
     report = run_cosim(task, candidate)
 
     assert not report["passed"]
-    assert report["failure_class"] == "missing_cosim_report"
+    assert report["failure_class"] == "tool_report_missing"
     assert report["reports"] == []
 
 
@@ -175,7 +175,7 @@ def test_repair_runs_synthesis_then_cosim(tmp_path: Path, monkeypatch) -> None:
     repair_result = {
         "experiment_id": "repair_then_cosim",
         "model": "model",
-        "failure_class": "functional",
+        "failure_class": "functional_mismatch",
         "tokens_used": 10,
         "input_tokens": 6,
         "output_tokens": 4,
