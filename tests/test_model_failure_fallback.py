@@ -139,6 +139,11 @@ def test_ppa_model_error_returns_verified_baseline(
             "tcl": "task.tcl",
             "project_dir": "baseline_project",
             "metrics": _metrics(),
+            "verification": {
+                "csim_passed": True,
+                "synthesis_passed": True,
+                "cosim_passed": True,
+            },
         },
         "validation": {},
         "prompt_constraints": [],
@@ -151,6 +156,7 @@ def test_ppa_model_error_returns_verified_baseline(
         "budget": {
             "max_candidates": 1,
             "max_synthesis_calls": 1,
+            "max_cosim_calls": 1,
         },
     }
 
@@ -166,15 +172,18 @@ def test_ppa_model_error_returns_verified_baseline(
     assert result.trajectory[0]["passed"] is False
     selected = result.trajectory[-1]["selected_design"]
     assert selected["candidate_index"] == 0
+    assert selected["fully_verified"] is True
     assert selected["validation"] == {
         "static_validation": True,
         "csim": True,
         "synthesis": True,
+        "cosim": True,
     }
     output = tmp_path / "output"
     assert (output / "candidate_001_generation_error.json").is_file()
     state = json.loads((output / "candidate_state.json").read_text(encoding="utf-8"))
     assert state["selected_design"]["candidate_index"] == 0
+    assert state["selected_design_fully_verified"] is True
     assert "verified baseline" in (
         tmp_path / state["selected_design"]["archived_file"]
     ).read_text(encoding="utf-8")
