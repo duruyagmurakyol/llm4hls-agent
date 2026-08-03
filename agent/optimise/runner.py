@@ -335,14 +335,14 @@ def run_optimisation(
 
         if budget is not None:
             if not budget.can_generate_candidate(
-                reserve_csim=2,
-                reserve_synthesis=2,
+                reserve_csim=1,
+                reserve_synthesis=1,
             ):
-                budget.set_stop_reason("final_validation_budget_reserved")
+                budget.set_stop_reason("validation_budget_exhausted")
                 return OptimisationRunResult(
                     True,
                     "terminated_budget",
-                    "final_validation_budget_reserved",
+                    "validation_budget_exhausted",
                     summary,
                     trajectory,
                 )
