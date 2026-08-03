@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from agent.config import load_task
 from agent.onboarding import discover_benchmark, onboard_benchmark
+from agent.optimise.config_source import InMemoryConfig, as_config_source, ppa_config_from_task
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate, source_digest
 from agent.optimise.evaluate import classify_candidate, dominates, evaluate_experiment
@@ -47,14 +49,22 @@ def test_clean_packages_import() -> None:
     assert OptimisationRunResult.__dataclass_fields__
 
 
-def test_autonomous_manifests_have_no_shell_commands() -> None:
+def test_autonomous_manifests_have_no_secondary_config() -> None:
     for path in (
         Path("configs/tasks/vector_add_track_a.json"),
         Path("configs/tasks/atax_track_a.json"),
     ):
-        task = json.loads(path.read_text(encoding="utf-8"))
-        assert task["adapter"]["kind"] == "autonomous_ppa"
-        assert set(task["adapter"]) == {"kind", "config"}
+        task = load_task(path)
+        assert task.adapter_kind == "autonomous_ppa"
+        assert set(task.data["adapter"]) == {"kind"}
+
+        config = ppa_config_from_task(task)
+        source = as_config_source(task)
+        assert isinstance(source, InMemoryConfig)
+        assert config["baseline"]["source"] == task.data["artifacts"]["source"]
+        assert config["baseline"]["tcl"] == task.data["artifacts"]["build_files"][0]
+        assert config["model"] == task.data["model"]
+        assert config["budget"]["max_candidates"] == task.data["budgets"]["max_iterations"]
 
 
 def test_atax_benchmark_is_discovered_from_tcl() -> None:
