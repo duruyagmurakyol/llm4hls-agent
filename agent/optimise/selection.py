@@ -42,8 +42,8 @@ MANDATORY_RANKING_PREFIX = (
 DEFAULT_RANKING = (
     *MANDATORY_RANKING_PREFIX,
     "latency_ns",
-    "throughput_period_ns",
     "resource_cost",
+    "throughput_period_ns",
     "total_tokens",
     "tool_calls",
     "tool_seconds",
