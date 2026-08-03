@@ -6,14 +6,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from agent.budget import BudgetExceeded, BudgetState
 from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import AgentResult, TrajectoryEvent
-from agent.tools.command_runner import CommandResult, run_command
+from agent.tools.synthesis import run_csim
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,33 +161,21 @@ def _run_direct_api_repair(
     )
 
 
-def _initial_csim(task: TaskManifest, budget: BudgetState) -> CommandResult:
-    task_root = _resolve(task.data["task_root"])
-    build_file = _resolve(task.data["artifacts"]["build_files"][0])
-
+def _initial_csim(task: TaskManifest, budget: BudgetState) -> dict[str, object]:
     budget.require("csim_calls")
-    with TemporaryDirectory(prefix=f"{task.task_id}_initial_csim_") as temp_dir:
-        if build_file.suffix.lower() == ".cfg":
-            command = [
-                "vitis-run",
-                "--mode",
-                "hls",
-                "--csim",
-                "--config",
-                str(build_file.relative_to(task_root)),
-                "--work_dir",
-                str(Path(temp_dir) / "vitis_work"),
-            ]
-        else:
-            command = ["vitis-run", "--mode", "hls", "--tcl", str(build_file)]
-        result = run_command(command, cwd=task_root)
-
-    budget.charge_csim(stage="initial_csim", success=result.passed)
-    (_output_dir(task) / "initial_csim.log").write_text(result.output, encoding="utf-8")
+    result = run_csim(task, _resolve(task.data["artifacts"]["source"]))
+    budget.charge_csim(
+        stage="initial_csim",
+        success=result["passed"] is True,
+        timed_out=bool(result["timed_out"]),
+    )
     return result
 
 
-def _prepend_initial_csim(result: AgentResult, csim: CommandResult) -> AgentResult:
+def _prepend_initial_csim(
+    result: AgentResult,
+    csim: dict[str, object],
+) -> AgentResult:
     for index, event in enumerate(result.trajectory, 2):
         event.step = index
     result.trajectory.insert(
@@ -196,21 +183,20 @@ def _prepend_initial_csim(result: AgentResult, csim: CommandResult) -> AgentResu
         TrajectoryEvent(
             step=1,
             stage="initial_csim",
-            status="passed" if csim.passed else "failed",
+            status="passed" if csim["passed"] else "failed",
             details={
-                "command": list(csim.command),
-                "return_code": csim.return_code,
-                "log_path": str((_output_dir_from_result(result) / "initial_csim.log").relative_to(REPO_ROOT)),
+                "command": csim["command"],
+                "return_code": csim["return_code"],
+                "timed_out": csim["timed_out"],
+                "failure_class": csim["failure_class"],
+                "evidence": csim["evidence"],
+                "duration_seconds": csim["duration_seconds"],
+                "log_path": csim["log_path"],
+                "candidate_hash": csim["candidate_hash"],
             },
         ),
     )
     return result
-
-
-def _output_dir_from_result(result: AgentResult) -> Path:
-    path = _resolve(result.output_dir)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def _run_auto(
@@ -225,7 +211,7 @@ def _run_auto(
 
     print("\n=== Initial CSim ===", flush=True)
     csim = _initial_csim(task, budget)
-    if not csim.passed:
+    if not csim["passed"]:
         print("Initial CSim failed; entering repair.", flush=True)
         return _prepend_initial_csim(_run_direct_api_repair(task, budget), csim)
 
