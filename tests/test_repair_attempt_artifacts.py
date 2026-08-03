@@ -85,7 +85,7 @@ def _response(content: str = REPAIRED) -> SimpleNamespace:
     )
 
 
-def _assert_contract(run_dir: Path) -> tuple[dict, dict, dict]:
+def _assert_contract(run_dir: Path) -> tuple[dict, dict, dict, dict]:
     assert run_dir.name == "attempt_001"
     assert CANONICAL_FILES.issubset({path.name for path in run_dir.iterdir()})
     assert (run_dir.parent / "repair_attempts.json").is_file()
@@ -94,8 +94,23 @@ def _assert_contract(run_dir: Path) -> tuple[dict, dict, dict]:
     result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
     tokens = json.loads((run_dir / "token_usage.json").read_text(encoding="utf-8"))
-    assert set(result["artifacts"].values()).issubset(CANONICAL_FILES)
-    return result, validation, tokens
+    budget = json.loads(
+        (run_dir.parent / "budget_summary.json").read_text(encoding="utf-8")
+    )
+    assert set(result["artifacts"].values()) == CANONICAL_FILES
+    assert budget["budget_enforced"] is True
+    assert budget["initial"]["max_iterations"] == 1
+    assert "consumed" in budget
+    assert "remaining" in budget
+    assert "usage_by_stage" in budget
+    assert "repair" in budget["usage_by_phase"]
+    assert budget["termination_reason"] in {
+        "repair_validated",
+        "repair_budget_exhausted",
+        "repair_attempt_limit_reached",
+    }
+    assert budget["attempt_count"] == 1
+    return result, validation, tokens, budget
 
 
 def test_successful_repair_writes_complete_attempt_record(
@@ -124,14 +139,19 @@ def test_successful_repair_writes_complete_attempt_record(
         budget=_budget(),
     )
 
-    result, validation, tokens = _assert_contract(run_dir)
+    result, validation, tokens, budget = _assert_contract(run_dir)
     assert passed is True
     assert result["candidate_record_kind"] == "generated_candidate"
+    assert result["candidate_provenance"] == "accepted_model_output"
     assert (run_dir / "candidate.cpp").read_text(encoding="utf-8") == REPAIRED
     assert validation["model_output_validation"]["passed"] is True
     assert validation["host_after"]["passed"] is True
     assert validation["independent_csim"]["passed"] is True
     assert tokens["total_tokens"] == 15
+    assert budget["consumed"]["model_calls"] == 1
+    assert budget["consumed"]["csim_calls"] == 1
+    assert budget["consumed"]["total_tokens"] == 15
+    assert budget["repair_passed"] is True
 
 
 def test_failed_generated_candidate_records_failed_validation(
@@ -160,12 +180,14 @@ def test_failed_generated_candidate_records_failed_validation(
         budget=_budget(),
     )
 
-    result, validation, _ = _assert_contract(run_dir)
+    result, validation, _, budget = _assert_contract(run_dir)
     assert passed is False
     assert result["candidate_record_kind"] == "generated_candidate"
     assert validation["host_after"]["run"] is True
     assert validation["host_after"]["passed"] is False
+    assert validation["overall"]["passed"] is False
     assert (run_dir / "diff.patch").read_text(encoding="utf-8")
+    assert budget["repair_passed"] is False
 
 
 def test_rejected_model_output_preserves_last_valid_source_record(
@@ -198,14 +220,16 @@ def test_rejected_model_output_preserves_last_valid_source_record(
         budget=_budget(),
     )
 
-    result, validation, tokens = _assert_contract(run_dir)
+    result, validation, tokens, budget = _assert_contract(run_dir)
     assert passed is False
     assert result["candidate_record_kind"] == "last_valid_source"
+    assert result["candidate_accepted"] is False
     assert (run_dir / "candidate.cpp").read_text(encoding="utf-8") == BROKEN
     assert validation["model_generation"]["passed"] is True
     assert validation["model_output_validation"]["passed"] is False
     assert validation["host_after"]["run"] is False
     assert tokens["total_tokens"] == 15
+    assert budget["consumed"]["total_tokens"] == 15
 
 
 def test_provider_failure_still_writes_complete_attempt_record(
@@ -231,11 +255,14 @@ def test_provider_failure_still_writes_complete_attempt_record(
         budget=_budget(),
     )
 
-    result, validation, tokens = _assert_contract(run_dir)
+    result, validation, tokens, budget = _assert_contract(run_dir)
     assert passed is False
     assert result["candidate_record_kind"] == "last_valid_source"
+    assert result["candidate_accepted"] is False
     assert (run_dir / "candidate.cpp").read_text(encoding="utf-8") == BROKEN
     assert (run_dir / "raw_response.txt").read_text(encoding="utf-8") == ""
     assert validation["model_generation"]["passed"] is False
     assert validation["model_output_validation"]["run"] is False
     assert tokens["total_tokens"] == 0
+    assert budget["consumed"]["model_calls"] == 1
+    assert budget["consumed"]["total_tokens"] == 0
