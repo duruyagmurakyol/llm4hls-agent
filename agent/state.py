@@ -5,7 +5,43 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any
+
+
+class AgentPhase(str, Enum):
+    """Explicit phases used by the unified controller."""
+
+    DISCOVER = "discover"
+    VALIDATE_INITIAL = "validate_initial"
+    DIAGNOSE = "diagnose"
+    REPAIR = "repair"
+    ESTABLISH_BASELINE = "establish_baseline"
+    DIAGNOSE_PPA = "diagnose_ppa"
+    GENERATE_OPTIMISATION = "generate_optimisation"
+    VALIDATE_CANDIDATE = "validate_candidate"
+    SELECT_BEST = "select_best"
+    TERMINATE = "terminate"
+
+
+@dataclass(frozen=True)
+class PhaseTransition:
+    """One recorded transition between explicit controller phases."""
+
+    step: int
+    from_phase: AgentPhase | None
+    to_phase: AgentPhase
+    reason: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "from_phase": self.from_phase.value if self.from_phase else None,
+            "to_phase": self.to_phase.value,
+            "reason": self.reason,
+            "details": self.details,
+        }
 
 
 @dataclass
@@ -102,6 +138,8 @@ class AgentResult:
     termination_reason: str
     output_dir: str
     trajectory: list[TrajectoryEvent] = field(default_factory=list)
+    current_phase: AgentPhase = AgentPhase.TERMINATE
+    phase_transitions: list[PhaseTransition] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,5 +148,7 @@ class AgentResult:
             "status": self.status,
             "termination_reason": self.termination_reason,
             "output_dir": self.output_dir,
+            "current_phase": self.current_phase.value,
+            "phase_transitions": [transition.to_dict() for transition in self.phase_transitions],
             "trajectory": [event.to_dict() for event in self.trajectory],
         }
