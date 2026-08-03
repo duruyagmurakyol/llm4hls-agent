@@ -57,12 +57,15 @@ def _run_autonomous_ppa(
     *,
     status_only: bool,
     max_steps: int | None,
-    config_path: Path | None = None,
 ) -> AgentResult:
-    if config_path is None:
-        config_path = _resolve(task.data["adapter"]["config"])
+    optimisation_input: TaskManifest | Path
+    if task.adapter_kind == "legacy_ppa":
+        optimisation_input = _resolve(task.data["adapter"]["config"])
+    else:
+        optimisation_input = task
+
     optimisation = run_optimisation(
-        config_path,
+        optimisation_input,
         status_only=status_only,
         max_steps=max_steps,
     )
@@ -172,36 +175,6 @@ def _initial_csim(task: TaskManifest) -> CommandResult:
     return result
 
 
-def _ppa_config(task: TaskManifest) -> dict[str, object]:
-    budgets = task.data["budgets"]
-    source = task.data["artifacts"]["source"]
-    build_file = task.data["artifacts"]["build_files"][0]
-    return {
-        "experiment_name": f"{task.task_id}_ppa",
-        "benchmark": Path(task.data["task_root"]).name,
-        "top_function": task.data["interface"]["top_function"],
-        "baseline": {
-            "source": source,
-            "tcl": build_file,
-            "project_dir": f"/tmp/llm4hls-agent/{task.task_id}_baseline",
-        },
-        "validation": {
-            "constant_loop_tail_bounds": True,
-            "preserve_diagnosed_loop_label": True,
-        },
-        "prompt_constraints": [
-            "Preserve the top-level function signature and all testbench-observed semantics.",
-            "Do not modify the supplied testbench or baseline source in place.",
-        ],
-        "output_dir": str(task.output_dir),
-        "model": task.data["model"],
-        "budget": {
-            "max_candidates": budgets["max_iterations"],
-            "max_synthesis_calls": budgets["max_synthesis_calls"],
-        },
-    }
-
-
 def _prepend_initial_csim(result: AgentResult, csim: CommandResult) -> AgentResult:
     for index, event in enumerate(result.trajectory, 2):
         event.step = index
@@ -243,15 +216,11 @@ def _run_auto(
         return _prepend_initial_csim(_run_direct_api_repair(task), csim)
 
     print("Initial CSim passed; entering PPA optimisation.", flush=True)
-    with TemporaryDirectory(prefix=f"{task.task_id}_ppa_") as temp_dir:
-        config_path = Path(temp_dir) / "optimisation.json"
-        config_path.write_text(json.dumps(_ppa_config(task), indent=2) + "\n", encoding="utf-8")
-        result = _run_autonomous_ppa(
-            task,
-            status_only=False,
-            max_steps=max_steps,
-            config_path=config_path,
-        )
+    result = _run_autonomous_ppa(
+        task,
+        status_only=False,
+        max_steps=max_steps,
+    )
     return _prepend_initial_csim(result, csim)
 
 
