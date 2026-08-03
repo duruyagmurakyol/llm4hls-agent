@@ -34,5 +34,6 @@ def generate_repair(
         max_tokens=max_tokens,
         timeout_seconds=timeout_seconds,
         thinking_budget=thinking_budget,
+        enable_thinking=False,
     )
     return clean_source(response.content), response
