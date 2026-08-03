@@ -110,14 +110,11 @@ def _cfg_parts(
     required = ("syn.top", "syn.file", "part", "clock")
     missing = [key for key in required if not hls.get(key, "").strip()]
     if missing:
-        raise ValueError(
-            f"Missing required task.cfg fields: {', '.join(missing)}"
-        )
+        raise ValueError(f"Missing required task.cfg fields: {', '.join(missing)}")
 
     cfg_dir = cfg_path.parent.resolve()
     top_name = hls["syn.top"].strip()
     source = (cfg_dir / hls["syn.file"].strip()).resolve()
-
     syn_cflags = hls.get("syn.cflags", "").strip()
     tb_cflags = hls.get("tb.cflags", "").strip()
 
@@ -140,26 +137,20 @@ def _cfg_parts(
     design = " ".join(shlex.quote(token) for token in design_tokens)
 
     auxiliaries: list[str] = []
-
     for header in sorted(source.parent.glob("*.h*")):
-        auxiliaries.append(
-            f"add_files {shlex.quote(header.resolve().as_posix())}"
-        )
+        auxiliaries.append(f"add_files {shlex.quote(header.resolve().as_posix())}")
 
     if include_testbench:
         tb_value = hls.get("tb.file", "").strip()
         if not tb_value:
             raise ValueError("task.cfg is missing tb.file")
-
         testbench = (cfg_dir / tb_value).resolve()
         tb_tokens = ["add_files", "-tb"]
         absolute_tb_cflags = absolute_cflags(tb_cflags)
         if absolute_tb_cflags:
             tb_tokens.extend(["-cflags", absolute_tb_cflags])
         tb_tokens.append(testbench.as_posix())
-        auxiliaries.append(
-            " ".join(shlex.quote(token) for token in tb_tokens)
-        )
+        auxiliaries.append(" ".join(shlex.quote(token) for token in tb_tokens))
 
     clock_match = re.fullmatch(
         r"\s*([0-9]+(?:\.[0-9]+)?)\s*ns\s*",
@@ -167,9 +158,7 @@ def _cfg_parts(
         re.IGNORECASE,
     )
     if not clock_match:
-        raise ValueError(
-            f"Unsupported task.cfg clock value: {hls['clock']}"
-        )
+        raise ValueError(f"Unsupported task.cfg clock value: {hls['clock']}")
 
     parts = [
         f"set_top {top_name}",
@@ -177,7 +166,6 @@ def _cfg_parts(
         f"set_part {hls['part'].strip()}",
         f"create_clock -period {clock_match.group(1)} -name default",
     ]
-
     return parts, design, auxiliaries, top_name
 
 
@@ -187,11 +175,7 @@ def _tcl_parts(
     include_testbench: bool,
 ) -> tuple[list[str], str, list[str], str]:
     if baseline_tcl.suffix.lower() == ".cfg":
-        return _cfg_parts(
-            baseline_tcl,
-            candidate,
-            include_testbench,
-        )
+        return _cfg_parts(baseline_tcl, candidate, include_testbench)
 
     lines = baseline_tcl.read_text(encoding="utf-8").splitlines()
     tcl_dir = baseline_tcl.parent.resolve()
@@ -333,6 +317,7 @@ def run_csim(task: TaskManifest, candidate: Path) -> dict[str, Any]:
         "evidence": [] if passed else extract_evidence(completed.output),
         "command": list(completed.command),
         "duration_seconds": completed.elapsed_seconds,
+        "timeout_seconds": completed.timeout_seconds,
         "log_path": _display_path(log_path),
         "candidate_hash": digest,
         "candidate_file": _display_path(candidate),
@@ -448,6 +433,118 @@ def parse_csynth_xml(path: Path) -> dict[str, Any]:
     }
 
 
+def _read_synthesis_reports(
+    project_dir: Path,
+    top_name: str,
+) -> tuple[dict[str, dict[str, Any]], Path | None, str | None]:
+    report_dir = project_dir / "solution1/syn/report"
+    hierarchy: dict[str, dict[str, Any]] = {}
+    parse_error: str | None = None
+    try:
+        for xml_path in sorted(report_dir.glob("*_csynth.xml")):
+            name = xml_path.name.removesuffix("_csynth.xml")
+            hierarchy[name] = {
+                "csynth_xml": str(xml_path),
+                "metrics": parse_csynth_xml(xml_path),
+            }
+    except (ET.ParseError, OSError, ValueError) as error:
+        parse_error = str(error)
+    top_report = report_dir / f"{top_name}_csynth.xml"
+    return hierarchy, top_report if top_report.is_file() else None, parse_error
+
+
+def run_synthesis(task: TaskManifest, candidate: Path) -> dict[str, Any]:
+    """Synthesise one candidate using an authoritative task manifest."""
+    candidate = candidate.resolve()
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Candidate not found: {candidate}")
+
+    build_files = task.data["artifacts"].get("build_files", [])
+    if not build_files:
+        raise ValueError("Task manifest must define artifacts.build_files")
+
+    build_file = _resolve(build_files[0])
+    parts, design, headers, top_name = _tcl_parts(build_file, candidate, False)
+    set_top, open_solution, set_part, create_clock = parts
+    digest = _candidate_hash(candidate)
+    output_dir = _resolve(task.output_dir)
+    run_dir = output_dir / "synthesis" / digest[:12]
+    project_dir = TMP_ROOT / digest[:12] / "synthesis"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(project_dir, ignore_errors=True)
+    project_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    generated_tcl = run_dir / "run_synthesis.tcl"
+    generated_tcl.write_text(
+        "\n".join(
+            [
+                f'open_project -reset "{project_dir.resolve().as_posix()}"',
+                set_top,
+                design,
+                *headers,
+                open_solution,
+                set_part,
+                create_clock,
+                "csynth_design",
+                "exit",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    log_path = run_dir / "vitis_synthesis.log"
+    completed = _run_vitis(
+        generated_tcl,
+        build_file.parent,
+        log_path,
+        _timeout(task.data, "synthesis_seconds", DEFAULT_SYNTHESIS_TIMEOUT_SECONDS),
+    )
+    hierarchy, top_report, parse_error = _read_synthesis_reports(project_dir, top_name)
+    passed = completed.passed and top_report is not None and parse_error is None
+
+    if passed:
+        failure_class = "none"
+        evidence: list[str] = []
+    elif completed.timed_out:
+        failure_class = "synthesis_timeout"
+        evidence = extract_evidence(completed.output)
+    elif parse_error:
+        failure_class = "report_parse"
+        evidence = [parse_error]
+    elif completed.passed:
+        failure_class = "missing_synthesis_report"
+        evidence = [f"Missing top synthesis report for {top_name}"]
+    else:
+        failure_class = "synthesis_failed"
+        evidence = extract_evidence(completed.output)
+
+    report = {
+        "passed": passed,
+        "timed_out": completed.timed_out,
+        "return_code": completed.return_code,
+        "failure_class": failure_class,
+        "evidence": evidence,
+        "command": list(completed.command),
+        "duration_seconds": completed.elapsed_seconds,
+        "timeout_seconds": completed.timeout_seconds,
+        "log_path": _display_path(log_path),
+        "candidate_hash": digest,
+        "candidate_file": _display_path(candidate),
+        "generated_tcl": _display_path(generated_tcl),
+        "project_dir": str(project_dir),
+        "top_function": top_name,
+        "top_csynth_xml": str(top_report) if top_report else None,
+        "metrics": hierarchy.get(top_name, {}).get("metrics", {}),
+        "hierarchical_reports": hierarchy,
+        "parse_error": parse_error,
+        "synthesis_run": True,
+        "baseline_modified": False,
+    }
+    write_json(run_dir / "result.json", report)
+    return report
+
+
 def run_candidate_synthesis(
     config_path: Path,
     candidate_index: int = 1,
@@ -499,21 +596,7 @@ def run_candidate_synthesis(
         timed_out = completed.timed_out
         elapsed_seconds = completed.elapsed_seconds
 
-    report_dir = project_dir / "solution1/syn/report"
-    hierarchy: dict[str, dict[str, Any]] = {}
-    parse_error: str | None = None
-    try:
-        for xml_path in sorted(report_dir.glob("*_csynth.xml")):
-            name = xml_path.name.removesuffix("_csynth.xml")
-            hierarchy[name] = {
-                "csynth_xml": str(xml_path),
-                "metrics": parse_csynth_xml(xml_path),
-            }
-    except (ET.ParseError, OSError, ValueError) as error:
-        parse_error = str(error)
-    top_report: Path | None = report_dir / f"{top_name}_csynth.xml"
-    if not top_report.is_file():
-        top_report = None
+    hierarchy, top_report, parse_error = _read_synthesis_reports(project_dir, top_name)
     report = {
         "candidate_index": candidate_index,
         "candidate_file": str(candidate.relative_to(REPO_ROOT)),
