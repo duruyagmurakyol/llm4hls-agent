@@ -84,9 +84,24 @@ def _is_frequency_compliant(record: dict[str, Any]) -> bool:
     direct = record.get("meets_frequency_requirement")
     if isinstance(direct, bool):
         return direct
+
     metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
     nested = metrics.get("meets_minimum_frequency")
-    return nested is True
+    if isinstance(nested, bool):
+        return nested
+
+    minimum = metrics.get("minimum_frequency_mhz")
+    frequency = metrics.get("frequency_mhz")
+    if isinstance(minimum, (int, float)) and not isinstance(minimum, bool):
+        return bool(
+            isinstance(frequency, (int, float))
+            and not isinstance(frequency, bool)
+            and frequency >= minimum
+        )
+
+    # Compatibility for archived summaries produced before FPT-603. New
+    # evaluator records always carry either a direct verdict or a minimum.
+    return True
 
 
 def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[str, Any]:
