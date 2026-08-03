@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent.config import load_task
+from agent.config import TaskManifest, load_task
 from agent.onboarding import discover_benchmark, onboard_benchmark
 from agent.optimise.config_source import InMemoryConfig, as_config_source, ppa_config_from_task
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
@@ -13,12 +13,13 @@ from agent.optimise.generate import extract_cpp, generate_candidate
 from agent.optimise.runner import OptimisationRunResult, _status_summary, run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
-from agent.tools.command_runner import run_command
+from agent.tools.command_runner import CommandResult, run_command
 from agent.tools.synthesis import (
     ensure_baseline_synthesis,
     parse_csynth_xml,
     run_candidate_csim,
     run_candidate_synthesis,
+    run_csim,
 )
 from agent.tools.validation import (
     _complete_partition_issues,
@@ -35,6 +36,7 @@ def test_clean_packages_import() -> None:
     assert classify_failure("FAIL index=0 expected=1 actual=0") == "functional"
     assert callable(run_repair)
     assert callable(validate_ppa_candidate)
+    assert callable(run_csim)
     assert callable(run_candidate_csim)
     assert callable(run_candidate_synthesis)
     assert callable(ensure_baseline_synthesis)
@@ -95,6 +97,62 @@ def test_command_runner_records_start_failure(tmp_path: Path) -> None:
     assert result.return_code is None
     assert result.exception is not None
     assert "FileNotFoundError" in result.exception
+
+
+def test_run_csim_returns_structured_result(tmp_path: Path, monkeypatch) -> None:
+    benchmark = tmp_path / "benchmark"
+    (benchmark / "src").mkdir(parents=True)
+    (benchmark / "testbench").mkdir()
+    (benchmark / "src" / "kernel.cpp").write_text("void kernel() {}\n", encoding="utf-8")
+    (benchmark / "src" / "kernel.h").write_text("void kernel();\n", encoding="utf-8")
+    (benchmark / "testbench" / "kernel_tb.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+    build_file = benchmark / "task.cfg"
+    build_file.write_text(
+        "[hls]\n"
+        "syn.file=src/kernel.cpp\n"
+        "syn.top=kernel\n"
+        "tb.file=testbench/kernel_tb.cpp\n"
+        "part=xczu3eg-sfvc784-2-e\n"
+        "clock=10ns\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.cpp"
+    candidate.write_text("void kernel() {}\n", encoding="utf-8")
+    task = TaskManifest(
+        path=tmp_path / "task.json",
+        data={
+            "task_id": "test_csim",
+            "artifacts": {"build_files": [str(build_file)]},
+            "output_dir": str(tmp_path / "output"),
+        },
+    )
+
+    def fake_vitis(tcl: Path, cwd: Path, log_path: Path, timeout_seconds: int) -> CommandResult:
+        output = f"Compiling {candidate.name}\n"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(output, encoding="utf-8")
+        return CommandResult(
+            command=("vitis-run", "--mode", "hls", "--tcl", str(tcl)),
+            return_code=0,
+            output=output,
+            cwd=str(cwd),
+            timed_out=False,
+            timeout_seconds=timeout_seconds,
+            elapsed_seconds=0.1,
+        )
+
+    monkeypatch.setattr("agent.tools.synthesis._run_vitis", fake_vitis)
+    report = run_csim(task, candidate)
+
+    assert report["passed"]
+    assert report["timed_out"] is False
+    assert report["return_code"] == 0
+    assert report["failure_class"] == "none"
+    assert report["evidence"] == []
+    assert report["command"][0] == "vitis-run"
+    assert report["duration_seconds"] == 0.1
+    assert len(report["candidate_hash"]) == 64
+    assert Path(report["log_path"]).is_file()
 
 
 def test_autonomous_manifests_have_no_secondary_config() -> None:
