@@ -9,6 +9,7 @@ from agent.repair.output_validation import (
     InvalidModelOutputError,
     validate_response_from_prompt,
 )
+from agent.repair.prompt import build_strict_repair_system_prompt
 
 
 def clean_source(text: str) -> str:
@@ -30,9 +31,10 @@ def generate_repair(
     thinking_budget: int | None = None,
 ):
     """Generate and pre-validate one repaired source before it can be written."""
+    effective_system_prompt = build_strict_repair_system_prompt(system_prompt)
     response = complete(
         model=model,
-        system_prompt=system_prompt,
+        system_prompt=effective_system_prompt,
         user_prompt=user_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
