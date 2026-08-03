@@ -18,6 +18,14 @@ REQUIRED_BUDGETS = {
     "max_model_calls",
 }
 
+REQUIRED_REPAIR_FIELDS = {
+    "benchmark_source",
+    "editable_files",
+    "protected_files",
+    "host_validation",
+    "independent_validation",
+}
+
 
 @dataclass(frozen=True)
 class TaskManifest:
@@ -45,6 +53,42 @@ def load_task(path: Path) -> TaskManifest:
     data = json.loads(resolved.read_text(encoding="utf-8"))
     validate_task(data)
     return TaskManifest(path=resolved, data=data)
+
+
+def _require_command(section: dict[str, Any], key: str, field: str) -> None:
+    command = section.get(key)
+    if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
+        raise ValueError(f"{field}.{key} must be a non-empty list of strings")
+
+
+def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -> None:
+    if "config" in adapter:
+        raise ValueError("direct_api_repair must be configured directly in the task manifest")
+
+    repair = data.get("repair")
+    if not isinstance(repair, dict):
+        raise ValueError("repair must be an object for direct_api_repair tasks")
+
+    missing = sorted(REQUIRED_REPAIR_FIELDS - repair.keys())
+    if missing:
+        raise ValueError("Missing repair fields: " + ", ".join(missing))
+
+    for key in ("editable_files", "protected_files"):
+        files = repair[key]
+        if not isinstance(files, list) or not files or not all(isinstance(item, str) and item for item in files):
+            raise ValueError(f"repair.{key} must be a non-empty list of strings")
+
+    host = repair["host_validation"]
+    if not isinstance(host, dict):
+        raise ValueError("repair.host_validation must be an object")
+    _require_command(host, "command", "repair.host_validation")
+    _require_command(host, "run_command", "repair.host_validation")
+
+    independent = repair["independent_validation"]
+    if not isinstance(independent, dict):
+        raise ValueError("repair.independent_validation must be an object")
+    if independent.get("enabled", False):
+        _require_command(independent, "command", "repair.independent_validation")
 
 
 def validate_task(data: dict[str, Any]) -> None:
@@ -76,3 +120,6 @@ def validate_task(data: dict[str, Any]) -> None:
     adapter = data["adapter"]
     if not isinstance(adapter, dict) or not adapter.get("kind"):
         raise ValueError("adapter.kind is required")
+
+    if adapter["kind"] == "direct_api_repair":
+        _validate_direct_api_repair(data, adapter)
