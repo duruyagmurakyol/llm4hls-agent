@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.config_source import ConfigInput, ConfigSource, as_config_source
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate
 from agent.optimise.evaluate import evaluate_experiment
@@ -29,7 +30,7 @@ class OptimisationRunResult:
     trajectory: list[dict[str, Any]]
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _load_json(path: ConfigSource | Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"JSON file not found: {path}")
     return json.loads(path.read_text(encoding="utf-8"))
@@ -105,8 +106,8 @@ def _status_summary(config: dict[str, Any], output_dir: Path) -> tuple[str, dict
     return f"status_{status}", summary
 
 
-def _initialise(config_path: Path, output_dir: Path) -> None:
-    baseline = ensure_baseline_synthesis(config_path)
+def _initialise(config_source: ConfigSource, config: dict[str, Any], output_dir: Path) -> None:
+    baseline = ensure_baseline_synthesis(config_source)
     if baseline.get("passed") is not True:
         raise RuntimeError("Baseline synthesis failed.")
     required = (
@@ -117,61 +118,80 @@ def _initialise(config_path: Path, output_dir: Path) -> None:
     )
     if all(path.is_file() for path in required):
         return
-    completed = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "run_ppa_optimisation.py"), str(config_path)],
-        cwd=REPO_ROOT,
-        check=False,
+
+    if isinstance(config_source, Path):
+        completed = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "run_ppa_optimisation.py"), str(config_source)],
+            cwd=REPO_ROOT,
+            check=False,
+        )
+        if completed.returncode != 0 or not all(path.is_file() for path in required):
+            raise RuntimeError("Baseline diagnosis and initial prompt generation failed.")
+        return
+
+    from scripts.run_ppa_optimisation import (
+        analyse_source_causes,
+        diagnose_existing_baseline,
+        generate_optimisation_prompt,
+        map_target_to_source,
+        validate_config,
     )
-    if completed.returncode != 0 or not all(path.is_file() for path in required):
+
+    validate_config(config, REPO_ROOT)
+    diagnosis = diagnose_existing_baseline(config, REPO_ROOT)
+    target = map_target_to_source(config, REPO_ROOT, diagnosis)
+    cause = analyse_source_causes(config, REPO_ROOT, target)
+    generate_optimisation_prompt(config, REPO_ROOT, diagnosis, target, cause)
+    if not all(path.is_file() for path in required):
         raise RuntimeError("Baseline diagnosis and initial prompt generation failed.")
 
 
 def _prepare_next_prompt(
-    config_path: Path,
+    config_source: ConfigSource,
     previous: dict[str, Any],
     previous_index: int,
     next_index: int,
 ) -> None:
     if previous.get("verdict") in {"keep_pareto_candidate", "accept_dominates_baseline"}:
-        prepare_tradeoff_prompt(config_path, previous_index, next_index)
+        prepare_tradeoff_prompt(config_source, previous_index, next_index)
     else:
-        prepare_refinement_prompt(config_path, previous_index, next_index)
+        prepare_refinement_prompt(config_source, previous_index, next_index)
 
 
 def _evaluate_candidate(
-    config_path: Path,
+    config_source: ConfigSource,
     index: int,
     trajectory: list[dict[str, Any]],
 ) -> dict[str, Any]:
     print(f"\n=== Evaluate candidate {index:03d} ===", flush=True)
 
-    static = validate_ppa_candidate(config_path, index)
+    static = validate_ppa_candidate(config_source, index)
     trajectory.append({"candidate": index, "stage": "static_validation", "passed": static["passed"]})
     failed_checks = [name for name, passed in (static.get("checks") or {}).items() if not passed]
     _print_stage(index, "static validation", static["passed"], ", ".join(failed_checks) or None)
     if not static["passed"]:
-        summary = evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_source)
         _print_verdict(summary, index)
         return summary
 
-    duplicate = check_candidate_duplicate(config_path, index)
+    duplicate = check_candidate_duplicate(config_source, index)
     trajectory.append({"candidate": index, "stage": "duplicate_check", "passed": duplicate["passed"]})
     detail = f"duplicates candidate_{duplicate['duplicate_of']:03d}" if not duplicate["passed"] else None
     _print_stage(index, "duplicate check", duplicate["passed"], detail)
     if not duplicate["passed"]:
-        summary = evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_source)
         _print_verdict(summary, index)
         return summary
 
-    csim = run_candidate_csim(config_path, index)
+    csim = run_candidate_csim(config_source, index)
     trajectory.append({"candidate": index, "stage": "csim", "passed": csim["passed"]})
     _print_stage(index, "CSim", csim["passed"], f"return code {csim.get('return_code')}")
     if not csim["passed"]:
-        summary = evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_source)
         _print_verdict(summary, index)
         return summary
 
-    synthesis = run_candidate_synthesis(config_path, index)
+    synthesis = run_candidate_synthesis(config_source, index)
     trajectory.append({
         "candidate": index,
         "stage": "synthesis",
@@ -184,19 +204,19 @@ def _evaluate_candidate(
         else f"return code {synthesis.get('return_code')}"
     )
     _print_stage(index, "synthesis", synthesis["passed"], synth_detail)
-    summary = evaluate_experiment(config_path)
+    summary = evaluate_experiment(config_source)
     _print_verdict(summary, index)
     return summary
 
 
 def run_optimisation(
-    config_path: Path,
+    config_input: ConfigInput,
     *,
     status_only: bool = False,
     max_steps: int | None = None,
 ) -> OptimisationRunResult:
-    config_path = config_path.resolve()
-    config = _load_json(config_path)
+    config_source = as_config_source(config_input)
+    config = _load_json(config_source)
     output_dir = REPO_ROOT / config["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
     trajectory: list[dict[str, Any]] = []
@@ -205,13 +225,13 @@ def run_optimisation(
         status, summary = _status_summary(config, output_dir)
         return OptimisationRunResult(True, status, "status_requested", summary, trajectory)
 
-    _initialise(config_path, output_dir)
-    summary = evaluate_experiment(config_path)
+    _initialise(config_source, config, output_dir)
+    summary = evaluate_experiment(config_source)
     maximum_candidates = int(config["budget"]["max_candidates"])
     step_limit = max_steps if max_steps is not None else maximum_candidates
 
     for _ in range(step_limit):
-        summary = evaluate_experiment(config_path)
+        summary = evaluate_experiment(config_source)
         budget = summary["budget"]
         if budget["synthesis_calls_remaining"] <= 0:
             return OptimisationRunResult(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
@@ -227,21 +247,21 @@ def run_optimisation(
                 csim_path = output_dir / f"candidate_{latest:03d}_csim_validation.json"
                 synthesis_path = output_dir / f"candidate_{latest:03d}_synthesis.json"
                 if not static_path.is_file():
-                    summary = _evaluate_candidate(config_path, latest, trajectory)
+                    summary = _evaluate_candidate(config_source, latest, trajectory)
                     continue
                 if _load_json(static_path).get("passed") is not True:
-                    summary = evaluate_experiment(config_path)
+                    summary = evaluate_experiment(config_source)
                     _print_verdict(summary, latest)
                     continue
                 if not csim_path.is_file() or _load_json(csim_path).get("passed") is not True:
-                    summary = _evaluate_candidate(config_path, latest, trajectory)
+                    summary = _evaluate_candidate(config_source, latest, trajectory)
                     continue
                 if not synthesis_path.is_file():
                     print(f"\n=== Resume candidate {latest:03d} synthesis ===", flush=True)
-                    synthesis = run_candidate_synthesis(config_path, latest)
+                    synthesis = run_candidate_synthesis(config_source, latest)
                     trajectory.append({"candidate": latest, "stage": "synthesis", "passed": synthesis["passed"], "timed_out": synthesis.get("timed_out", False)})
                     _print_stage(latest, "synthesis", synthesis["passed"])
-                    summary = evaluate_experiment(config_path)
+                    summary = evaluate_experiment(config_source)
                     _print_verdict(summary, latest)
                     continue
             index = latest + 1
@@ -251,15 +271,15 @@ def run_optimisation(
             if not completed:
                 return OptimisationRunResult(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
             previous = completed[-1]
-            _prepare_next_prompt(config_path, previous, int(previous["candidate_index"]), index)
+            _prepare_next_prompt(config_source, previous, int(previous["candidate_index"]), index)
 
         model_calls = len(list(output_dir.glob("candidate_*_model_metadata.json")))
         if model_calls >= maximum_candidates:
             return OptimisationRunResult(True, "terminated_budget", "model_call_budget_exhausted", summary, trajectory)
-        generate_candidate(config_path, index)
+        generate_candidate(config_source, index)
         trajectory.append({"candidate": index, "stage": "generation", "passed": True})
         _print_stage(index, "generation", True)
-        summary = _evaluate_candidate(config_path, index, trajectory)
+        summary = _evaluate_candidate(config_source, index, trajectory)
 
         record = _record(summary, index)
         if record and record.get("verdict") == "accept_dominates_baseline":
