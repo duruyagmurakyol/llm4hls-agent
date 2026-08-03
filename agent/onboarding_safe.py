@@ -29,11 +29,14 @@ DEFAULT_BUDGETS = {
 }
 
 
-def _repo_relative(path: Path) -> str:
+def _portable_path(path: Path) -> str:
+    """Use repository-relative paths locally and absolute paths for mounted tasks."""
+
+    resolved = path.resolve()
     try:
-        return str(path.resolve().relative_to(REPO_ROOT))
-    except ValueError as error:
-        raise ValueError(f"Benchmark file must be inside the repository: {path}") from error
+        return str(resolved.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(resolved)
 
 
 def _root_relative(path: Path, root: Path) -> str:
@@ -64,7 +67,7 @@ def _canonical_source(benchmark: DiscoveredBenchmark) -> Path:
     if len(equivalents) == 1:
         return equivalents[0]
     if len(equivalents) > 1:
-        rendered = ", ".join(_repo_relative(path) for path in equivalents)
+        rendered = ", ".join(_portable_path(path) for path in equivalents)
         raise ValueError(
             "The configured source is outside the benchmark and has multiple identical copies inside it: "
             + rendered
@@ -115,12 +118,12 @@ def resolve_benchmark(root: Path) -> TaskManifest:
     data = {
         "task_id": task_id,
         "task_kind": "unknown",
-        "task_root": _repo_relative(root),
+        "task_root": _portable_path(root),
         "artifacts": {
-            "source": _repo_relative(source),
-            "testbench": [_repo_relative(path) for path in benchmark.testbenches],
-            "headers": [_repo_relative(path) for path in benchmark.headers],
-            "build_files": [_repo_relative(benchmark.tcl)],
+            "source": _portable_path(source),
+            "testbench": [_portable_path(path) for path in benchmark.testbenches],
+            "headers": [_portable_path(path) for path in benchmark.headers],
+            "build_files": [_portable_path(benchmark.tcl)],
         },
         "interface": {
             "top_function": benchmark.top_function,
@@ -142,7 +145,7 @@ def resolve_benchmark(root: Path) -> TaskManifest:
         "budgets": dict(DEFAULT_BUDGETS),
         "model": dict(DEFAULT_MODEL),
         "repair": {
-            "benchmark_source": _repo_relative(root),
+            "benchmark_source": _portable_path(root),
             "editable_files": [source_relative],
             "protected_files": protected_files,
             "context_files": [*header_relative, *testbench_relative],
