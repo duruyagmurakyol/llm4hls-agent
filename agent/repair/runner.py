@@ -54,7 +54,12 @@ def _validate(config: dict[str, Any], workspace: Path) -> tuple[ValidationResult
     ), output
 
 
-def _prompts(config: dict[str, Any], workspace: Path, validation: ValidationResult) -> tuple[str, str]:
+def _prompts(
+    config: dict[str, Any],
+    workspace: Path,
+    validation: ValidationResult,
+    feedback: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     editable = str(config["editable_files"][0])
     source = (workspace / editable).read_text(encoding="utf-8")
     contexts = []
@@ -66,19 +71,75 @@ def _prompts(config: dict[str, Any], workspace: Path, validation: ValidationResu
         "of the editable source file. Do not use Markdown fences, explanations, JSON, or patches. "
         "Preserve the declared top-function interface and make the smallest necessary repair."
     )
+    retry = ""
+    if feedback:
+        evidence = "\n".join(str(item) for item in feedback.get("evidence", []))
+        retry = (
+            f"Previous repair attempt {feedback.get('attempt')} failed.\n"
+            f"Failed stage: {feedback.get('stage', 'validation')}\n"
+            f"Failure class: {feedback.get('failure_class', 'unknown')}\n"
+            f"Failure evidence:\n{evidence or 'No concise evidence was extracted.'}\n"
+            "The editable file below is the previous candidate. Correct it without repeating the failed change.\n\n"
+        )
     user = (
-        f"Failure class: {diagnosis['failure_class']}\n"
-        f"Failure evidence:\n" + "\n".join(validation.evidence) + "\n\n"
-        f"EDITABLE FILE: {editable}\n```\n{source}\n```\n\n"
+        retry
+        + f"Failure class: {diagnosis['failure_class']}\n"
+        + "Failure evidence:\n"
+        + "\n".join(validation.evidence)
+        + "\n\n"
+        + f"EDITABLE FILE: {editable}\n```\n{source}\n```\n\n"
         + "\n\n".join(contexts)
         + "\n\nReturn only the full repaired editable file."
     )
     return system, user
 
 
-def run_repair(
+def _failure_feedback(
+    attempt: int,
+    *,
+    scope_ok: bool,
+    protected_unchanged: bool,
+    post_validation: ValidationResult,
+    independent_code: int | None,
+    independent_output: str,
+) -> dict[str, Any]:
+    if not scope_ok:
+        return {
+            "attempt": attempt,
+            "stage": "editable_scope",
+            "failure_class": "scope_violation",
+            "evidence": ["The response modified a file outside repair.editable_files."],
+        }
+    if not protected_unchanged:
+        return {
+            "attempt": attempt,
+            "stage": "protected_files",
+            "failure_class": "protected_file_modified",
+            "evidence": ["A protected source, header, testbench, or build file changed."],
+        }
+    if not post_validation.passed:
+        return {
+            "attempt": attempt,
+            "stage": "host_validation",
+            "failure_class": post_validation.failure_class,
+            "evidence": list(post_validation.evidence),
+        }
+    return {
+        "attempt": attempt,
+        "stage": "independent_validation",
+        "failure_class": classify_failure(independent_output),
+        "evidence": extract_evidence(independent_output),
+        "return_code": independent_code,
+    }
+
+
+def _run_repair_once(
     config_source: dict[str, Any] | str | Path,
     *,
+    run_dir: Path | None = None,
+    attempt: int = 1,
+    seed_source: Path | None = None,
+    feedback: dict[str, Any] | None = None,
     keep_workspace: bool = False,
     budget: BudgetState | None = None,
 ) -> tuple[bool, Path, dict[str, Any]]:
@@ -86,14 +147,14 @@ def run_repair(
     if config.get("repair_mode") != "direct_api":
         raise ValueError("Config must use repair_mode=direct_api")
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     experiment_id = str(config["experiment_id"])
-    run_dir = REPO_ROOT / "results" / "experiments" / experiment_id / timestamp
+    run_dir = run_dir or REPO_ROOT / "results" / "experiments" / experiment_id / timestamp
     workspace = run_dir / "workspace"
     benchmark_source = REPO_ROOT / config["benchmark_source"]
     if not benchmark_source.is_dir():
         raise FileNotFoundError(f"Benchmark source not found: {benchmark_source}")
-    run_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(benchmark_source, workspace)
     fault_metadata = workspace / "fault.txt"
     if fault_metadata.exists():
@@ -102,22 +163,24 @@ def run_repair(
     editable = [str(x) for x in config["editable_files"]]
     protected = [str(x) for x in config["protected_files"]]
     tracked = editable + protected
+    if seed_source is not None:
+        shutil.copy2(seed_source, workspace / editable[0])
+
     before_hashes = _hashes(workspace, tracked)
     before_source = (workspace / editable[0]).read_text(encoding="utf-8")
     (run_dir / "before.cpp").write_text(before_source, encoding="utf-8")
 
     pre_validation, pre_output = _validate(config, workspace)
     (run_dir / "host_validation_before.log").write_text(pre_output, encoding="utf-8")
-    system_prompt, user_prompt = _prompts(config, workspace, pre_validation)
+    system_prompt, user_prompt = _prompts(config, workspace, pre_validation, feedback)
     (run_dir / "system_prompt.txt").write_text(system_prompt + "\n", encoding="utf-8")
     (run_dir / "prompt.txt").write_text(user_prompt + "\n", encoding="utf-8")
 
     thinking_budget_value = config.get("thinking_budget")
-    stage = "repair_generation"
+    stage = f"repair_attempt_{attempt:03d}_generation"
     if budget is not None:
-        budget.charge_iteration(stage="repair_iteration")
+        budget.charge_iteration(stage=f"repair_attempt_{attempt:03d}")
         budget.charge_model_call(stage=stage)
-
     try:
         repaired, response = generate_repair(
             model=str(config["model"]),
@@ -132,7 +195,6 @@ def run_repair(
         if budget is not None:
             budget.update_last_event(success=False)
         raise
-
     if budget is not None:
         budget.update_last_event(success=True)
         budget.record_model_tokens(
@@ -149,33 +211,53 @@ def run_repair(
     modified = [name for name in tracked if before_hashes[name] != after_hashes[name]]
     protected_unchanged = all(before_hashes[name] == after_hashes[name] for name in protected)
     scope_ok = set(modified).issubset(set(editable))
-    diff = "".join(difflib.unified_diff(
-        before_source.splitlines(keepends=True), repaired.splitlines(keepends=True),
-        fromfile=f"before/{editable[0]}", tofile=f"after/{editable[0]}",
-    ))
+    diff = "".join(
+        difflib.unified_diff(
+            before_source.splitlines(keepends=True),
+            repaired.splitlines(keepends=True),
+            fromfile=f"before/{editable[0]}",
+            tofile=f"after/{editable[0]}",
+        )
+    )
     (run_dir / "repair.diff").write_text(diff, encoding="utf-8")
-    changed_lines = sum(1 for line in diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---")))
+    changed_lines = sum(
+        1 for line in diff.splitlines()
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    )
 
     post_validation, post_output = _validate(config, workspace)
     (run_dir / "host_validation_after.log").write_text(post_output, encoding="utf-8")
 
     independent = config["independent_validation"]
     independent_code: int | None = None
+    independent_output = ""
     if independent.get("enabled", False):
-        validation_stage = "repair_independent_validation"
+        validation_stage = f"repair_attempt_{attempt:03d}_independent_validation"
         if budget is not None:
             budget.charge_csim(stage=validation_stage)
         command = [str(x).replace("{workspace}", str(workspace)) for x in independent["command"]]
         process = run_command(command, cwd=REPO_ROOT, echo=False)
         independent_code = process.return_code
+        independent_output = process.output
         if budget is not None:
             budget.update_last_event(success=process.passed)
-        (run_dir / "independent_validation.log").write_text(process.output, encoding="utf-8")
+        (run_dir / "independent_validation.log").write_text(independent_output, encoding="utf-8")
 
+    independent_passed = independent_code == 0 if independent.get("enabled", False) else True
+    passed = scope_ok and protected_unchanged and post_validation.passed and independent_passed
+    failure = None if passed else _failure_feedback(
+        attempt,
+        scope_ok=scope_ok,
+        protected_unchanged=protected_unchanged,
+        post_validation=post_validation,
+        independent_code=independent_code,
+        independent_output=independent_output,
+    )
     result = {
-        "schema_version": 3,
+        "schema_version": 4,
         "experiment_id": experiment_id,
         "timestamp_utc": timestamp,
+        "attempt": attempt,
         "repair_mode": "direct_api",
         "provider": "siliconflow",
         "model": config["model"],
@@ -192,32 +274,41 @@ def run_repair(
         "changed_line_count": changed_lines,
         "tokens_per_changed_line": response.total_tokens / changed_lines if response.total_tokens is not None and changed_lines else None,
         "post_host_validation_passed": post_validation.passed,
-        "independent_validation_passed": independent_code == 0 if independent_code is not None else None,
+        "independent_validation_passed": independent_passed,
         "repair_diff_present": bool(diff.strip()),
+        "passed": passed,
+        "feedback": failure,
     }
     write_json(run_dir / "result.json", result)
-
     if not keep_workspace:
         shutil.rmtree(workspace)
-
-    passed = (
-        not pre_validation.passed
-        and scope_ok
-        and protected_unchanged
-        and post_validation.passed
-        and result["independent_validation_passed"] is True
-    )
     return passed, run_dir, result
 
 
+def run_repair(
+    config_source: dict[str, Any] | str | Path,
+    *,
+    keep_workspace: bool = False,
+    budget: BudgetState | None = None,
+) -> tuple[bool, Path, dict[str, Any]]:
+    from agent.repair.retry import run_repair_loop
+
+    return run_repair_loop(
+        config_source,
+        keep_workspace=keep_workspace,
+        budget=budget,
+    )
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run one direct-API HLS repair task.")
+    parser = argparse.ArgumentParser(description="Run a direct-API HLS repair task.")
     parser.add_argument("config", type=Path)
     parser.add_argument("--keep-workspace", action="store_true")
     args = parser.parse_args()
     passed, run_dir, result = run_repair(args.config, keep_workspace=args.keep_workspace)
     print(f"Experiment: {result['experiment_id']}")
     print(f"Model: {result['model']}")
+    print(f"Attempts: {result['attempt_count']}")
     print(f"Failure class: {result['failure_class']}")
     print(f"Tokens: {result['tokens_used']} (input={result['input_tokens']}, output={result['output_tokens']})")
     print(f"Latency: {result['latency_seconds']:.2f}s")
