@@ -13,6 +13,7 @@ from agent.optimise.generate import extract_cpp, generate_candidate
 from agent.optimise.runner import OptimisationRunResult, _status_summary, run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import SynthesisMetrics
+from agent.tools.command_runner import run_command
 from agent.tools.synthesis import (
     ensure_baseline_synthesis,
     parse_csynth_xml,
@@ -47,6 +48,53 @@ def test_clean_packages_import() -> None:
     assert callable(discover_benchmark)
     assert callable(onboard_benchmark)
     assert OptimisationRunResult.__dataclass_fields__
+
+
+def test_command_runner_records_execution(tmp_path: Path) -> None:
+    result = run_command(
+        ["/bin/sh", "-c", "printf ok"],
+        cwd=tmp_path,
+        echo=False,
+        timeout_seconds=2,
+    )
+
+    assert result.passed
+    assert result.output == "ok"
+    assert result.cwd == str(tmp_path.resolve())
+    assert result.environment is None
+    assert result.timed_out is False
+    assert result.return_code == 0
+    assert result.exception is None
+    assert result.elapsed_seconds >= 0
+
+
+def test_command_runner_records_timeout(tmp_path: Path) -> None:
+    result = run_command(
+        ["/bin/sh", "-c", "printf start; sleep 5"],
+        cwd=tmp_path,
+        echo=False,
+        timeout_seconds=0.1,
+    )
+
+    assert not result.passed
+    assert result.timed_out
+    assert "start" in result.output
+    assert result.exception is not None
+    assert "TimeoutExpired" in result.exception
+
+
+def test_command_runner_records_start_failure(tmp_path: Path) -> None:
+    result = run_command(
+        ["missing-llm4hls-command"],
+        cwd=tmp_path,
+        echo=False,
+        timeout_seconds=1,
+    )
+
+    assert not result.passed
+    assert result.return_code is None
+    assert result.exception is not None
+    assert "FileNotFoundError" in result.exception
 
 
 def test_autonomous_manifests_have_no_secondary_config() -> None:
