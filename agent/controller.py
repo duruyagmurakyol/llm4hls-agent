@@ -58,8 +58,10 @@ def _write_budget_summary(task: TaskManifest, budget: BudgetState) -> Path:
 
 
 def _phase_for_stage(stage: str) -> AgentPhase | None:
-    if stage == "initial_csim":
+    if stage in {"initial_csim", "initial_synthesis", "initial_cosim"}:
         return AgentPhase.VALIDATE_INITIAL
+    if stage == "initial_baseline":
+        return AgentPhase.ESTABLISH_BASELINE
     if stage == "repair":
         return AgentPhase.REPAIR
     if stage in {"post_repair_synthesis", "post_repair_cosim"}:
@@ -82,6 +84,7 @@ def _phase_event_details(event: TrajectoryEvent) -> dict[str, object]:
         "failure_class",
         "return_code",
         "timed_out",
+        "route",
     ):
         if key in event.details:
             details[key] = event.details[key]
@@ -401,41 +404,114 @@ def _run_direct_api_repair(
     )
 
 
-def _initial_csim(task: TaskManifest, budget: BudgetState) -> dict[str, object]:
-    budget.require("csim_calls")
-    result = run_csim(task, _resolve(task.data["artifacts"]["source"]))
-    budget.charge_csim(
-        stage="initial_csim",
-        success=result["passed"] is True,
-        timed_out=bool(result["timed_out"]),
+def _tool_event(stage: str, result: dict[str, object]) -> TrajectoryEvent:
+    details = {
+        key: result[key]
+        for key in (
+            "command",
+            "return_code",
+            "timed_out",
+            "failure_class",
+            "evidence",
+            "duration_seconds",
+            "log_path",
+            "candidate_hash",
+            "metrics",
+            "reports",
+        )
+        if key in result
+    }
+    return TrajectoryEvent(
+        step=0,
+        stage=stage,
+        status="passed" if result["passed"] else "failed",
+        details=details,
     )
-    return result
 
 
-def _prepend_initial_csim(
-    result: AgentResult,
-    csim: dict[str, object],
-) -> AgentResult:
-    for index, event in enumerate(result.trajectory, 2):
-        event.step = index
-    result.trajectory.insert(
-        0,
+def _detect_initial_condition(
+    task: TaskManifest,
+    budget: BudgetState,
+) -> tuple[str, list[TrajectoryEvent]]:
+    """Validate the submitted source and return either repair or optimise."""
+    candidate = _resolve(task.data["artifacts"]["source"])
+    trajectory: list[TrajectoryEvent] = []
+
+    budget.charge_csim(stage="initial_csim")
+    try:
+        csim = run_csim(task, candidate)
+    except Exception:
+        budget.update_last_event(success=False)
+        raise
+    budget.update_last_event(
+        success=csim["passed"] is True,
+        timed_out=bool(csim["timed_out"]),
+        details={"candidate_hash": csim["candidate_hash"], "log_path": csim["log_path"]},
+    )
+    trajectory.append(_tool_event("initial_csim", csim))
+    if not csim["passed"]:
+        trajectory[-1].details.update({"route": "repair", "decision_reason": "csim_failed"})
+        return "repair", trajectory
+
+    budget.charge_synthesis(stage="initial_synthesis")
+    try:
+        synthesis = run_synthesis(task, candidate)
+    except Exception:
+        budget.update_last_event(success=False)
+        raise
+    budget.update_last_event(
+        success=synthesis["passed"] is True,
+        timed_out=bool(synthesis["timed_out"]),
+        details={
+            "candidate_hash": synthesis["candidate_hash"],
+            "log_path": synthesis["log_path"],
+        },
+    )
+    trajectory.append(_tool_event("initial_synthesis", synthesis))
+    if not synthesis["passed"]:
+        trajectory[-1].details.update({"route": "repair", "decision_reason": "synthesis_failed"})
+        return "repair", trajectory
+
+    budget.charge_cosim(stage="initial_cosim")
+    try:
+        cosim = run_cosim(task, candidate)
+    except Exception:
+        budget.update_last_event(success=False)
+        raise
+    budget.update_last_event(
+        success=cosim["passed"] is True,
+        timed_out=bool(cosim["timed_out"]),
+        details={"candidate_hash": cosim["candidate_hash"], "log_path": cosim["log_path"]},
+    )
+    trajectory.append(_tool_event("initial_cosim", cosim))
+    if not cosim["passed"]:
+        trajectory[-1].details.update({"route": "repair", "decision_reason": "cosim_failed"})
+        return "repair", trajectory
+
+    trajectory.append(
         TrajectoryEvent(
-            step=1,
-            stage="initial_csim",
-            status="passed" if csim["passed"] else "failed",
+            step=0,
+            stage="initial_baseline",
+            status="passed",
             details={
-                "command": csim["command"],
-                "return_code": csim["return_code"],
-                "timed_out": csim["timed_out"],
-                "failure_class": csim["failure_class"],
-                "evidence": csim["evidence"],
-                "duration_seconds": csim["duration_seconds"],
-                "log_path": csim["log_path"],
-                "candidate_hash": csim["candidate_hash"],
+                "route": "optimise",
+                "decision_reason": "all_initial_validation_passed",
+                "candidate_hash": synthesis["candidate_hash"],
+                "metrics": synthesis["metrics"],
             },
-        ),
+        )
     )
+    return "optimise", trajectory
+
+
+def _prepend_initial_validation(
+    result: AgentResult,
+    initial: list[TrajectoryEvent],
+) -> AgentResult:
+    combined = [*initial, *result.trajectory]
+    for index, event in enumerate(combined, 1):
+        event.step = index
+    result.trajectory = combined
     return result
 
 
@@ -449,20 +525,22 @@ def _run_auto(
     if status_only:
         raise ValueError("status-only is not supported for automatically discovered tasks")
 
-    print("\n=== Initial CSim ===", flush=True)
-    csim = _initial_csim(task, budget)
-    if not csim["passed"]:
-        print("Initial CSim failed; entering repair.", flush=True)
-        return _prepend_initial_csim(_run_direct_api_repair(task, budget), csim)
+    print("\n=== Initial validation ===", flush=True)
+    route, initial = _detect_initial_condition(task, budget)
+    failed_stage = next((event.stage for event in initial if event.status == "failed"), None)
 
-    print("Initial CSim passed; entering PPA optimisation.", flush=True)
-    result = _run_autonomous_ppa(
-        task,
-        status_only=False,
-        max_steps=max_steps,
-        budget=budget,
-    )
-    return _prepend_initial_csim(result, csim)
+    if route == "repair":
+        print(f"{failed_stage} failed; entering repair.", flush=True)
+        result = _run_direct_api_repair(task, budget)
+    else:
+        print("Initial CSim, synthesis and co-simulation passed; entering PPA optimisation.", flush=True)
+        result = _run_autonomous_ppa(
+            task,
+            status_only=False,
+            max_steps=max_steps,
+            budget=budget,
+        )
+    return _prepend_initial_validation(result, initial)
 
 
 def _budget_exhausted_result(
