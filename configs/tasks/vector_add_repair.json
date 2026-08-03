@@ -36,7 +36,7 @@
     "max_iterations": 1,
     "max_csim_calls": 2,
     "max_cosim_calls": 0,
-    "max_synthesis_calls": 0,
+    "max_synthesis_calls": 1,
     "max_model_calls": 1,
     "max_total_tokens": 2048
   },
