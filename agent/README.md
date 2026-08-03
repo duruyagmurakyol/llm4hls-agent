@@ -16,7 +16,7 @@ agent/
 ├── analysis/            Vitis hierarchy and source-cause analysis
 ├── optimise/            PPA optimisation state machine
 ├── providers/           model API adapters
-├── repair/              correctness-repair workflow
+├── repair/              correctness repair and budget-bounded retries
 └── tools/               shared validation, command and synthesis utilities
 ```
 
@@ -156,6 +156,21 @@ Contains benchmark-independent optimisation guidance. Do not add benchmark names
 ## `repair/`
 
 The repair workflow handles designs that are not yet correct. It classifies observed failures, produces a constrained repair prompt, generates a replacement source, and validates it against the supplied build and testbench.
+
+`runner.py` performs one isolated repair attempt. `retry.py` repeats that attempt while iteration, model-call and independent-CSim budget remain:
+
+```text
+diagnose
+→ generate repair
+→ host validation
+→ independent Vitis CSim
+→ feed failure into the next prompt
+→ retry
+```
+
+A retry starts from the previous candidate rather than the original faulty source. Each attempt keeps its own prompt, response, diff, logs, workspace and result. The run root writes `repair_attempts.json` with the ordered attempts, candidate hashes, failed stages, evidence and aggregate token usage. The final successful attempt directory is returned to the controller, so synthesis and co-simulation continue to use the exact validated source.
+
+Repair attempts stop immediately after host and independent CSim validation pass. If they do not pass, attempts continue until the configured `max_attempts` or the shared iteration, model-call, CSim or token budget is exhausted. Failed and timed-out calls remain charged.
 
 After host and independent validation pass, the controller synthesises the exact repaired source retained in the run workspace. Co-simulation runs only when synthesis succeeds and uses that same repaired source. The repair task is successful only when repair validation, synthesis and C/RTL co-simulation all pass.
 
