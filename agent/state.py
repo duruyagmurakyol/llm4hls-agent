@@ -141,7 +141,14 @@ class AgentResult:
     current_phase: AgentPhase = AgentPhase.TERMINATE
     phase_transitions: list[PhaseTransition] = field(default_factory=list)
 
+    def _selection_details(self) -> dict[str, Any]:
+        for event in reversed(self.trajectory):
+            if event.stage == "select_best":
+                return event.details
+        return {}
+
     def to_dict(self) -> dict[str, Any]:
+        selection = self._selection_details()
         return {
             "task_id": self.task_id,
             "success": self.success,
@@ -149,6 +156,11 @@ class AgentResult:
             "termination_reason": self.termination_reason,
             "output_dir": self.output_dir,
             "current_phase": self.current_phase.value,
+            "selected_design": selection.get("selected_design"),
+            "latest_candidate": selection.get("latest_candidate"),
+            "best_correct_candidate": selection.get("best_correct_candidate"),
+            "best_ppa_candidate": selection.get("best_ppa_candidate"),
+            "pareto_archive": selection.get("pareto_archive", []),
             "phase_transitions": [transition.to_dict() for transition in self.phase_transitions],
             "trajectory": [event.to_dict() for event in self.trajectory],
         }
