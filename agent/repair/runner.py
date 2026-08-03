@@ -41,16 +41,23 @@ def _validate(config: dict[str, Any], workspace: Path) -> tuple[ValidationResult
     host = config["host_validation"]
     compiled = run_command([str(x) for x in host["command"]], cwd=workspace, echo=False)
     output = compiled.output
-    return_code = compiled.return_code
+    result = compiled
     if compiled.passed:
-        executed = run_command([str(x) for x in host["run_command"]], cwd=workspace, echo=False)
-        output += executed.output
-        return_code = executed.return_code
+        result = run_command([str(x) for x in host["run_command"]], cwd=workspace, echo=False)
+        output += result.output
     return ValidationResult(
-        passed=return_code == 0,
-        failure_class="none" if return_code == 0 else classify_failure(output),
-        return_code=return_code,
-        evidence=[] if return_code == 0 else extract_evidence(output),
+        passed=result.passed,
+        failure_class=(
+            "none"
+            if result.passed
+            else classify_failure(
+                output,
+                stage="host",
+                timed_out=result.timed_out,
+            )
+        ),
+        return_code=result.return_code,
+        evidence=[] if result.passed else extract_evidence(output),
     ), output
 
 
@@ -102,6 +109,7 @@ def _failure_feedback(
     post_validation: ValidationResult,
     independent_code: int | None,
     independent_output: str,
+    independent_timed_out: bool,
 ) -> dict[str, Any]:
     if not scope_ok:
         return {
@@ -127,7 +135,11 @@ def _failure_feedback(
     return {
         "attempt": attempt,
         "stage": "independent_validation",
-        "failure_class": classify_failure(independent_output),
+        "failure_class": classify_failure(
+            independent_output,
+            stage="csim",
+            timed_out=independent_timed_out,
+        ),
         "evidence": extract_evidence(independent_output),
         "return_code": independent_code,
     }
@@ -231,6 +243,7 @@ def _run_repair_once(
     independent = config["independent_validation"]
     independent_code: int | None = None
     independent_output = ""
+    independent_timed_out = False
     if independent.get("enabled", False):
         validation_stage = f"repair_attempt_{attempt:03d}_independent_validation"
         if budget is not None:
@@ -239,6 +252,7 @@ def _run_repair_once(
         process = run_command(command, cwd=REPO_ROOT, echo=False)
         independent_code = process.return_code
         independent_output = process.output
+        independent_timed_out = process.timed_out
         if budget is not None:
             budget.update_last_event(success=process.passed)
         (run_dir / "independent_validation.log").write_text(independent_output, encoding="utf-8")
@@ -252,6 +266,7 @@ def _run_repair_once(
         post_validation=post_validation,
         independent_code=independent_code,
         independent_output=independent_output,
+        independent_timed_out=independent_timed_out,
     )
     result = {
         "schema_version": 4,
