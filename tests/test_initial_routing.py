@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from agent.budget import BudgetState
-from agent.config import TaskManifest, load_task
-from agent.controller import _detect_initial_condition, _record_phase_transitions
+from agent.config import TaskManifest, load_task, validate_task
+from agent.controller import (
+    _detect_initial_condition,
+    _record_phase_transitions,
+    _run_auto,
+)
 from agent.state import AgentPhase, AgentResult, TrajectoryEvent
 
 
@@ -29,9 +34,9 @@ def _budget() -> BudgetState:
     return BudgetState(
         max_iterations=1,
         max_model_calls=1,
-        max_csim_calls=1,
-        max_cosim_calls=1,
-        max_synthesis_calls=1,
+        max_csim_calls=2,
+        max_cosim_calls=2,
+        max_synthesis_calls=2,
         max_total_tokens=100,
     )
 
@@ -162,6 +167,69 @@ def test_all_initial_validation_passes_routes_to_optimisation(
     assert AgentPhase.GENERATE_OPTIMISATION in phases
 
 
+@pytest.mark.parametrize("route", ["repair", "optimise"])
+def test_auto_controller_dispatches_selected_route(
+    tmp_path: Path,
+    monkeypatch,
+    route: str,
+) -> None:
+    initial = [
+        TrajectoryEvent(
+            0,
+            "initial_csim",
+            "failed" if route == "repair" else "passed",
+            {"route": route},
+        )
+    ]
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "agent.controller._detect_initial_condition",
+        lambda task, budget: (route, initial),
+    )
+
+    def fake_repair(task: TaskManifest, budget: BudgetState) -> AgentResult:
+        calls.append("repair")
+        return AgentResult(
+            task.task_id,
+            True,
+            "fully_verified",
+            "repair_completed",
+            str(task.output_dir),
+        )
+
+    def fake_optimise(
+        task: TaskManifest,
+        *,
+        status_only: bool,
+        max_steps: int | None,
+        budget: BudgetState,
+    ) -> AgentResult:
+        calls.append("optimise")
+        assert status_only is False
+        assert max_steps == 0
+        return AgentResult(
+            task.task_id,
+            True,
+            "terminated_step_limit",
+            "max_agent_steps_reached",
+            str(task.output_dir),
+        )
+
+    monkeypatch.setattr("agent.controller._run_direct_api_repair", fake_repair)
+    monkeypatch.setattr("agent.controller._run_autonomous_ppa", fake_optimise)
+
+    result = _run_auto(
+        _task(tmp_path),
+        status_only=False,
+        max_steps=0,
+        budget=_budget(),
+    )
+
+    assert calls == [route]
+    assert result.trajectory[0].details["route"] == route
+
+
 def test_public_auto_manifests_load_without_route_selection() -> None:
     for path in (
         Path("configs/tasks/vector_add_auto_broken.json"),
@@ -172,6 +240,19 @@ def test_public_auto_manifests_load_without_route_selection() -> None:
         assert set(task.data["adapter"]) == {"kind"}
         assert "repair" in task.data
         assert "optimisation" in task.data
-        assert task.data["budgets"]["max_csim_calls"] >= 1
-        assert task.data["budgets"]["max_synthesis_calls"] >= 1
-        assert task.data["budgets"]["max_cosim_calls"] >= 1
+        assert task.data["budgets"]["max_csim_calls"] >= 2
+        assert task.data["budgets"]["max_synthesis_calls"] >= 2
+        assert task.data["budgets"]["max_cosim_calls"] >= 2
+
+
+def test_auto_manifest_reserves_detection_and_repair_verification() -> None:
+    data = json.loads(
+        Path("configs/tasks/vector_add_auto_broken.json").read_text(encoding="utf-8")
+    )
+    data["budgets"]["max_cosim_calls"] = 1
+
+    with pytest.raises(
+        ValueError,
+        match="max_cosim_calls must be at least 2",
+    ):
+        validate_task(data)
