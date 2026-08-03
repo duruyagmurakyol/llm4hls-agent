@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.budget import BudgetState
 from agent.providers.siliconflow import complete
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +38,12 @@ def extract_cpp(text: str, required_top: str) -> str:
     return candidate + "\n"
 
 
-def generate_candidate(config_path: Path, candidate_index: int = 1) -> Path:
+def generate_candidate(
+    config_path: Path,
+    candidate_index: int = 1,
+    *,
+    budget: BudgetState | None = None,
+) -> Path:
     config = load_json(config_path.resolve())
     required_top = configured_top(config)
     model_config = config.get("model")
@@ -58,17 +64,34 @@ def generate_candidate(config_path: Path, candidate_index: int = 1) -> Path:
     print(f"Prompt: {prompt_path.relative_to(REPO_ROOT)}")
     print("Calling the model once...")
 
-    response = complete(
-        model=model_name,
-        system_prompt=(
-            "You are an FPGA HLS optimisation agent. Follow the supplied constraints "
-            "exactly and return only one complete compilable C++ source file."
-        ),
-        user_prompt=prompt_path.read_text(encoding="utf-8"),
-        temperature=float(model_config.get("temperature", 0.0)),
-        max_tokens=int(model_config.get("max_tokens", 4096)),
-        enable_thinking=model_config.get("enable_thinking"),
-    )
+    stage = f"candidate_{candidate_index:03d}_generation"
+    if budget is not None:
+        budget.charge_model_call(stage=stage)
+
+    try:
+        response = complete(
+            model=model_name,
+            system_prompt=(
+                "You are an FPGA HLS optimisation agent. Follow the supplied constraints "
+                "exactly and return only one complete compilable C++ source file."
+            ),
+            user_prompt=prompt_path.read_text(encoding="utf-8"),
+            temperature=float(model_config.get("temperature", 0.0)),
+            max_tokens=int(model_config.get("max_tokens", 4096)),
+            enable_thinking=model_config.get("enable_thinking"),
+        )
+    except Exception:
+        if budget is not None:
+            budget.update_last_event(success=False)
+        raise
+
+    if budget is not None:
+        budget.update_last_event(success=True)
+        budget.record_model_tokens(
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            stage=stage,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_path = output_dir / f"candidate_{candidate_index:03d}_model_response.txt"
