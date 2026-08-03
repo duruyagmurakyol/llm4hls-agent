@@ -37,7 +37,7 @@ from agent.workspace import Workspace
 
 def test_clean_packages_import() -> None:
     assert Workspace(Path("workspace")).resolve("src/kernel.cpp") == Path("workspace/src/kernel.cpp")
-    assert classify_failure("FAIL index=0 expected=1 actual=0") == "functional"
+    assert classify_failure("FAIL index=0 expected=1 actual=0") == "functional_mismatch"
     assert callable(run_repair)
     assert callable(validate_ppa_candidate)
     assert callable(run_csim)
