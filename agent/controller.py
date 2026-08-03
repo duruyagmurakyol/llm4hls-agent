@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from agent.budget import BudgetExceeded, BudgetState
 from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
 from agent.repair.runner import run_repair
@@ -52,11 +53,16 @@ def _write_result(result: AgentResult) -> Path:
     return path
 
 
+def _write_budget_summary(task: TaskManifest, budget: BudgetState) -> Path:
+    return budget.write_summary(_output_dir(task) / "budget_summary.json")
+
+
 def _run_autonomous_ppa(
     task: TaskManifest,
     *,
     status_only: bool,
     max_steps: int | None,
+    budget: BudgetState,
 ) -> AgentResult:
     optimisation_input: TaskManifest | Path
     if task.adapter_kind == "legacy_ppa":
@@ -68,6 +74,7 @@ def _run_autonomous_ppa(
         optimisation_input,
         status_only=status_only,
         max_steps=max_steps,
+        budget=budget,
     )
     trajectory = [
         TrajectoryEvent(
@@ -108,11 +115,15 @@ def _repair_config(task: TaskManifest) -> dict[str, object]:
     }
 
 
-def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
+def _run_direct_api_repair(
+    task: TaskManifest,
+    budget: BudgetState,
+) -> AgentResult:
     print("\n=== Unified repair workflow ===", flush=True)
     passed, run_dir, repair_result = run_repair(
         _repair_config(task),
         keep_workspace=True,
+        budget=budget,
     )
     print(f"Experiment: {repair_result['experiment_id']}")
     print(f"Model: {repair_result['model']}")
@@ -151,10 +162,11 @@ def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
     )
 
 
-def _initial_csim(task: TaskManifest) -> CommandResult:
+def _initial_csim(task: TaskManifest, budget: BudgetState) -> CommandResult:
     task_root = _resolve(task.data["task_root"])
     build_file = _resolve(task.data["artifacts"]["build_files"][0])
 
+    budget.require("csim_calls")
     with TemporaryDirectory(prefix=f"{task.task_id}_initial_csim_") as temp_dir:
         if build_file.suffix.lower() == ".cfg":
             command = [
@@ -171,6 +183,7 @@ def _initial_csim(task: TaskManifest) -> CommandResult:
             command = ["vitis-run", "--mode", "hls", "--tcl", str(build_file)]
         result = run_command(command, cwd=task_root)
 
+    budget.charge_csim(stage="initial_csim", success=result.passed)
     (_output_dir(task) / "initial_csim.log").write_text(result.output, encoding="utf-8")
     return result
 
@@ -205,23 +218,46 @@ def _run_auto(
     *,
     status_only: bool,
     max_steps: int | None,
+    budget: BudgetState,
 ) -> AgentResult:
     if status_only:
         raise ValueError("status-only is not supported for automatically discovered tasks")
 
     print("\n=== Initial CSim ===", flush=True)
-    csim = _initial_csim(task)
+    csim = _initial_csim(task, budget)
     if not csim.passed:
         print("Initial CSim failed; entering repair.", flush=True)
-        return _prepend_initial_csim(_run_direct_api_repair(task), csim)
+        return _prepend_initial_csim(_run_direct_api_repair(task, budget), csim)
 
     print("Initial CSim passed; entering PPA optimisation.", flush=True)
     result = _run_autonomous_ppa(
         task,
         status_only=False,
         max_steps=max_steps,
+        budget=budget,
     )
     return _prepend_initial_csim(result, csim)
+
+
+def _budget_exhausted_result(
+    task: TaskManifest,
+    error: BudgetExceeded,
+) -> AgentResult:
+    return AgentResult(
+        task_id=task.task_id,
+        success=False,
+        status="budget_exhausted",
+        termination_reason="budget_exhausted",
+        output_dir=str(task.output_dir),
+        trajectory=[
+            TrajectoryEvent(
+                step=1,
+                stage="budget",
+                status="failed",
+                details={"error": str(error)},
+            )
+        ],
+    )
 
 
 def run_agent(
@@ -231,19 +267,42 @@ def run_agent(
     max_steps: int | None = None,
 ) -> AgentResult:
     task = task_input if isinstance(task_input, TaskManifest) else load_task(task_input)
+    budget = BudgetState.from_manifest(task.data["budgets"])
     resolved_path = _write_resolved_task(task)
     print(f"Resolved task: {resolved_path.relative_to(REPO_ROOT)}")
 
-    if task.adapter_kind in {"autonomous_ppa", "legacy_ppa"}:
-        result = _run_autonomous_ppa(task, status_only=status_only, max_steps=max_steps)
-    elif task.adapter_kind == "direct_api_repair":
-        if status_only:
-            raise ValueError("status-only is not supported by direct_api_repair tasks")
-        result = _run_direct_api_repair(task)
-    elif task.adapter_kind == "auto":
-        result = _run_auto(task, status_only=status_only, max_steps=max_steps)
-    else:
-        raise ValueError(f"Unsupported adapter kind: {task.adapter_kind}")
+    try:
+        if task.adapter_kind in {"autonomous_ppa", "legacy_ppa"}:
+            result = _run_autonomous_ppa(
+                task,
+                status_only=status_only,
+                max_steps=max_steps,
+                budget=budget,
+            )
+        elif task.adapter_kind == "direct_api_repair":
+            if status_only:
+                raise ValueError("status-only is not supported by direct_api_repair tasks")
+            result = _run_direct_api_repair(task, budget)
+        elif task.adapter_kind == "auto":
+            result = _run_auto(
+                task,
+                status_only=status_only,
+                max_steps=max_steps,
+                budget=budget,
+            )
+        else:
+            raise ValueError(f"Unsupported adapter kind: {task.adapter_kind}")
+    except BudgetExceeded as error:
+        result = _budget_exhausted_result(task, error)
+    except Exception:
+        budget.set_stop_reason("execution_error")
+        budget_path = _write_budget_summary(task, budget)
+        print(f"Budget summary: {budget_path.relative_to(REPO_ROOT)}")
+        raise
+
+    budget.set_stop_reason(result.termination_reason)
+    budget_path = _write_budget_summary(task, budget)
     result_path = _write_result(result)
+    print(f"Budget summary: {budget_path.relative_to(REPO_ROOT)}")
     print(f"\nUnified result: {result_path.relative_to(REPO_ROOT)}")
     return result
