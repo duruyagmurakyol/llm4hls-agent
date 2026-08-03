@@ -1,0 +1,98 @@
+{
+  "task_id": "vector_add_auto_broken_001",
+  "task_kind": "unknown",
+  "artifacts": {
+    "source": "benchmarks/vector_add/faults/functional_subtraction/src/vector_add.cpp",
+    "testbench": [
+      "benchmarks/vector_add/faults/functional_subtraction/testbench/vector_add_test.cpp"
+    ],
+    "headers": [
+      "benchmarks/vector_add/faults/functional_subtraction/src/vector_add.h"
+    ],
+    "specification": null,
+    "build_files": [
+      "benchmarks/vector_add/faults/functional_subtraction/task.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "vector_add",
+    "language": "cpp",
+    "numerical_tolerance": null,
+    "protected_contract": [
+      "Preserve the vector_add function signature.",
+      "Modify only src/vector_add.cpp.",
+      "Every output must equal a[i] + b[i]."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 1,
+    "max_csim_calls": 2,
+    "max_cosim_calls": 1,
+    "max_synthesis_calls": 1,
+    "max_model_calls": 1,
+    "max_total_tokens": 2048
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-9B",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/vector_add/faults/functional_subtraction",
+    "editable_files": [
+      "src/vector_add.cpp"
+    ],
+    "protected_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_test.cpp",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_test.cpp"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "src/vector_add.cpp",
+        "testbench/vector_add_test.cpp",
+        "-o",
+        "vector_add_test"
+      ],
+      "run_command": [
+        "./vector_add_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Preserve the vector_add function signature and functional behaviour.",
+      "Do not optimise until the design has become a fully verified baseline."
+    ]
+  },
+  "adapter": {
+    "kind": "auto"
+  },
+  "output_dir": "experiments/track_a/vector_add_auto_broken_001"
+}
