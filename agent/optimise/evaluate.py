@@ -15,6 +15,11 @@ from agent.optimise.metrics import (
     maximum_clock_period_ns,
     metric_delta_percent,
 )
+from agent.optimise.selection import (
+    candidate_cost,
+    evaluate_resource_limits,
+    is_fully_verified,
+)
 from agent.state import SynthesisMetrics
 from agent.tools.synthesis import parse_csynth_xml
 
@@ -53,10 +58,13 @@ OBJECTIVES = (
 PARETO_ELIGIBLE_VERDICTS = {"accept_dominates_baseline", "keep_pareto_candidate"}
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Any) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"JSON file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON object expected in {path}")
+    return value
 
 
 def _actual_or_cycles(metrics: SynthesisMetrics) -> tuple[float | int | None, float | int | None]:
@@ -190,6 +198,16 @@ def load_optional(path: Path) -> dict[str, Any] | None:
     return load_json(path) if path.is_file() else None
 
 
+def _baseline_fully_verified(config: dict[str, Any]) -> bool:
+    verification = config.get("baseline", {}).get("verification")
+    if not isinstance(verification, dict):
+        return True
+    return all(
+        verification.get(key) is True
+        for key in ("csim_passed", "synthesis_passed", "cosim_passed")
+    )
+
+
 def classify_candidate(
     output_dir: Path,
     index: int,
@@ -197,12 +215,14 @@ def classify_candidate(
     duplicates: dict[int, int],
     *,
     minimum_frequency_mhz: float = DEFAULT_MINIMUM_FREQUENCY_MHZ,
+    resource_limits: Any = None,
 ) -> dict[str, Any]:
     prefix = f"candidate_{index:03d}"
     source = output_dir / f"{prefix}.cpp"
     static = load_optional(output_dir / f"{prefix}_static_validation.json")
     csim = load_optional(output_dir / f"{prefix}_csim_validation.json")
     synthesis = load_optional(output_dir / f"{prefix}_synthesis.json")
+    cosim = load_optional(output_dir / f"{prefix}_cosim.json")
     synthesis_attempted = bool(synthesis and synthesis.get("synthesis_run") is True)
     synthesis_completed = bool(
         synthesis
@@ -210,6 +230,7 @@ def classify_candidate(
         and isinstance(synthesis.get("metrics"), dict)
         and synthesis.get("metrics")
     )
+    cosim_attempted = bool(cosim and cosim.get("cosim_run") is True)
     record: dict[str, Any] = {
         "candidate_index": index,
         "candidate_file": str(source.relative_to(REPO_ROOT)),
@@ -217,11 +238,17 @@ def classify_candidate(
         "csim": csim.get("passed") if csim else None,
         "synthesis": synthesis.get("passed") if synthesis else None,
         "synthesis_run": synthesis_attempted,
+        "cosim": cosim.get("passed") if cosim else None,
+        "cosim_run": cosim_attempted,
+        "fully_verified": False,
         "metrics": {},
         "deltas_percent": {},
         "performance_comparison": {},
         "minimum_frequency_mhz": minimum_frequency_mhz,
         "meets_frequency_requirement": None,
+        "resource_limit_compliance": evaluate_resource_limits({}, resource_limits),
+        "meets_resource_limits": None,
+        "cost": candidate_cost(output_dir, index),
         "verdict": "incomplete",
         "reason": "Candidate has not completed all required evaluation stages.",
     }
@@ -261,6 +288,9 @@ def classify_candidate(
     )
     record["metrics"] = {key: metrics.get(key) for key in METRIC_KEYS}
     record["meets_frequency_requirement"] = metrics.get("meets_minimum_frequency")
+    compliance = evaluate_resource_limits(metrics, resource_limits)
+    record["resource_limit_compliance"] = compliance
+    record["meets_resource_limits"] = compliance["passed"]
 
     frequency = metrics.get("frequency_mhz")
     maximum_period = metrics.get("maximum_clock_period_ns")
@@ -281,6 +311,48 @@ def classify_candidate(
                 f"{minimum_frequency_mhz:g} MHz (clock period must be at most "
                 f"{maximum_period:.3f} ns)."
             ),
+        )
+        return record
+    if compliance["passed"] is not True:
+        labels = ", ".join(
+            f"{item['metric']}={item.get('actual')} > {item['limit']}"
+            for item in compliance["violations"]
+        )
+        record.update(
+            verdict="reject_resource_limits",
+            reason="Candidate violates task-specific resource limits: " + labels,
+        )
+        return record
+
+    if cosim_attempted and cosim and cosim.get("timed_out") is True:
+        record.update(
+            verdict="reject_cosim_timeout",
+            reason=f"C/RTL co-simulation exceeded the {cosim.get('timeout_seconds')}-second timeout.",
+        )
+        return record
+    if cosim_attempted and cosim and cosim.get("passed") is False:
+        record.update(
+            verdict="reject_cosim",
+            reason="C/RTL co-simulation failed; the candidate is not fully verified.",
+        )
+        return record
+    if not cosim_attempted:
+        record.update(
+            verdict="awaiting_cosim",
+            reason="Synthesis, frequency and resource checks passed; C/RTL co-simulation is required.",
+        )
+        return record
+
+    record["fully_verified"] = bool(
+        record["static_validation"] is True
+        and record["csim"] is True
+        and record["synthesis"] is True
+        and record["cosim"] is True
+    )
+    if not is_fully_verified(record):
+        record.update(
+            verdict="reject_not_fully_verified",
+            reason="Candidate is missing one or more required verification stages.",
         )
         return record
 
@@ -319,25 +391,31 @@ def classify_candidate(
     numeric_resources = [value for value in resource_deltas if isinstance(value, (int, float))]
     improves_latency = isinstance(latency_delta, (int, float)) and latency_delta < 0
     improves_interval = isinstance(interval_delta, (int, float)) and interval_delta < 0
+    improves_resource = any(value < 0 for value in numeric_resources)
     same_performance = latency_delta == 0 and interval_delta == 0
-    no_resource_increase = all(value <= 0 for value in numeric_resources)
+    same_resources = all(value == 0 for value in numeric_resources)
+    no_objective_increase = all(
+        value is None or value <= 0
+        for value in [latency_delta, interval_delta, *resource_deltas]
+    )
+    any_improvement = improves_latency or improves_interval or improves_resource
 
-    if same_performance and all(value == 0 for value in numeric_resources):
+    if same_performance and same_resources:
         record.update(verdict="reject_no_change", reason="Synthesis metrics are identical to the baseline.")
-    elif (improves_latency or improves_interval) and no_resource_increase:
+    elif any_improvement and no_objective_increase:
         record.update(
             verdict="accept_dominates_baseline",
-            reason="Improves actual latency or throughput without increasing measured resources.",
+            reason="Fully verified candidate improves at least one objective without worsening another.",
         )
-    elif improves_latency or improves_interval:
+    elif any_improvement:
         record.update(
             verdict="keep_pareto_candidate",
-            reason="Improves actual latency or throughput with a resource trade-off.",
+            reason="Fully verified candidate offers a performance or resource trade-off.",
         )
     else:
         record.update(
-            verdict="reject_no_performance_gain",
-            reason="Does not improve actual latency or throughput over the baseline.",
+            verdict="reject_no_objective_gain",
+            reason="Fully verified candidate does not improve latency, throughput or measured resources.",
         )
     return record
 
@@ -357,7 +435,7 @@ def record_dominates(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
-def evaluate_experiment(config_path: Path) -> dict[str, Any]:
+def evaluate_experiment(config_path: Any) -> dict[str, Any]:
     config = load_json(config_path.resolve())
     output_dir = REPO_ROOT / config["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -365,10 +443,12 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
     minimum_frequency = float(
         config.get("minimum_frequency_mhz", DEFAULT_MINIMUM_FREQUENCY_MHZ)
     )
+    resource_limits = config.get("resource_limits") or {}
     baseline = derive_hardware_metrics(
         baseline_metrics(config, output_dir),
         minimum_frequency_mhz=minimum_frequency,
     )
+    baseline_compliance = evaluate_resource_limits(baseline, resource_limits)
     duplicates = duplicate_map(output_dir, indices)
     records = [
         classify_candidate(
@@ -377,6 +457,7 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
             baseline,
             duplicates,
             minimum_frequency_mhz=minimum_frequency,
+            resource_limits=resource_limits,
         )
         for index in indices
     ]
@@ -384,39 +465,80 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
     baseline_record = {
         "candidate_index": 0,
         "candidate_file": config["baseline"]["source"],
+        "static_validation": True,
+        "csim": True,
+        "synthesis": True,
+        "cosim": True if _baseline_fully_verified(config) else None,
+        "fully_verified": _baseline_fully_verified(config),
         "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
         "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
+        "resource_limit_compliance": baseline_compliance,
+        "meets_resource_limits": baseline_compliance["passed"],
+        "cost": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "tool_calls": 0,
+            "tool_seconds": 0.0,
+        },
         "verdict": "baseline",
     }
-    pool = [*([baseline_record] if baseline.get("meets_minimum_frequency") is True else []), *eligible]
-    pareto = [item for item in pool if not any(other is not item and record_dominates(other, item) for other in pool)]
+    baseline_eligible = bool(
+        baseline_record["fully_verified"] is True
+        and baseline_record["meets_frequency_requirement"] is True
+        and baseline_record["meets_resource_limits"] is True
+    )
+    pool = [*([baseline_record] if baseline_eligible else []), *eligible]
+    pareto = [
+        item
+        for item in pool
+        if not any(other is not item and record_dominates(other, item) for other in pool)
+    ]
     synthesis_calls_used = sum(1 for record in records if record.get("synthesis_run"))
-    maximum = int(config["budget"]["max_synthesis_calls"])
+    cosim_calls_used = sum(1 for record in records if record.get("cosim_run"))
+    maximum_synthesis = int(config["budget"]["max_synthesis_calls"])
+    maximum_cosim = int(config["budget"].get("max_cosim_calls", config["budget"]["max_candidates"]))
     summary = {
         "experiment_name": config["experiment_name"],
         "benchmark": config["benchmark"],
         "minimum_frequency_mhz": minimum_frequency,
         "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
+        "resource_limits": baseline_compliance["limits"],
+        "selection": dict(config.get("selection") or {}),
         "frequency_requirement": {
             "minimum_frequency_mhz": minimum_frequency,
             "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
             "baseline_frequency_mhz": baseline.get("frequency_mhz"),
             "baseline_meets_requirement": baseline.get("meets_minimum_frequency"),
         },
+        "baseline_fully_verified": baseline_record["fully_verified"],
+        "baseline_resource_compliance": baseline_compliance,
         "baseline_metrics": {key: baseline.get(key) for key in METRIC_KEYS},
+        "baseline_record": baseline_record,
         "budget": {
             "max_candidates": config["budget"]["max_candidates"],
-            "max_synthesis_calls": maximum,
+            "max_synthesis_calls": maximum_synthesis,
             "synthesis_calls_used": synthesis_calls_used,
-            "synthesis_calls_remaining": max(0, maximum - synthesis_calls_used),
+            "synthesis_calls_remaining": max(0, maximum_synthesis - synthesis_calls_used),
+            "max_cosim_calls": maximum_cosim,
+            "cosim_calls_used": cosim_calls_used,
+            "cosim_calls_remaining": max(0, maximum_cosim - cosim_calls_used),
         },
         "candidates": records,
         "pareto_archive": [
             {
                 "candidate_index": item["candidate_index"],
                 "candidate_file": item["candidate_file"],
+                "static_validation": item.get("static_validation"),
+                "csim": item.get("csim"),
+                "synthesis": item.get("synthesis"),
+                "cosim": item.get("cosim"),
+                "fully_verified": item.get("fully_verified"),
                 "metrics": item["metrics"],
                 "meets_frequency_requirement": item.get("meets_frequency_requirement"),
+                "resource_limit_compliance": item.get("resource_limit_compliance"),
+                "meets_resource_limits": item.get("meets_resource_limits"),
+                "cost": item.get("cost", {}),
                 "verdict": item["verdict"],
             }
             for item in pareto
@@ -441,6 +563,7 @@ def main() -> None:
     )
     budget = summary["budget"]
     print(f"Synthesis calls used: {budget['synthesis_calls_used']}/{budget['max_synthesis_calls']}")
+    print(f"Co-simulation calls used: {budget['cosim_calls_used']}/{budget['max_cosim_calls']}")
     print("\nCandidate verdicts")
     for record in summary["candidates"]:
         print(f"  {record['candidate_index']:03d}: {record['verdict']} — {record['reason']}")
@@ -456,7 +579,7 @@ def main() -> None:
             f"FF={metrics.get('resources_ff_used')}, "
             f"DSP={metrics.get('resources_dsp_used')}"
         )
-    print("No model call, CSim, or synthesis was run.")
+    print("No model call or Vitis tool was run by this evaluator.")
 
 
 if __name__ == "__main__":
