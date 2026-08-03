@@ -170,8 +170,10 @@ def _validate_auto(data: dict[str, Any], adapter: dict[str, Any]) -> None:
 
     budgets = data["budgets"]
     for key in ("max_csim_calls", "max_synthesis_calls", "max_cosim_calls"):
-        if budgets[key] < 1:
-            raise ValueError(f"budgets.{key} must be at least 1 for auto tasks")
+        if budgets[key] < 2:
+            raise ValueError(
+                f"budgets.{key} must be at least 2 for auto detection and repair verification"
+            )
 
 
 def _resolve_task_path(value: str) -> Path:
