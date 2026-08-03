@@ -12,6 +12,7 @@ from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import AgentResult, TrajectoryEvent
+from agent.tools.cosim import run_cosim
 from agent.tools.synthesis import run_csim, run_synthesis
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -153,11 +154,12 @@ def _run_direct_api_repair(
         )
     ]
     synthesis: dict[str, object] | None = None
+    cosim: dict[str, object] | None = None
 
     if passed:
         candidate = run_dir / "workspace" / task.data["repair"]["editable_files"][0]
-        stage = "post_repair_synthesis"
-        budget.charge_synthesis(stage=stage)
+        synthesis_stage = "post_repair_synthesis"
+        budget.charge_synthesis(stage=synthesis_stage)
         try:
             synthesis = run_synthesis(task, candidate)
         except Exception:
@@ -176,7 +178,7 @@ def _run_direct_api_repair(
         trajectory.append(
             TrajectoryEvent(
                 step=2,
-                stage=stage,
+                stage=synthesis_stage,
                 status="passed" if synthesis["passed"] else "failed",
                 details={
                     "return_code": synthesis["return_code"],
@@ -191,16 +193,57 @@ def _run_direct_api_repair(
             )
         )
 
-    success = passed and synthesis is not None and synthesis["passed"] is True
+        if synthesis["passed"]:
+            cosim_stage = "post_repair_cosim"
+            budget.charge_cosim(stage=cosim_stage)
+            try:
+                cosim = run_cosim(task, candidate)
+            except Exception:
+                budget.update_last_event(success=False)
+                raise
+            budget.update_last_event(
+                success=cosim["passed"] is True,
+                timed_out=bool(cosim["timed_out"]),
+                details={
+                    "candidate_hash": cosim["candidate_hash"],
+                    "log_path": cosim["log_path"],
+                },
+            )
+            print(f"Post-repair co-simulation passed: {cosim['passed']}")
+            trajectory.append(
+                TrajectoryEvent(
+                    step=3,
+                    stage=cosim_stage,
+                    status="passed" if cosim["passed"] else "failed",
+                    details={
+                        "return_code": cosim["return_code"],
+                        "timed_out": cosim["timed_out"],
+                        "failure_class": cosim["failure_class"],
+                        "evidence": cosim["evidence"],
+                        "duration_seconds": cosim["duration_seconds"],
+                        "log_path": cosim["log_path"],
+                        "candidate_hash": cosim["candidate_hash"],
+                        "reports": cosim["reports"],
+                    },
+                )
+            )
+
+    synthesis_passed = synthesis is not None and synthesis["passed"] is True
+    cosim_passed = cosim is not None and cosim["passed"] is True
+    success = passed and synthesis_passed and cosim_passed
     status = (
-        "correctness_and_synthesis_established"
+        "fully_verified"
         if success
-        else "synthesis_failed" if passed else "repair_failed"
+        else "cosim_failed" if synthesis_passed else "synthesis_failed" if passed else "repair_failed"
     )
     termination_reason = (
-        "repair_and_synthesis_completed"
+        "repair_synthesis_and_cosim_completed"
         if success
-        else "post_repair_synthesis_failed" if passed else "repair_failed"
+        else "post_repair_cosim_failed"
+        if synthesis_passed
+        else "post_repair_synthesis_failed"
+        if passed
+        else "repair_failed"
     )
     return AgentResult(
         task_id=task.task_id,
