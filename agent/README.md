@@ -118,9 +118,13 @@ Owns portable Vitis execution. It:
 - creates isolated internal TCL scripts;
 - replaces only the design source with the current candidate;
 - preserves headers, include flags and testbench files;
-- runs CSim or synthesis with timeouts;
+- runs CSim or synthesis through the shared command runner;
 - extracts XML synthesis metrics;
 - writes machine-readable reports.
+
+`run_csim(task, candidate)` is the manifest-based CSim boundary. It returns pass status, timeout and return-code information, failure classification and evidence, command, duration, log path and the candidate SHA-256. The controller consumes this structured result rather than parsing terminal output.
+
+The older `run_candidate_csim()` entry point remains for the current optimisation workflow, but it now records the same command, provenance and failure metadata and uses the same subprocess boundary.
 
 Baseline source files must never be modified.
 
@@ -144,7 +148,7 @@ Provides the shared subprocess boundary for external tools. Each result records:
 
 Commands use a 300-second default timeout. A timeout terminates the complete process group with `SIGTERM`, followed by `SIGKILL` if the grace period expires. Existing callers can continue using `command`, `return_code`, `output` and `passed` while structured adapters consume the additional metadata.
 
-The Vitis-specific execution loop in `synthesis.py` remains in place until FPT-302 and FPT-303 move CSim and synthesis behind their structured adapters. That migration should then reuse this runner rather than introduce another process implementation.
+Vitis CSim and synthesis now reuse this runner; there is no separate low-level Vitis process implementation.
 
 ### `reports.py`
 
