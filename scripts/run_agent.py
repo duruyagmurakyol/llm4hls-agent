@@ -53,6 +53,9 @@ def main() -> None:
     except (FileNotFoundError, ValueError, KeyError) as error:
         print(f"Agent configuration error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
+    except RuntimeError as error:
+        print(f"Agent execution failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
 
     raise SystemExit(0 if result.success else 1)
 
