@@ -132,7 +132,19 @@ A validation rule should be generic and accompanied by a regression test.
 
 ### `command_runner.py`
 
-Provides a controlled subprocess boundary for external tools.
+Provides the shared subprocess boundary for external tools. Each result records:
+
+- the rendered command;
+- resolved working directory;
+- the explicit environment supplied by the caller, or inherited-environment status;
+- combined standard output and standard error;
+- timeout and elapsed duration;
+- timeout status and return code;
+- process-start or timeout exception information.
+
+Commands use a 300-second default timeout. A timeout terminates the complete process group with `SIGTERM`, followed by `SIGKILL` if the grace period expires. Existing callers can continue using `command`, `return_code`, `output` and `passed` while structured adapters consume the additional metadata.
+
+The Vitis-specific execution loop in `synthesis.py` remains in place until FPT-302 and FPT-303 move CSim and synthesis behind their structured adapters. That migration should then reuse this runner rather than introduce another process implementation.
 
 ### `reports.py`
 
