@@ -15,12 +15,20 @@ def valid_repair_manifest() -> dict[str, Any]:
     )
 
 
+@pytest.fixture
+def valid_ppa_manifest() -> dict[str, Any]:
+    return json.loads(
+        Path("configs/tasks/vector_add_track_a.json").read_text(encoding="utf-8")
+    )
+
+
 def test_vector_add_ppa_manifest_loads() -> None:
     task = load_task(Path("configs/tasks/vector_add_track_a.json"))
     assert task.task_id == "hls_eval_vector_add_001"
     assert task.adapter_kind == "autonomous_ppa"
     assert set(task.data["adapter"]) == {"kind"}
     assert task.data["optimisation"]["target_loop_label"] == "vector_add_loop"
+    assert task.data["target"]["minimum_frequency_mhz"] == 100.0
     assert "initialise_command" not in task.data["adapter"]
     assert "iteration_command" not in task.data["adapter"]
 
@@ -32,59 +40,143 @@ def test_vector_add_repair_manifest_loads() -> None:
     assert set(task.data["adapter"]) == {"kind"}
     assert task.data["repair"]["editable_files"] == ["src/vector_add.cpp"]
     assert task.data["model"]["name"] == "Qwen/Qwen3.5-122B-A10B"
+    assert task.data["target"]["minimum_frequency_mhz"] == 100.0
 
 
-def test_missing_budget_is_rejected() -> None:
-    data = {
-        "task_id": "broken",
-        "task_kind": "functional_failure",
-        "artifacts": {"source": "a.cpp", "testbench": ["tb.cpp"]},
-        "interface": {"top_function": "top"},
-        "target": {},
-        "budgets": {
-            "max_iterations": 1,
-            "max_csim_calls": 1,
-            "max_cosim_calls": 0,
-            "max_synthesis_calls": 0
-        },
-        "model": {},
-        "adapter": {"kind": "direct_api_repair"},
-        "output_dir": "results/test"
-    }
+def test_u55c_platform_configuration_is_valid(
+    valid_ppa_manifest: dict[str, Any],
+) -> None:
+    data = copy.deepcopy(valid_ppa_manifest)
+    data["target"]["platform"] = "xilinx_u55c_gen3x16_xdma_3_202210_1"
+    data["target"]["part"] = ""
+
+    validate_task(data)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        (
+            lambda data: data["artifacts"].update({"source": ""}),
+            "artifacts.source must be a non-empty string",
+        ),
+        (
+            lambda data: data["artifacts"].update({"testbench": []}),
+            "artifacts.testbench must be a non-empty list of strings",
+        ),
+        (
+            lambda data: data["interface"].update({"top_function": " "}),
+            "interface.top_function must be a non-empty string",
+        ),
+        (
+            lambda data: data["target"].update({"clock_period_ns": 0}),
+            "target.clock_period_ns must be a positive number",
+        ),
+        (
+            lambda data: data["target"].update({"clock_period_ns": -1}),
+            "target.clock_period_ns must be a positive number",
+        ),
+        (
+            lambda data: data["target"].update({"minimum_frequency_mhz": 0}),
+            "target.minimum_frequency_mhz must be a positive number",
+        ),
+        (
+            lambda data: data["target"].update({"minimum_frequency_mhz": -1}),
+            "target.minimum_frequency_mhz must be a positive number",
+        ),
+        (
+            lambda data: (
+                data["target"].update({"part": "", "platform": ""})
+            ),
+            "target must define a non-empty platform or part",
+        ),
+        (
+            lambda data: data["adapter"].update({"kind": "unsupported"}),
+            "Unsupported adapter kind: unsupported",
+        ),
+        (
+            lambda data: data["budgets"].update({"max_iterations": 0}),
+            "budgets.max_iterations must be greater than zero",
+        ),
+        (
+            lambda data: data["budgets"].update({"max_model_calls": -1}),
+            "budgets.max_model_calls must be a non-negative integer",
+        ),
+        (
+            lambda data: data["budgets"].update({"max_csim_calls": "1"}),
+            "budgets.max_csim_calls must be a non-negative integer",
+        ),
+        (
+            lambda data: data["budgets"].update({"max_csim_calls": True}),
+            "budgets.max_csim_calls must be a non-negative integer",
+        ),
+        (
+            lambda data: data["budgets"].update({"max_total_tokens": 0}),
+            "budgets.max_total_tokens must be null or a positive integer",
+        ),
+    ],
+    ids=[
+        "missing_source",
+        "missing_testbench",
+        "missing_top_function",
+        "zero_clock",
+        "negative_clock",
+        "zero_minimum_frequency",
+        "negative_minimum_frequency",
+        "missing_platform_and_part",
+        "unsupported_adapter",
+        "zero_iterations",
+        "negative_budget",
+        "non_integer_budget",
+        "boolean_budget",
+        "zero_token_budget",
+    ],
+)
+def test_invalid_common_manifest_is_rejected(
+    valid_ppa_manifest: dict[str, Any],
+    mutate: Callable[[dict[str, Any]], Any],
+    expected_error: str,
+) -> None:
+    data = copy.deepcopy(valid_ppa_manifest)
+    mutate(data)
+
+    with pytest.raises(ValueError, match=expected_error):
+        validate_task(data)
+
+
+def test_missing_budget_field_is_rejected(
+    valid_repair_manifest: dict[str, Any],
+) -> None:
+    data = copy.deepcopy(valid_repair_manifest)
+    data["budgets"].pop("max_model_calls")
+
     with pytest.raises(ValueError, match="Missing budget fields"):
         validate_task(data)
 
 
-def test_direct_repair_external_config_is_rejected() -> None:
-    data = {
-        "task_id": "repair",
-        "task_kind": "functional_failure",
-        "artifacts": {"source": "a.cpp", "testbench": ["tb.cpp"]},
-        "interface": {"top_function": "top"},
-        "target": {},
-        "budgets": {
-            "max_iterations": 1,
-            "max_csim_calls": 1,
-            "max_cosim_calls": 0,
-            "max_synthesis_calls": 0,
-            "max_model_calls": 1
-        },
-        "model": {},
-        "repair": {},
-        "adapter": {"kind": "direct_api_repair", "config": "legacy.json"},
-        "output_dir": "results/test"
-    }
-    with pytest.raises(ValueError, match="configured directly in the task manifest"):
+def test_direct_repair_external_config_is_rejected(
+    valid_repair_manifest: dict[str, Any],
+) -> None:
+    data = copy.deepcopy(valid_repair_manifest)
+    data["adapter"]["config"] = "legacy.json"
+
+    with pytest.raises(
+        ValueError,
+        match="configured directly in the task manifest",
+    ):
         validate_task(data)
 
 
-def test_autonomous_ppa_external_config_is_rejected() -> None:
-    data = json.loads(
-        Path("configs/tasks/vector_add_track_a.json").read_text(encoding="utf-8")
-    )
+def test_autonomous_ppa_external_config_is_rejected(
+    valid_ppa_manifest: dict[str, Any],
+) -> None:
+    data = copy.deepcopy(valid_ppa_manifest)
     data["adapter"]["config"] = "configs/vector_add_ppa.json"
 
-    with pytest.raises(ValueError, match="configured directly in the task manifest"):
+    with pytest.raises(
+        ValueError,
+        match="configured directly in the task manifest",
+    ):
         validate_task(data)
 
 
@@ -124,6 +216,36 @@ def test_invalid_repair_manifest_is_rejected(
 
     with pytest.raises(ValueError, match=expected_error):
         validate_task(data)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "missing_path"),
+    [
+        ("source", "missing/source.cpp"),
+        ("testbench", "missing/testbench.cpp"),
+    ],
+    ids=["missing_source_file", "missing_testbench_file"],
+)
+def test_missing_artifact_paths_are_rejected(
+    tmp_path: Path,
+    valid_ppa_manifest: dict[str, Any],
+    artifact: str,
+    missing_path: str,
+) -> None:
+    data = copy.deepcopy(valid_ppa_manifest)
+    if artifact == "source":
+        data["artifacts"]["source"] = missing_path
+    else:
+        data["artifacts"]["testbench"] = [missing_path]
+
+    manifest_path = tmp_path / f"missing_{artifact}.json"
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=f"task file does not exist: {missing_path}",
+    ):
+        load_task(manifest_path)
 
 
 @pytest.mark.parametrize(
