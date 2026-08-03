@@ -39,7 +39,8 @@ def test_vector_add_repair_manifest_loads() -> None:
     assert task.adapter_kind == "direct_api_repair"
     assert set(task.data["adapter"]) == {"kind"}
     assert task.data["repair"]["editable_files"] == ["src/vector_add.cpp"]
-    assert task.data["model"]["name"] == "Qwen/Qwen3.5-122B-A10B"
+    assert task.data["model"]["name"] == "Qwen/Qwen3.5-9B"
+    assert task.data["budgets"]["max_synthesis_calls"] == 1
     assert task.data["target"]["minimum_frequency_mhz"] == 100.0
 
 
