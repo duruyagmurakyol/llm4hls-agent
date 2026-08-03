@@ -5,12 +5,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
+from agent.repair.runner import run_repair
 from agent.state import AgentResult, TrajectoryEvent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -19,12 +18,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def _resolve(path: str | Path) -> Path:
     value = Path(path)
     return value if value.is_absolute() else REPO_ROOT / value
-
-
-def _run(command: list[str], *, title: str) -> subprocess.CompletedProcess[str]:
-    print(f"\n=== {title} ===", flush=True)
-    print("Command:", " ".join(command), flush=True)
-    return subprocess.run(command, cwd=REPO_ROOT, check=False)
 
 
 def _write_result(result: AgentResult) -> Path:
@@ -66,25 +59,64 @@ def _run_autonomous_ppa(
     )
 
 
+def _repair_config(task: TaskManifest) -> dict[str, object]:
+    repair = task.data["repair"]
+    model = task.data["model"]
+    return {
+        "repair_mode": "direct_api",
+        "experiment_id": task.task_id,
+        "benchmark_source": repair["benchmark_source"],
+        "editable_files": repair["editable_files"],
+        "protected_files": repair["protected_files"],
+        "context_files": repair.get("context_files", repair["protected_files"]),
+        "host_validation": repair["host_validation"],
+        "independent_validation": repair["independent_validation"],
+        "model": model["name"],
+        "temperature": model.get("temperature", 0.0),
+        "max_output_tokens": model.get("max_tokens", 2048),
+        "api_timeout_seconds": model.get("timeout_seconds", 120),
+        "thinking_budget": model.get("thinking_budget"),
+    }
+
+
 def _run_direct_api_repair(task: TaskManifest) -> AgentResult:
-    repair_config = _resolve(task.data["adapter"]["config"])
-    completed = _run(
-        [sys.executable, "-m", "agent.repair.runner", str(repair_config), "--keep-workspace"],
-        title="Unified repair workflow",
+    print("\n=== Unified repair workflow ===", flush=True)
+    passed, run_dir, repair_result = run_repair(
+        _repair_config(task),
+        keep_workspace=True,
     )
-    success = completed.returncode == 0
+    print(f"Experiment: {repair_result['experiment_id']}")
+    print(f"Model: {repair_result['model']}")
+    print(f"Failure class: {repair_result['failure_class']}")
+    print(
+        "Tokens: "
+        f"{repair_result['tokens_used']} "
+        f"(input={repair_result['input_tokens']}, output={repair_result['output_tokens']})"
+    )
+    print(f"Modified files: {', '.join(repair_result['modified_files']) if repair_result['modified_files'] else 'none'}")
+    print(f"Post-repair host test passed: {repair_result['post_host_validation_passed']}")
+    print(f"Independent validation passed: {repair_result['independent_validation_passed']}")
+    print(f"Results: {run_dir.relative_to(REPO_ROOT)}")
+
     return AgentResult(
         task_id=task.task_id,
-        success=success,
-        status="correctness_established" if success else "repair_failed",
-        termination_reason="repair_completed" if success else "repair_failed",
+        success=passed,
+        status="correctness_established" if passed else "repair_failed",
+        termination_reason="repair_completed" if passed else "repair_failed",
         output_dir=str(task.output_dir),
         trajectory=[
             TrajectoryEvent(
                 step=1,
                 stage="repair",
-                status="passed" if success else "failed",
-                details={"return_code": completed.returncode, "config": str(repair_config)},
+                status="passed" if passed else "failed",
+                details={
+                    "run_dir": str(run_dir.relative_to(REPO_ROOT)),
+                    "failure_class": repair_result["failure_class"],
+                    "tokens_used": repair_result["tokens_used"],
+                    "modified_files": repair_result["modified_files"],
+                    "post_host_validation_passed": repair_result["post_host_validation_passed"],
+                    "independent_validation_passed": repair_result["independent_validation_passed"],
+                },
             )
         ],
     )
