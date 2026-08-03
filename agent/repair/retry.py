@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.budget import BudgetState
+from agent.budget import BudgetExceeded, BudgetState
 from agent.tools.reports import write_json
 from agent.tools.validation import classify_failure
 
@@ -91,7 +91,7 @@ def _exception_attempt(
         "input_tokens": 0,
         "output_tokens": 0,
         "tokens_used": 0,
-        "latency_seconds": None,
+        "latency_seconds": 0.0,
         "modified_files": [],
         "protected_files_unchanged": True,
         "editable_scope_respected": True,
@@ -148,6 +148,8 @@ def run_repair_loop(
                 keep_workspace=True,
                 budget=budget,
             )
+        except BudgetExceeded:
+            raise
         except Exception as error:
             passed, final_dir, result = _exception_attempt(
                 config,
