@@ -19,7 +19,8 @@ def test_vector_add_ppa_manifest_loads() -> None:
     task = load_task(Path("configs/tasks/vector_add_track_a.json"))
     assert task.task_id == "hls_eval_vector_add_001"
     assert task.adapter_kind == "autonomous_ppa"
-    assert task.data["adapter"]["config"] == "configs/vector_add_ppa.json"
+    assert set(task.data["adapter"]) == {"kind"}
+    assert task.data["optimisation"]["target_loop_label"] == "vector_add_loop"
     assert "initialise_command" not in task.data["adapter"]
     assert "iteration_command" not in task.data["adapter"]
 
@@ -73,6 +74,16 @@ def test_direct_repair_external_config_is_rejected() -> None:
         "adapter": {"kind": "direct_api_repair", "config": "legacy.json"},
         "output_dir": "results/test"
     }
+    with pytest.raises(ValueError, match="configured directly in the task manifest"):
+        validate_task(data)
+
+
+def test_autonomous_ppa_external_config_is_rejected() -> None:
+    data = json.loads(
+        Path("configs/tasks/vector_add_track_a.json").read_text(encoding="utf-8")
+    )
+    data["adapter"]["config"] = "configs/vector_add_ppa.json"
+
     with pytest.raises(ValueError, match="configured directly in the task manifest"):
         validate_task(data)
 
