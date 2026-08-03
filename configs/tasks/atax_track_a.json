@@ -46,9 +46,23 @@
     "max_tokens": 4096,
     "enable_thinking": false
   },
+  "optimisation": {
+    "target_loop_label": "dot_loop",
+    "validation": {
+      "constant_loop_tail_bounds": true,
+      "required_loop_labels": [
+        "dot_loop"
+      ],
+      "preserve_diagnosed_loop_label": true
+    },
+    "prompt_constraints": [
+      "Keep all accesses within A[38][42], x[42], y[42], and tmp[38].",
+      "Preserve all 42 dot-product elements exactly once, including any explicit remainder handling.",
+      "Do not modify init_y, update_y, or unrelated loops unless the diagnosis explicitly selects them."
+    ]
+  },
   "adapter": {
-    "kind": "autonomous_ppa",
-    "config": "configs/atax_ppa.json"
+    "kind": "autonomous_ppa"
   },
   "output_dir": "experiments/track_a/hls_eval_atax_001"
 }
