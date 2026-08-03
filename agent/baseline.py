@@ -11,6 +11,14 @@ from typing import Any
 from agent.config import TaskManifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DERIVED_BASELINE_FILES = (
+    "baseline_hierarchical_diagnosis.json",
+    "baseline_source_target.json",
+    "baseline_source_cause.json",
+    "baseline_metrics.json",
+    "candidate_001_prompt.txt",
+    "experiment_summary.json",
+)
 
 
 def _resolve(value: str | Path) -> Path:
@@ -27,6 +35,30 @@ def _display(path: Path) -> str:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _invalidate_changed_baseline(
+    output_dir: Path,
+    *,
+    candidate_hash: str,
+    source: str,
+) -> None:
+    record_path = output_dir / "verified_baseline.json"
+    if not record_path.is_file():
+        changed = True
+    else:
+        try:
+            previous = json.loads(record_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            changed = True
+        else:
+            changed = (
+                previous.get("candidate_hash") != candidate_hash
+                or previous.get("source") != source
+            )
+    if changed:
+        for name in DERIVED_BASELINE_FILES:
+            (output_dir / name).unlink(missing_ok=True)
 
 
 def promote_verified_baseline(
@@ -70,6 +102,13 @@ def promote_verified_baseline(
     output_dir = _resolve(task.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     baseline_source = output_dir / f"active_baseline{source.suffix or '.cpp'}"
+    displayed_source = _display(baseline_source)
+    _invalidate_changed_baseline(
+        output_dir,
+        candidate_hash=digest,
+        source=displayed_source,
+    )
+
     shutil.copy2(source, baseline_source)
     if _sha256(baseline_source) != digest:
         raise RuntimeError("Copied baseline source hash does not match the verified source")
@@ -92,7 +131,7 @@ def promote_verified_baseline(
     record = {
         "schema_version": 1,
         "origin": origin,
-        "source": _display(baseline_source),
+        "source": displayed_source,
         "original_source": _display(source),
         "candidate_hash": digest,
         "project_dir": _display(stable_project),
