@@ -21,11 +21,33 @@ agent/
 
 ## Execution path
 
-`run_agent.py` calls `agent.controller.run_agent()`. The controller loads a unified task manifest and dispatches according to `adapter.kind`:
+`run_agent.py` calls `agent.controller.run_agent()`. Public competition tasks use `adapter.kind: auto`; the user does not select repair or optimisation.
 
-- `autonomous_ppa`: run the budgeted optimisation state machine.
-- `legacy_ppa`: accepted as a compatibility alias for the optimisation path.
-- `direct_api_repair`: repair, synthesise and co-simulate the successfully repaired candidate.
+The controller validates the submitted source in this order:
+
+```text
+CSim
+→ synthesis
+→ C/RTL co-simulation
+```
+
+It stops at the first failure:
+
+- CSim failure → repair;
+- synthesis failure → repair;
+- co-simulation failure → repair;
+- all three pass → record a verified initial baseline and enter PPA optimisation.
+
+Each initial tool call is charged before Vitis is invoked. The deciding trajectory event records `route` and `decision_reason`, and the source `task_kind` is metadata rather than routing input.
+
+The route-neutral examples are:
+
+```text
+configs/tasks/vector_add_auto_broken.json
+configs/tasks/vector_add_auto_correct.json
+```
+
+`direct_api_repair`, `autonomous_ppa` and `legacy_ppa` remain accepted for compatibility with existing experiments, but they are not the public automatic interface.
 
 Every path returns an `AgentResult`, which is serialised as `unified_agent_result.json`.
 
@@ -46,13 +68,13 @@ select_best
 terminate
 ```
 
-The existing workflow trajectory remains the detailed record of tool and model stages. Immediately before writing the unified result, the controller derives a separate ordered `phase_transitions` list from that trajectory. Each transition records its previous phase, next phase, reason and relevant evidence such as candidate hash, failure class, return code or timeout status.
+The workflow trajectory remains the detailed record of tool and model stages. Immediately before writing the unified result, the controller derives a separate ordered `phase_transitions` list from that trajectory. Each transition records its previous phase, next phase, reason and relevant evidence such as candidate hash, failure class, return code, timeout status or selected route.
 
-`current_phase` records the final controller phase. Completed and failed runs both finish in `terminate`; the result status and termination reason explain the outcome. Adding phase records does not change repair, synthesis, co-simulation or optimisation behaviour.
+`current_phase` records the final controller phase. Completed and failed runs both finish in `terminate`; the result status and termination reason explain the outcome.
 
 ## Onboarding
 
-Onboarding converts a benchmark directory into the two configurations required by the controller:
+Onboarding converts a benchmark directory into the configurations required by the controller:
 
 ```text
 benchmark directory
