@@ -11,7 +11,7 @@ from agent.budget import BudgetExceeded, BudgetState
 from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
 from agent.repair.runner import run_repair
-from agent.state import AgentResult, TrajectoryEvent
+from agent.state import AgentPhase, AgentResult, PhaseTransition, TrajectoryEvent
 from agent.tools.cosim import run_cosim
 from agent.tools.synthesis import run_csim, run_synthesis
 
@@ -55,6 +55,143 @@ def _write_result(result: AgentResult) -> Path:
 
 def _write_budget_summary(task: TaskManifest, budget: BudgetState) -> Path:
     return budget.write_summary(_output_dir(task) / "budget_summary.json")
+
+
+def _phase_for_stage(stage: str) -> AgentPhase | None:
+    if stage == "initial_csim":
+        return AgentPhase.VALIDATE_INITIAL
+    if stage == "repair":
+        return AgentPhase.REPAIR
+    if stage in {"post_repair_synthesis", "post_repair_cosim"}:
+        return AgentPhase.ESTABLISH_BASELINE
+    if stage == "generation":
+        return AgentPhase.GENERATE_OPTIMISATION
+    if stage in {"static_validation", "duplicate_check", "csim", "synthesis"}:
+        return AgentPhase.VALIDATE_CANDIDATE
+    return None
+
+
+def _phase_event_details(event: TrajectoryEvent) -> dict[str, object]:
+    details: dict[str, object] = {
+        "trajectory_stage": event.stage,
+        "trajectory_status": event.status,
+    }
+    for key in (
+        "candidate",
+        "candidate_hash",
+        "failure_class",
+        "return_code",
+        "timed_out",
+    ):
+        if key in event.details:
+            details[key] = event.details[key]
+    return details
+
+
+def _record_phase_transitions(
+    task: TaskManifest,
+    result: AgentResult,
+) -> AgentResult:
+    """Derive explicit phase transitions without changing workflow behaviour."""
+    transitions: list[PhaseTransition] = []
+    current: AgentPhase | None = None
+
+    def transition(
+        target: AgentPhase,
+        reason: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        nonlocal current
+        if current == target:
+            return
+        transitions.append(
+            PhaseTransition(
+                step=len(transitions) + 1,
+                from_phase=current,
+                to_phase=target,
+                reason=reason,
+                details=details or {},
+            )
+        )
+        current = target
+
+    transition(
+        AgentPhase.DISCOVER,
+        "task_loaded",
+        {
+            "adapter_kind": task.adapter_kind,
+            "task_kind": task.data.get("task_kind"),
+        },
+    )
+
+    if task.adapter_kind == "direct_api_repair":
+        transition(
+            AgentPhase.DIAGNOSE,
+            "task_manifest_selected_repair",
+            {"task_kind": task.data.get("task_kind")},
+        )
+    elif task.adapter_kind in {"autonomous_ppa", "legacy_ppa"}:
+        transition(
+            AgentPhase.ESTABLISH_BASELINE,
+            "ppa_workflow_requires_verified_baseline",
+            {"adapter_kind": task.adapter_kind},
+        )
+    elif task.adapter_kind == "auto":
+        transition(
+            AgentPhase.VALIDATE_INITIAL,
+            "automatic_workflow_requires_initial_validation",
+            {"adapter_kind": task.adapter_kind},
+        )
+
+    for event in result.trajectory:
+        details = _phase_event_details(event)
+        target = _phase_for_stage(event.stage)
+
+        if event.stage == "repair" and current == AgentPhase.VALIDATE_INITIAL:
+            transition(
+                AgentPhase.DIAGNOSE,
+                "initial_validation_failed",
+                details,
+            )
+
+        if event.stage == "generation" and current in {
+            AgentPhase.VALIDATE_INITIAL,
+            AgentPhase.ESTABLISH_BASELINE,
+        }:
+            transition(
+                AgentPhase.DIAGNOSE_PPA,
+                "verified_baseline_ready_for_ppa_diagnosis",
+                details,
+            )
+
+        if target is not None:
+            transition(
+                target,
+                f"trajectory_stage_{event.stage}_{event.status}",
+                details,
+            )
+
+    if current == AgentPhase.VALIDATE_CANDIDATE:
+        transition(
+            AgentPhase.SELECT_BEST,
+            "candidate_validation_completed",
+            {
+                "result_status": result.status,
+                "success": result.success,
+            },
+        )
+
+    transition(
+        AgentPhase.TERMINATE,
+        result.termination_reason,
+        {
+            "result_status": result.status,
+            "success": result.success,
+        },
+    )
+    result.current_phase = AgentPhase.TERMINATE
+    result.phase_transitions = transitions
+    return result
 
 
 def _run_autonomous_ppa(
@@ -389,6 +526,7 @@ def run_agent(
         print(f"Budget summary: {budget_path.relative_to(REPO_ROOT)}")
         raise
 
+    result = _record_phase_transitions(task, result)
     budget.set_stop_reason(result.termination_reason)
     budget_path = _write_budget_summary(task, budget)
     result_path = _write_result(result)
