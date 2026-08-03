@@ -5,6 +5,10 @@ from __future__ import annotations
 import re
 
 from agent.providers.siliconflow import complete
+from agent.repair.output_validation import (
+    InvalidModelOutputError,
+    validate_response_from_prompt,
+)
 
 
 def clean_source(text: str) -> str:
@@ -25,7 +29,7 @@ def generate_repair(
     timeout_seconds: int = 120,
     thinking_budget: int | None = None,
 ):
-    """Generate one repaired source file and return the provider response."""
+    """Generate and pre-validate one repaired source before it can be written."""
     response = complete(
         model=model,
         system_prompt=system_prompt,
@@ -36,4 +40,12 @@ def generate_repair(
         thinking_budget=thinking_budget,
         enable_thinking=False,
     )
-    return clean_source(response.content), response
+    candidate = clean_source(response.content)
+    validation = validate_response_from_prompt(
+        raw_response=response.content,
+        candidate_source=candidate,
+        user_prompt=user_prompt,
+    )
+    if validation["passed"] is not True:
+        raise InvalidModelOutputError(validation, response=response)
+    return candidate, response
