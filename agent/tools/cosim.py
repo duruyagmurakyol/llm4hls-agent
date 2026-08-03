@@ -8,7 +8,7 @@ from typing import Any
 
 from agent.config import TaskManifest
 from agent.failures import classify_failure
-from agent.tools.cosim import __name__ as _module_name
+from agent.tools.reports import write_json
 from agent.tools.synthesis import (
     TMP_ROOT,
     _candidate_hash,
@@ -19,14 +19,12 @@ from agent.tools.synthesis import (
     _timeout,
 )
 from agent.tools.validation import extract_evidence
-from agent.tools.reports import write_json
 
 DEFAULT_COSIM_TIMEOUT_SECONDS = 900
 
 
 def run_cosim(task: TaskManifest, candidate: Path) -> dict[str, Any]:
     """Run C/RTL co-simulation for one candidate."""
-    del _module_name
     candidate = candidate.resolve()
     if not candidate.is_file():
         raise FileNotFoundError(f"Candidate not found: {candidate}")
