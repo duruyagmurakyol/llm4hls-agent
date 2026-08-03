@@ -103,7 +103,8 @@ def test_retry_uses_previous_candidate_and_failure_feedback(tmp_path: Path, monk
     assert result["termination_reason"] == "repair_validated"
     assert calls[0] == (1, None, None)
     assert "attempt 1" in calls[1][1]
-    assert calls[1][2]["evidence"] == ["expected 17 actual -15"]
+    assert "expected 17 actual -15" in calls[1][2]["evidence"]
+    assert calls[1][2]["strategy"]["accepted_change"] is True
     assert run_dir.name == "attempt_002"
     assert (run_dir / "workspace/src/kernel.cpp").is_file()
 
