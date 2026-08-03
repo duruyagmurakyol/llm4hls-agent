@@ -25,7 +25,7 @@ agent/
 
 - `autonomous_ppa`: run the budgeted optimisation state machine.
 - `legacy_ppa`: accepted as a compatibility alias for the optimisation path.
-- `direct_api_repair`: run the correctness-repair workflow.
+- `direct_api_repair`: run correctness repair and synthesise the successfully repaired candidate.
 
 Every path returns an `AgentResult`, which is serialised as `unified_agent_result.json`.
 
@@ -93,6 +93,8 @@ Contains benchmark-independent optimisation guidance. Do not add benchmark names
 
 The repair workflow handles designs that are not yet correct. It classifies observed failures, produces a constrained repair prompt, generates a replacement source, and validates it against the supplied build and testbench.
 
+After host and independent validation pass, the controller synthesises the exact repaired source retained in the run workspace. The repair task is successful only when that synthesis also completes and produces a valid top-level synthesis report. The synthesis call is charged before Vitis is invoked, including failed or timed-out attempts.
+
 The repair path must not silently weaken the testbench or change the public top-level contract.
 
 ## `analysis/`
@@ -124,7 +126,9 @@ Owns portable Vitis execution. It:
 
 `run_csim(task, candidate)` is the manifest-based CSim boundary. It returns pass status, timeout and return-code information, failure classification and evidence, command, duration, log path and the candidate SHA-256. The controller consumes this structured result rather than parsing terminal output.
 
-The older `run_candidate_csim()` entry point remains for the current optimisation workflow, but it now records the same command, provenance and failure metadata and uses the same subprocess boundary.
+`run_synthesis(task, candidate)` is the equivalent synthesis boundary. It requires a successful Vitis process and the expected top-level `*_csynth.xml`, then returns the same process and provenance metadata together with top-level and hierarchical synthesis metrics. Results are stored under `output_dir/synthesis/<candidate-hash>/` and the temporary project is isolated from the benchmark.
+
+The older `run_candidate_csim()` and `run_candidate_synthesis()` entry points remain for the current optimisation workflow, but they use the same shared subprocess and report parsing boundaries.
 
 Baseline source files must never be modified.
 
@@ -148,7 +152,7 @@ Provides the shared subprocess boundary for external tools. Each result records:
 
 Commands use a 300-second default timeout. A timeout terminates the complete process group with `SIGTERM`, followed by `SIGKILL` if the grace period expires. Existing callers can continue using `command`, `return_code`, `output` and `passed` while structured adapters consume the additional metadata.
 
-Vitis CSim and synthesis now reuse this runner; there is no separate low-level Vitis process implementation.
+Vitis CSim and synthesis reuse this runner; there is no separate low-level Vitis process implementation.
 
 ### `reports.py`
 
