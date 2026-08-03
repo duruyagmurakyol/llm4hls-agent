@@ -274,6 +274,35 @@ def _repair_config(task: TaskManifest) -> dict[str, object]:
     }
 
 
+def _tool_event(stage: str, result: dict[str, object]) -> TrajectoryEvent:
+    details = {
+        key: result[key]
+        for key in (
+            "command",
+            "return_code",
+            "timed_out",
+            "failure_class",
+            "evidence",
+            "duration_seconds",
+            "log_path",
+            "candidate_hash",
+            "candidate_file",
+            "project_dir",
+            "top_function",
+            "top_csynth_xml",
+            "metrics",
+            "reports",
+        )
+        if key in result
+    }
+    return TrajectoryEvent(
+        step=0,
+        stage=stage,
+        status="passed" if result["passed"] else "failed",
+        details=details,
+    )
+
+
 def _run_direct_api_repair(
     task: TaskManifest,
     budget: BudgetState,
@@ -334,27 +363,9 @@ def _run_direct_api_repair(
         )
         print(f"Post-repair synthesis passed: {synthesis['passed']}")
         print(f"Synthesis metrics: {synthesis['metrics']}")
-        trajectory.append(
-            TrajectoryEvent(
-                step=2,
-                stage=synthesis_stage,
-                status="passed" if synthesis["passed"] else "failed",
-                details={
-                    "return_code": synthesis["return_code"],
-                    "timed_out": synthesis["timed_out"],
-                    "failure_class": synthesis["failure_class"],
-                    "evidence": synthesis["evidence"],
-                    "duration_seconds": synthesis["duration_seconds"],
-                    "log_path": synthesis["log_path"],
-                    "candidate_hash": synthesis["candidate_hash"],
-                    "candidate_file": synthesis["candidate_file"],
-                    "project_dir": synthesis["project_dir"],
-                    "top_function": synthesis["top_function"],
-                    "top_csynth_xml": synthesis["top_csynth_xml"],
-                    "metrics": synthesis["metrics"],
-                },
-            )
-        )
+        synthesis_event = _tool_event(synthesis_stage, synthesis)
+        synthesis_event.step = 2
+        trajectory.append(synthesis_event)
 
         if synthesis["passed"] and budget.max_cosim_calls > 0:
             cosim_stage = "post_repair_cosim"
@@ -373,24 +384,9 @@ def _run_direct_api_repair(
                 },
             )
             print(f"Post-repair co-simulation passed: {cosim['passed']}")
-            trajectory.append(
-                TrajectoryEvent(
-                    step=3,
-                    stage=cosim_stage,
-                    status="passed" if cosim["passed"] else "failed",
-                    details={
-                        "return_code": cosim["return_code"],
-                        "timed_out": cosim["timed_out"],
-                        "failure_class": cosim["failure_class"],
-                        "evidence": cosim["evidence"],
-                        "duration_seconds": cosim["duration_seconds"],
-                        "log_path": cosim["log_path"],
-                        "candidate_hash": cosim["candidate_hash"],
-                        "candidate_file": cosim["candidate_file"],
-                        "reports": cosim["reports"],
-                    },
-                )
-            )
+            cosim_event = _tool_event(cosim_stage, cosim)
+            cosim_event.step = 3
+            trajectory.append(cosim_event)
 
     synthesis_passed = synthesis is not None and synthesis["passed"] is True
     cosim_required = budget.max_cosim_calls > 0
@@ -425,35 +421,6 @@ def _run_direct_api_repair(
         termination_reason=termination_reason,
         output_dir=str(task.output_dir),
         trajectory=trajectory,
-    )
-
-
-def _tool_event(stage: str, result: dict[str, object]) -> TrajectoryEvent:
-    details = {
-        key: result[key]
-        for key in (
-            "command",
-            "return_code",
-            "timed_out",
-            "failure_class",
-            "evidence",
-            "duration_seconds",
-            "log_path",
-            "candidate_hash",
-            "candidate_file",
-            "project_dir",
-            "top_function",
-            "top_csynth_xml",
-            "metrics",
-            "reports",
-        )
-        if key in result
-    }
-    return TrajectoryEvent(
-        step=0,
-        stage=stage,
-        status="passed" if result["passed"] else "failed",
-        details=details,
     )
 
 
@@ -525,8 +492,8 @@ def _detect_initial_condition(
                 "route": "optimise",
                 "decision_reason": "all_initial_validation_passed",
                 "candidate_hash": synthesis["candidate_hash"],
-                "candidate_file": synthesis["candidate_file"],
-                "project_dir": synthesis["project_dir"],
+                "candidate_file": synthesis.get("candidate_file", str(candidate)),
+                "project_dir": synthesis.get("project_dir"),
                 "metrics": synthesis["metrics"],
             },
         )
@@ -564,13 +531,18 @@ def _initial_baseline(
     task: TaskManifest,
     verification: dict[str, object],
 ) -> dict[str, object]:
+    csim = verification["csim"]
+    synthesis = verification["synthesis"]
+    cosim = verification["cosim"]
+    if not isinstance(csim, dict) or not isinstance(synthesis, dict) or not isinstance(cosim, dict):
+        raise TypeError("Initial verification evidence must contain structured tool results")
     return promote_verified_baseline(
         task,
         Path(verification["source"]),
         origin="initial",
-        csim_passed=bool(dict(verification["csim"])["passed"]),
-        synthesis=dict(verification["synthesis"]),
-        cosim=dict(verification["cosim"]),
+        csim_passed=bool(csim["passed"]),
+        synthesis=synthesis,
+        cosim=cosim,
     )
 
 
@@ -636,10 +608,7 @@ def _run_auto(
 
         baseline = _repair_baseline(task, repair_result)
         repair_result.trajectory.append(_baseline_event(baseline))
-        print(
-            "Verified repaired source promoted to the active baseline.",
-            flush=True,
-        )
+        print("Verified repaired source promoted to the active baseline.", flush=True)
         if not _ppa_budget_available(budget, max_steps):
             repair_result.status = "verified_baseline"
             repair_result.termination_reason = "verified_baseline_no_ppa_budget"
