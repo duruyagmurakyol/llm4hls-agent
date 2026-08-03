@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
+from agent.budget import BudgetState
 from agent.config import TaskManifest, load_task
+from agent.controller import _run_direct_api_repair
 from agent.onboarding import discover_benchmark, onboard_benchmark
 from agent.optimise.config_source import InMemoryConfig, as_config_source, ppa_config_from_task
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
@@ -20,6 +23,7 @@ from agent.tools.synthesis import (
     run_candidate_csim,
     run_candidate_synthesis,
     run_csim,
+    run_synthesis,
 )
 from agent.tools.validation import (
     _complete_partition_issues,
@@ -33,13 +37,11 @@ from agent.workspace import Workspace
 
 def test_clean_packages_import() -> None:
     assert Workspace(Path("workspace")).resolve("src/kernel.cpp") == Path("workspace/src/kernel.cpp")
-    assert classify_failure(
-        "FAIL index=0 expected=17 actual=-15\n"
-        "ERROR: [SIM 211-100] 'csim_design' failed"
-    ) == "functional"
+    assert classify_failure("FAIL index=0 expected=1 actual=0") == "functional"
     assert callable(run_repair)
     assert callable(validate_ppa_candidate)
     assert callable(run_csim)
+    assert callable(run_synthesis)
     assert callable(run_candidate_csim)
     assert callable(run_candidate_synthesis)
     assert callable(ensure_baseline_synthesis)
@@ -102,7 +104,7 @@ def test_command_runner_records_start_failure(tmp_path: Path) -> None:
     assert "FileNotFoundError" in result.exception
 
 
-def test_run_csim_returns_structured_result(tmp_path: Path, monkeypatch) -> None:
+def _test_task(tmp_path: Path) -> tuple[TaskManifest, Path]:
     benchmark = tmp_path / "benchmark"
     (benchmark / "src").mkdir(parents=True)
     (benchmark / "testbench").mkdir()
@@ -124,11 +126,16 @@ def test_run_csim_returns_structured_result(tmp_path: Path, monkeypatch) -> None
     task = TaskManifest(
         path=tmp_path / "task.json",
         data={
-            "task_id": "test_csim",
+            "task_id": "test_tool",
             "artifacts": {"build_files": [str(build_file)]},
             "output_dir": str(tmp_path / "output"),
         },
     )
+    return task, candidate
+
+
+def test_run_csim_returns_structured_result(tmp_path: Path, monkeypatch) -> None:
+    task, candidate = _test_task(tmp_path)
 
     def fake_vitis(tcl: Path, cwd: Path, log_path: Path, timeout_seconds: int) -> CommandResult:
         output = f"Compiling {candidate.name}\n"
@@ -156,6 +163,113 @@ def test_run_csim_returns_structured_result(tmp_path: Path, monkeypatch) -> None
     assert report["duration_seconds"] == 0.1
     assert len(report["candidate_hash"]) == 64
     assert Path(report["log_path"]).is_file()
+
+
+def test_run_synthesis_returns_metrics(tmp_path: Path, monkeypatch) -> None:
+    task, candidate = _test_task(tmp_path)
+
+    def fake_vitis(tcl: Path, cwd: Path, log_path: Path, timeout_seconds: int) -> CommandResult:
+        match = re.search(r'open_project -reset "([^"]+)"', tcl.read_text(encoding="utf-8"))
+        assert match is not None
+        report_dir = Path(match.group(1)) / "solution1/syn/report"
+        report_dir.mkdir(parents=True)
+        (report_dir / "kernel_csynth.xml").write_text(
+            "<Report><PerformanceEstimates>"
+            "<SummaryOfTimingAnalysis><EstimatedClockPeriod>2.5</EstimatedClockPeriod></SummaryOfTimingAnalysis>"
+            "<SummaryOfOverallLatency><Best-caseLatency>4</Best-caseLatency>"
+            "<Average-caseLatency>4</Average-caseLatency><Worst-caseLatency>4</Worst-caseLatency>"
+            "<Interval-min>1</Interval-min><Interval-max>1</Interval-max></SummaryOfOverallLatency>"
+            "</PerformanceEstimates><AreaEstimates><Resources><LUT>10</LUT><FF>20</FF>"
+            "<DSP>1</DSP><BRAM_18K>0</BRAM_18K></Resources></AreaEstimates></Report>",
+            encoding="utf-8",
+        )
+        output = "Synthesis completed\n"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(output, encoding="utf-8")
+        return CommandResult(
+            command=("vitis-run", "--mode", "hls", "--tcl", str(tcl)),
+            return_code=0,
+            output=output,
+            cwd=str(cwd),
+            timed_out=False,
+            timeout_seconds=timeout_seconds,
+            elapsed_seconds=0.2,
+        )
+
+    monkeypatch.setattr("agent.tools.synthesis._run_vitis", fake_vitis)
+    report = run_synthesis(task, candidate)
+
+    assert report["passed"]
+    assert report["failure_class"] == "none"
+    assert report["metrics"]["clock_period_ns"] == 2.5
+    assert report["metrics"]["latency_best_cycles"] == 4
+    assert report["metrics"]["resources_lut_used"] == 10
+    assert report["synthesis_run"] is True
+    assert report["baseline_modified"] is False
+
+
+def test_repair_synthesises_repaired_candidate(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "results" / "run"
+    candidate = run_dir / "workspace/src/kernel.cpp"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("void kernel() {}\n", encoding="utf-8")
+    task = TaskManifest(
+        path=tmp_path / "task.json",
+        data={
+            "task_id": "repair_then_synth",
+            "artifacts": {"build_files": ["task.cfg"]},
+            "repair": {
+                "benchmark_source": "benchmark",
+                "editable_files": ["src/kernel.cpp"],
+                "protected_files": ["src/kernel.h"],
+                "host_validation": {"command": ["true"], "run_command": ["true"]},
+                "independent_validation": {"enabled": True, "command": ["true"]},
+            },
+            "model": {"name": "model"},
+            "output_dir": str(tmp_path / "output"),
+        },
+    )
+    repair_result = {
+        "experiment_id": "repair_then_synth",
+        "model": "model",
+        "failure_class": "functional",
+        "tokens_used": 10,
+        "input_tokens": 6,
+        "output_tokens": 4,
+        "modified_files": ["src/kernel.cpp"],
+        "post_host_validation_passed": True,
+        "independent_validation_passed": True,
+    }
+
+    monkeypatch.setattr("agent.controller.REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.controller.run_repair",
+        lambda *args, **kwargs: (True, run_dir, repair_result),
+    )
+    monkeypatch.setattr(
+        "agent.controller.run_synthesis",
+        lambda supplied_task, supplied_candidate: {
+            "passed": True,
+            "return_code": 0,
+            "timed_out": False,
+            "failure_class": "none",
+            "evidence": [],
+            "duration_seconds": 0.2,
+            "log_path": "synthesis.log",
+            "candidate_hash": "a" * 64,
+            "metrics": {"latency_best_cycles": 4},
+        },
+    )
+    budget = BudgetState(1, 1, 1, 0, 1, 100)
+
+    result = _run_direct_api_repair(task, budget)
+
+    assert result.success
+    assert result.status == "correctness_and_synthesis_established"
+    assert result.termination_reason == "repair_and_synthesis_completed"
+    assert [event.stage for event in result.trajectory] == ["repair", "post_repair_synthesis"]
+    assert budget.synthesis_calls_used == 1
+    assert budget.events[-1]["success"] is True
 
 
 def test_autonomous_manifests_have_no_secondary_config() -> None:
