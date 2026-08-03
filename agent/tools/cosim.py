@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import TaskManifest
-from agent.tools.command_runner import CommandResult
-from agent.tools.reports import write_json
+from agent.failures import classify_failure
+from agent.tools.cosim import __name__ as _module_name
 from agent.tools.synthesis import (
     TMP_ROOT,
     _candidate_hash,
@@ -19,42 +19,14 @@ from agent.tools.synthesis import (
     _timeout,
 )
 from agent.tools.validation import extract_evidence
+from agent.tools.reports import write_json
 
 DEFAULT_COSIM_TIMEOUT_SECONDS = 900
 
 
-def _failure_class(completed: CommandResult, reports: list[Path]) -> str:
-    if completed.timed_out:
-        return "cosim_timeout"
-
-    lower = completed.output.lower()
-    if "deadlock" in lower or "no progress" in lower:
-        return "cosim_deadlock"
-    if any(
-        token in lower
-        for token in (
-            "failed to compile",
-            "compilation failed",
-            "compile error",
-            "undefined reference",
-            "cannot find",
-        )
-    ):
-        return "cosim_compile"
-    if (
-        "fail index=" in lower
-        or "mismatch" in lower
-        or ("expected=" in lower and "actual=" in lower)
-        or "simulation failed" in lower
-    ):
-        return "cosim_mismatch"
-    if completed.passed and not reports:
-        return "missing_cosim_report"
-    return "cosim_failed"
-
-
 def run_cosim(task: TaskManifest, candidate: Path) -> dict[str, Any]:
     """Run C/RTL co-simulation for one candidate."""
+    del _module_name
     candidate = candidate.resolve()
     if not candidate.is_file():
         raise FileNotFoundError(f"Candidate not found: {candidate}")
@@ -110,10 +82,19 @@ def run_cosim(task: TaskManifest, candidate: Path) -> dict[str, Any]:
     reports = sorted(path for path in saved_report_dir.rglob("*") if path.is_file())
 
     passed = completed.passed and bool(reports)
-    failure_class = "none" if passed else _failure_class(completed, reports)
-    evidence = [] if passed else extract_evidence(completed.output)
-    if failure_class == "missing_cosim_report":
+    if passed:
+        failure_class = "none"
+        evidence: list[str] = []
+    elif completed.passed and not reports:
+        failure_class = "tool_report_missing"
         evidence = [f"No co-simulation report was generated under {source_report_dir}"]
+    else:
+        failure_class = classify_failure(
+            completed.output,
+            stage="cosim",
+            timed_out=completed.timed_out,
+        )
+        evidence = extract_evidence(completed.output)
 
     report = {
         "passed": passed,
