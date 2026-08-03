@@ -75,6 +75,8 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "top_function": task.data["interface"]["top_function"],
         "target_clock_period_ns": target_clock_period_ns,
         "minimum_frequency_mhz": minimum_frequency_mhz,
+        "resource_limits": dict(target.get("resource_limits") or {}),
+        "selection": dict(optimisation.get("selection") or {}),
         "baseline": {
             "source": artifacts["source"],
             "tcl": build_files[0],
@@ -90,6 +92,7 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "budget": {
             "max_candidates": task.data["budgets"]["max_iterations"],
             "max_synthesis_calls": task.data["budgets"]["max_synthesis_calls"],
+            "max_cosim_calls": task.data["budgets"]["max_cosim_calls"],
         },
     }
 
