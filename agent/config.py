@@ -110,6 +110,25 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
         _require_command(independent, "command", "repair.independent_validation")
 
 
+def _validate_autonomous_ppa(data: dict[str, Any], adapter: dict[str, Any]) -> None:
+    if "config" in adapter:
+        raise ValueError("autonomous_ppa must be configured directly in the task manifest")
+
+    optimisation = data.get("optimisation", {})
+    if not isinstance(optimisation, dict):
+        raise ValueError("optimisation must be an object")
+
+    prompt_constraints = optimisation.get("prompt_constraints", [])
+    if not isinstance(prompt_constraints, list) or not all(
+        isinstance(item, str) and item for item in prompt_constraints
+    ):
+        raise ValueError("optimisation.prompt_constraints must be a list of strings")
+
+    validation = optimisation.get("validation", {})
+    if not isinstance(validation, dict):
+        raise ValueError("optimisation.validation must be an object")
+
+
 def _resolve_task_path(value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else REPO_ROOT / path
@@ -166,3 +185,5 @@ def validate_task(data: dict[str, Any]) -> None:
 
     if adapter["kind"] == "direct_api_repair":
         _validate_direct_api_repair(data, adapter)
+    elif adapter["kind"] == "autonomous_ppa":
+        _validate_autonomous_ppa(data, adapter)
