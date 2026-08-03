@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 FailureStage = Literal["host", "csim", "synthesis", "cosim"]
@@ -26,6 +27,8 @@ FAILURE_CLASSES = frozenset(
         "tool_report_missing",
         "report_parse",
         "model_generation_error",
+        "scope_violation",
+        "protected_file_modified",
         "unknown",
     }
 )
@@ -123,18 +126,19 @@ def classify_failure(
             return "cosim_deadlock" if cosim_deadlock else "cosim_timeout"
         return "unknown"
 
+    header_reference = bool(
+        re.search(r"\.(?:h|hh|hpp|hxx)(?:['\":\s]|$)", lower)
+    )
     if _contains_any(
         lower,
         (
-            "fatal error: '",
-            "fatal error: \"",
             "file not found",
             "no such file or directory",
             "cannot open include file",
             "cannot find include file",
             "header file not found",
         ),
-    ) and _contains_any(lower, ("#include", ".h'", '.h"', ".hpp'", '.hpp"')):
+    ) and ("#include" in lower or header_reference):
         return "missing_header"
 
     if _contains_any(
@@ -145,7 +149,8 @@ def classify_failure(
             "failed to find top function",
             "no function named",
             "set_top failed",
-            "top-level function",
+            "top-level function not found",
+            "top-level function is not defined",
             "top function is not defined",
         ),
     ):
@@ -225,6 +230,24 @@ def classify_failure(
     ):
         return "numerical_tolerance"
 
+    explicit_compile_failure = _contains_any(
+        lower,
+        (
+            "syntax error",
+            "compilation error",
+            "compile error",
+            "failed to compile",
+            "error: expected",
+            "error: use of undeclared identifier",
+            "error: unknown type name",
+            "error: no member named",
+            "error: invalid operands",
+            "error: stray",
+        ),
+    )
+    if explicit_compile_failure:
+        return "syntax_or_compile"
+
     mismatch = _contains_any(
         lower,
         (
@@ -239,21 +262,7 @@ def classify_failure(
     if mismatch:
         return "cosim_mismatch" if resolved_stage == "cosim" else "functional_mismatch"
 
-    if _contains_any(
-        lower,
-        (
-            "syntax error",
-            "compilation error",
-            "compile error",
-            "failed to compile",
-            "error: expected",
-            "error: use of undeclared identifier",
-            "error: unknown type name",
-            "error: no member named",
-            "error: invalid operands",
-            "error: stray",
-        ),
-    ) or ("error:" in lower and resolved_stage != "cosim"):
+    if "error:" in lower and resolved_stage != "cosim":
         return "syntax_or_compile"
 
     return "unknown"
