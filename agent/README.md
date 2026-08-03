@@ -6,6 +6,7 @@ This directory contains the reusable implementation of the unified LLM4HLS agent
 
 ```text
 agent/
+├── baseline.py          verified source and synthesis-report promotion
 ├── controller.py        top-level task dispatch and unified result writing
 ├── config.py            task-manifest loading and validation
 ├── onboarding.py        benchmark discovery and generated configuration
@@ -50,6 +51,24 @@ configs/tasks/vector_add_auto_correct.json
 `direct_api_repair`, `autonomous_ppa` and `legacy_ppa` remain accepted for compatibility with existing experiments, but they are not the public automatic interface.
 
 Every path returns an `AgentResult`, which is serialised as `unified_agent_result.json`.
+
+## Verified baseline handoff
+
+After an initially correct source or a repaired source passes CSim, synthesis and C/RTL co-simulation, `baseline.py` promotes the exact verified bytes into:
+
+```text
+output_dir/active_baseline.cpp
+output_dir/verified_baseline.json
+output_dir/verified_baseline_project/solution1/syn/report/*_csynth.xml
+```
+
+The metadata record contains the source origin, SHA-256, copied report paths, top-level synthesis metrics and the three validation outcomes. Promotion refuses mismatched source, synthesis and co-simulation hashes.
+
+The PPA runner receives this promoted source, metrics and report tree as its baseline. Its existing baseline initialiser therefore sees cached synthesis reports and does not repeat baseline CSim or synthesis. Cheap diagnosis and prompt artefacts are invalidated when the promoted baseline identity changes, but candidate history is not deleted.
+
+For `adapter.kind: auto`, a successful repair and PPA optimisation now happen in the same invocation when model and validation budget remains. If no candidate budget remains, the run terminates successfully with `status: verified_baseline` and `termination_reason: verified_baseline_no_ppa_budget`.
+
+Explicit `direct_api_repair` tasks retain their repair-only behaviour for compatibility.
 
 ## Agent phases
 
@@ -112,6 +131,8 @@ Typical stages are:
 9. run synthesis;
 10. evaluate and record the verdict.
 
+For automatic tasks, step 1 normally resolves from the promoted cached reports rather than invoking Vitis again.
+
 ### `diagnose.py`
 
 Turns report-level evidence into a source-aware prompt. It should preserve already-good regions and focus changes on diagnosed bottlenecks.
@@ -137,6 +158,8 @@ Contains benchmark-independent optimisation guidance. Do not add benchmark names
 The repair workflow handles designs that are not yet correct. It classifies observed failures, produces a constrained repair prompt, generates a replacement source, and validates it against the supplied build and testbench.
 
 After host and independent validation pass, the controller synthesises the exact repaired source retained in the run workspace. Co-simulation runs only when synthesis succeeds and uses that same repaired source. The repair task is successful only when repair validation, synthesis and C/RTL co-simulation all pass.
+
+For an automatic task, the successful repaired source is then copied into the active baseline and passed directly into PPA optimisation. The original benchmark source and testbench remain unchanged.
 
 Synthesis and co-simulation calls are charged before Vitis is invoked, including failed, timed-out or exceptional attempts. Each stage remains in the unified trajectory so a later failure does not discard earlier successful evidence.
 
