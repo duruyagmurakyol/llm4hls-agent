@@ -1,0 +1,108 @@
+{
+  "task_id": "vector_add_auto_correct_001",
+  "task_kind": "unknown",
+  "artifacts": {
+    "source": "benchmarks/hls_eval/vector_add/src/vector_add.cpp",
+    "testbench": [
+      "benchmarks/hls_eval/vector_add/testbench/vector_add_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval/vector_add/src/vector_add.h"
+    ],
+    "specification": "configs/tasks/specifications/vector_add.md",
+    "build_files": [
+      "benchmarks/hls_eval/vector_add/scripts/run_agent_baseline.tcl"
+    ]
+  },
+  "interface": {
+    "top_function": "vector_add",
+    "language": "cpp",
+    "numerical_tolerance": null,
+    "protected_contract": [
+      "Preserve the vector_add function signature.",
+      "Every output must equal a[i] + b[i].",
+      "Keep all accesses within the configured vector bounds."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 3,
+    "max_csim_calls": 4,
+    "max_cosim_calls": 1,
+    "max_synthesis_calls": 3,
+    "max_model_calls": 3,
+    "max_total_tokens": null
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval/vector_add",
+    "editable_files": [
+      "src/vector_add.cpp"
+    ],
+    "protected_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_tb.cpp",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_tb.cpp"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/vector_add.cpp",
+        "testbench/vector_add_tb.cpp",
+        "-o",
+        "vector_add_test"
+      ],
+      "run_command": [
+        "./vector_add_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "optimisation": {
+    "target_loop_label": "vector_add_loop",
+    "validation": {
+      "constant_loop_tail_bounds": true,
+      "required_loop_labels": [
+        "vector_add_loop"
+      ],
+      "preserve_diagnosed_loop_label": true
+    },
+    "prompt_constraints": [
+      "VECTOR_SIZE is 1024 and every output must equal a[i] + b[i].",
+      "The baseline loop is already automatically pipelined at II=1, so do not return a pipeline-only change.",
+      "A latency improvement requires processing multiple elements per cycle with matching memory banking, partitioning, or reshaping.",
+      "Prefer factor-2 parallelism first and include safe remainder handling if the loop structure changes.",
+      "Treat increased resources as acceptable only when the result creates a meaningful latency-resource trade-off."
+    ]
+  },
+  "adapter": {
+    "kind": "auto"
+  },
+  "output_dir": "experiments/track_a/vector_add_auto_correct_001"
+}
