@@ -10,7 +10,7 @@ agent/
 ├── config.py            task-manifest loading and validation
 ├── onboarding.py        benchmark discovery and generated configuration
 ├── onboarding_safe.py   provenance-aware onboarding wrapper
-├── state.py             shared metrics, events and result records
+├── state.py             shared phases, metrics, events and result records
 ├── workspace.py         isolated workspace management
 ├── analysis/            Vitis hierarchy and source-cause analysis
 ├── optimise/            PPA optimisation state machine
@@ -28,6 +28,27 @@ agent/
 - `direct_api_repair`: repair, synthesise and co-simulate the successfully repaired candidate.
 
 Every path returns an `AgentResult`, which is serialised as `unified_agent_result.json`.
+
+## Agent phases
+
+`state.py` defines the explicit `AgentPhase` values used by the unified controller:
+
+```text
+discover
+validate_initial
+diagnose
+repair
+establish_baseline
+diagnose_ppa
+generate_optimisation
+validate_candidate
+select_best
+terminate
+```
+
+The existing workflow trajectory remains the detailed record of tool and model stages. Immediately before writing the unified result, the controller derives a separate ordered `phase_transitions` list from that trajectory. Each transition records its previous phase, next phase, reason and relevant evidence such as candidate hash, failure class, return code or timeout status.
+
+`current_phase` records the final controller phase. Completed and failed runs both finish in `terminate`; the result status and termination reason explain the outcome. Adding phase records does not change repair, synthesis, co-simulation or optimisation behaviour.
 
 ## Onboarding
 
