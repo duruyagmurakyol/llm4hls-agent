@@ -12,7 +12,7 @@ from agent.config import TaskManifest, load_task
 from agent.optimise.runner import run_optimisation
 from agent.repair.runner import run_repair
 from agent.state import AgentResult, TrajectoryEvent
-from agent.tools.synthesis import run_csim
+from agent.tools.synthesis import run_csim, run_synthesis
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -137,27 +137,78 @@ def _run_direct_api_repair(
     print(f"Independent validation passed: {repair_result['independent_validation_passed']}")
     print(f"Results: {run_dir.relative_to(REPO_ROOT)}")
 
-    return AgentResult(
-        task_id=task.task_id,
-        success=passed,
-        status="correctness_established" if passed else "repair_failed",
-        termination_reason="repair_completed" if passed else "repair_failed",
-        output_dir=str(task.output_dir),
-        trajectory=[
+    trajectory = [
+        TrajectoryEvent(
+            step=1,
+            stage="repair",
+            status="passed" if passed else "failed",
+            details={
+                "run_dir": str(run_dir.relative_to(REPO_ROOT)),
+                "failure_class": repair_result["failure_class"],
+                "tokens_used": repair_result["tokens_used"],
+                "modified_files": repair_result["modified_files"],
+                "post_host_validation_passed": repair_result["post_host_validation_passed"],
+                "independent_validation_passed": repair_result["independent_validation_passed"],
+            },
+        )
+    ]
+    synthesis: dict[str, object] | None = None
+
+    if passed:
+        candidate = run_dir / "workspace" / task.data["repair"]["editable_files"][0]
+        stage = "post_repair_synthesis"
+        budget.charge_synthesis(stage=stage)
+        try:
+            synthesis = run_synthesis(task, candidate)
+        except Exception:
+            budget.update_last_event(success=False)
+            raise
+        budget.update_last_event(
+            success=synthesis["passed"] is True,
+            timed_out=bool(synthesis["timed_out"]),
+            details={
+                "candidate_hash": synthesis["candidate_hash"],
+                "log_path": synthesis["log_path"],
+            },
+        )
+        print(f"Post-repair synthesis passed: {synthesis['passed']}")
+        print(f"Synthesis metrics: {synthesis['metrics']}")
+        trajectory.append(
             TrajectoryEvent(
-                step=1,
-                stage="repair",
-                status="passed" if passed else "failed",
+                step=2,
+                stage=stage,
+                status="passed" if synthesis["passed"] else "failed",
                 details={
-                    "run_dir": str(run_dir.relative_to(REPO_ROOT)),
-                    "failure_class": repair_result["failure_class"],
-                    "tokens_used": repair_result["tokens_used"],
-                    "modified_files": repair_result["modified_files"],
-                    "post_host_validation_passed": repair_result["post_host_validation_passed"],
-                    "independent_validation_passed": repair_result["independent_validation_passed"],
+                    "return_code": synthesis["return_code"],
+                    "timed_out": synthesis["timed_out"],
+                    "failure_class": synthesis["failure_class"],
+                    "evidence": synthesis["evidence"],
+                    "duration_seconds": synthesis["duration_seconds"],
+                    "log_path": synthesis["log_path"],
+                    "candidate_hash": synthesis["candidate_hash"],
+                    "metrics": synthesis["metrics"],
                 },
             )
-        ],
+        )
+
+    success = passed and synthesis is not None and synthesis["passed"] is True
+    status = (
+        "correctness_and_synthesis_established"
+        if success
+        else "synthesis_failed" if passed else "repair_failed"
+    )
+    termination_reason = (
+        "repair_and_synthesis_completed"
+        if success
+        else "post_repair_synthesis_failed" if passed else "repair_failed"
+    )
+    return AgentResult(
+        task_id=task.task_id,
+        success=success,
+        status=status,
+        termination_reason=termination_reason,
+        output_dir=str(task.output_dir),
+        trajectory=trajectory,
     )
 
 
