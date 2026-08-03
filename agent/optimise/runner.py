@@ -17,6 +17,7 @@ from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_
 from agent.optimise.duplicate import check_candidate_duplicate
 from agent.optimise.evaluate import evaluate_experiment as _evaluate_experiment
 from agent.optimise.generate import generate_candidate
+from agent.tools.cosim import run_candidate_cosim
 from agent.tools.synthesis import ensure_baseline_synthesis, run_candidate_csim, run_candidate_synthesis
 from agent.tools.validation import validate_ppa_candidate
 
@@ -86,21 +87,29 @@ def _finish(
     summary: dict[str, Any],
     trajectory: list[dict[str, Any]],
 ) -> OptimisationRunResult:
-    """Return the best verified design even when the latest candidate failed."""
+    """Return the best fully verified design even when the latest candidate failed."""
     selected = summary.get("selected_design")
     state = summary.get("candidate_state") if isinstance(summary.get("candidate_state"), dict) else {}
+    selected_verified = bool(state.get("selected_design_fully_verified", selected is not None))
     trajectory.append(
         {
             "stage": "select_best",
-            "passed": selected is not None,
+            "passed": selected is not None and selected_verified,
             "selected_design": selected,
+            "selected_design_fully_verified": selected_verified,
+            "selected_design_frequency_compliant": state.get(
+                "selected_design_frequency_compliant"
+            ),
+            "selected_design_resource_compliant": state.get(
+                "selected_design_resource_compliant"
+            ),
             "latest_candidate": state.get("latest_candidate"),
             "best_correct_candidate": state.get("best_correct_candidate"),
             "best_ppa_candidate": state.get("best_ppa_candidate"),
             "pareto_archive": state.get("pareto_archive", []),
         }
     )
-    if selected is not None and not success:
+    if selected is not None and selected_verified and not success:
         success = True
         status = "completed_with_fallback"
     return OptimisationRunResult(
@@ -138,7 +147,9 @@ def _status_summary(config: dict[str, Any], output_dir: Path) -> tuple[str, dict
         "budget": {
             "max_candidates": config.get("budget", {}).get("max_candidates"),
             "max_synthesis_calls": config.get("budget", {}).get("max_synthesis_calls"),
+            "max_cosim_calls": config.get("budget", {}).get("max_cosim_calls"),
             "synthesis_calls_used": 0,
+            "cosim_calls_used": 0,
         },
         "message": (
             "Baseline is ready; no experiment summary has been generated yet."
@@ -224,6 +235,40 @@ def _prepare_next_prompt(
         prepare_refinement_prompt(config_source, previous_index, next_index)
 
 
+def _run_cosim_stage(
+    config_source: ConfigSource,
+    index: int,
+    trajectory: list[dict[str, Any]],
+    budget: BudgetState | None,
+) -> dict[str, Any]:
+    if budget is not None:
+        budget.require("cosim_calls")
+    cosim = run_candidate_cosim(config_source, index)
+    if budget is not None:
+        budget.charge_cosim(
+            stage=f"candidate_{index:03d}_cosim",
+            success=cosim["passed"],
+            timed_out=bool(cosim.get("timed_out", False)),
+        )
+    trajectory.append(
+        {
+            "candidate": index,
+            "stage": "cosim",
+            "passed": cosim["passed"],
+            "timed_out": cosim.get("timed_out", False),
+        }
+    )
+    detail = (
+        f"timed out after {cosim.get('timeout_seconds')} seconds"
+        if cosim.get("timed_out")
+        else f"return code {cosim.get('return_code')}"
+    )
+    _print_stage(index, "co-simulation", cosim["passed"], detail)
+    summary = evaluate_experiment(config_source)
+    _print_verdict(summary, index)
+    return summary
+
+
 def _evaluate_candidate(
     config_source: ConfigSource,
     index: int,
@@ -288,6 +333,9 @@ def _evaluate_candidate(
     )
     _print_stage(index, "synthesis", synthesis["passed"], synth_detail)
     summary = evaluate_experiment(config_source)
+    record = _record(summary, index)
+    if record and record.get("verdict") == "awaiting_cosim":
+        return _run_cosim_stage(config_source, index, trajectory, budget)
     _print_verdict(summary, index)
     return summary
 
@@ -321,6 +369,10 @@ def run_optimisation(
             if budget is not None:
                 budget.set_stop_reason("synthesis_budget_exhausted")
             return _finish(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
+        if local_budget["cosim_calls_remaining"] <= 0:
+            if budget is not None:
+                budget.set_stop_reason("cosim_budget_exhausted")
+            return _finish(True, "terminated_budget", "cosim_budget_exhausted", summary, trajectory)
 
         indices = _candidate_indices(output_dir)
         if not indices:
@@ -328,6 +380,9 @@ def run_optimisation(
         else:
             latest = indices[-1]
             latest_record = _record(summary, latest)
+            if latest_record and latest_record.get("verdict") == "awaiting_cosim":
+                summary = _run_cosim_stage(config_source, latest, trajectory, budget)
+                continue
             if latest_record and latest_record.get("verdict") == "incomplete":
                 static_path = output_dir / f"candidate_{latest:03d}_static_validation.json"
                 csim_path = output_dir / f"candidate_{latest:03d}_csim_validation.json"
@@ -353,17 +408,32 @@ def run_optimisation(
                             success=synthesis["passed"],
                             timed_out=bool(synthesis.get("timed_out", False)),
                         )
-                    trajectory.append({"candidate": latest, "stage": "synthesis", "passed": synthesis["passed"], "timed_out": synthesis.get("timed_out", False)})
+                    trajectory.append(
+                        {
+                            "candidate": latest,
+                            "stage": "synthesis",
+                            "passed": synthesis["passed"],
+                            "timed_out": synthesis.get("timed_out", False),
+                        }
+                    )
                     _print_stage(latest, "synthesis", synthesis["passed"])
                     summary = evaluate_experiment(config_source)
-                    _print_verdict(summary, latest)
+                    resumed = _record(summary, latest)
+                    if resumed and resumed.get("verdict") == "awaiting_cosim":
+                        summary = _run_cosim_stage(config_source, latest, trajectory, budget)
+                    else:
+                        _print_verdict(summary, latest)
                     continue
             index = latest + 1
             if index > maximum_candidates:
                 if budget is not None:
                     budget.set_stop_reason("candidate_budget_exhausted")
                 return _finish(True, "terminated_iteration_limit", "candidate_budget_exhausted", summary, trajectory)
-            completed = [item for item in summary.get("candidates", []) if item.get("verdict") != "incomplete"]
+            completed = [
+                item
+                for item in summary.get("candidates", [])
+                if item.get("verdict") not in {"incomplete", "awaiting_cosim"}
+            ]
             if not completed:
                 return _finish(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
             previous = completed[-1]
@@ -379,12 +449,13 @@ def run_optimisation(
             if not budget.can_generate_candidate(
                 reserve_csim=1,
                 reserve_synthesis=1,
+                reserve_cosim=1,
             ):
-                budget.set_stop_reason("validation_budget_exhausted")
+                budget.set_stop_reason("final_verification_budget_unavailable")
                 return _finish(
                     True,
                     "terminated_budget",
-                    "validation_budget_exhausted",
+                    "final_verification_budget_unavailable",
                     summary,
                     trajectory,
                 )
