@@ -120,7 +120,7 @@ Owns portable Vitis execution. It:
 - creates isolated internal TCL scripts;
 - replaces only the design source with the current candidate;
 - preserves headers, include flags and testbench files;
-- runs CSim or synthesis through the shared command runner;
+- runs CSim and synthesis through the shared command runner;
 - extracts XML synthesis metrics;
 - writes machine-readable reports.
 
@@ -130,7 +130,13 @@ Owns portable Vitis execution. It:
 
 The older `run_candidate_csim()` and `run_candidate_synthesis()` entry points remain for the current optimisation workflow, but they use the same shared subprocess and report parsing boundaries.
 
-Baseline source files must never be modified.
+### `cosim.py`
+
+`run_cosim(task, candidate)` runs `csynth_design` followed by `cosim_design` in a fresh temporary project while reusing the same task parsing and shared process runner as CSim and synthesis.
+
+It returns structured pass, timeout, return-code, duration, command and candidate-provenance fields. Failures distinguish RTL/testbench compilation errors, simulation mismatches, deadlocks, timeouts, missing reports and other co-simulation failures. Only the generated Vitis report files are copied into `output_dir/cosim/<candidate-hash>/reports/`.
+
+Baseline source files and testbenches must never be modified.
 
 ### `validation.py`
 
@@ -152,7 +158,7 @@ Provides the shared subprocess boundary for external tools. Each result records:
 
 Commands use a 300-second default timeout. A timeout terminates the complete process group with `SIGTERM`, followed by `SIGKILL` if the grace period expires. Existing callers can continue using `command`, `return_code`, `output` and `passed` while structured adapters consume the additional metadata.
 
-Vitis CSim and synthesis reuse this runner; there is no separate low-level Vitis process implementation.
+Vitis CSim, synthesis and co-simulation reuse this runner; there is no separate low-level Vitis process implementation.
 
 ### `reports.py`
 
