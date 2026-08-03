@@ -9,7 +9,8 @@ from typing import Any
 
 from agent.budget import BudgetExceeded, BudgetState
 from agent.repair.diagnose import build_diagnosis
-from agent.tools.reports import write_json
+from agent.repair.output_validation import InvalidModelOutputError
+from agent.tools.reports import load_json, write_json
 from agent.tools.validation import classify_failure
 
 
@@ -47,7 +48,7 @@ def _exception_attempt(
     seed_source: Path | None,
     error: Exception,
 ) -> tuple[bool, Path, dict[str, Any]]:
-    """Turn a provider/attempt exception into retryable structured evidence."""
+    """Turn a provider or output-validation exception into retryable evidence."""
     workspace = attempt_dir / "workspace"
     editable = str(config["editable_files"][0])
     if not workspace.is_dir():
@@ -65,17 +66,39 @@ def _exception_attempt(
             "Repair attempt failed before an editable candidate workspace was available"
         ) from error
 
+    invalid_output = isinstance(error, InvalidModelOutputError)
     error_text = f"{type(error).__name__}: {error}"
-    (attempt_dir / "model_generation_error.log").write_text(
-        error_text + "\n",
-        encoding="utf-8",
+    stage = "model_output_validation" if invalid_output else "model_generation"
+    failure_class = "invalid_model_output" if invalid_output else "model_generation_error"
+    evidence = (
+        [str(item) for item in error.report.get("evidence", [])]
+        if invalid_output
+        else [error_text]
     )
+
+    if invalid_output:
+        (attempt_dir / "raw_response.txt").write_text(
+            error.raw_response,
+            encoding="utf-8",
+        )
+        write_json(attempt_dir / "api_response.json", error.raw_api_response)
+        write_json(attempt_dir / "output_validation.json", error.report)
+        (attempt_dir / "model_output_validation_error.log").write_text(
+            error_text + "\n",
+            encoding="utf-8",
+        )
+    else:
+        (attempt_dir / "model_generation_error.log").write_text(
+            error_text + "\n",
+            encoding="utf-8",
+        )
+
     pre_log = attempt_dir / "host_validation_before.log"
     pre_output = pre_log.read_text(encoding="utf-8") if pre_log.is_file() else ""
     diagnosis = build_diagnosis(
-        stage="model_generation",
-        failure_class="model_generation_error",
-        evidence=[error_text],
+        stage=stage,
+        failure_class=failure_class,
+        evidence=evidence,
         editable_files=[str(item) for item in config.get("editable_files", [])],
         protected_files=[str(item) for item in config.get("protected_files", [])],
         top_function=str(config["top_function"]) if config.get("top_function") else None,
@@ -84,11 +107,21 @@ def _exception_attempt(
     write_json(attempt_dir / "diagnosis_after.json", diagnosis)
     feedback = {
         "attempt": attempt,
-        "stage": "model_generation",
-        "failure_class": "model_generation_error",
-        "evidence": [error_text],
+        "stage": stage,
+        "failure_class": failure_class,
+        "evidence": evidence,
         "diagnosis": diagnosis,
     }
+
+    initial_diagnosis_path = attempt_dir / "diagnosis_before.json"
+    initial_diagnosis = (
+        load_json(initial_diagnosis_path) if initial_diagnosis_path.is_file() else None
+    )
+    input_tokens = error.input_tokens if invalid_output else 0
+    output_tokens = error.output_tokens if invalid_output else 0
+    total_tokens = error.total_tokens if invalid_output else 0
+    latency_seconds = error.latency_seconds if invalid_output else 0.0
+
     result = {
         "schema_version": 4,
         "experiment_id": str(config["experiment_id"]),
@@ -99,13 +132,13 @@ def _exception_attempt(
         "model": config["model"],
         "thinking_budget": config.get("thinking_budget"),
         "failure_class": classify_failure(pre_output) if pre_output else "unknown",
-        "diagnosis": None,
+        "diagnosis": initial_diagnosis,
         "final_diagnosis": diagnosis,
         "pre_host_validation_passed": False,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "tokens_used": 0,
-        "latency_seconds": 0.0,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "tokens_used": total_tokens,
+        "latency_seconds": latency_seconds,
         "modified_files": [],
         "protected_files_unchanged": True,
         "editable_scope_respected": True,
@@ -116,6 +149,7 @@ def _exception_attempt(
         "repair_diff_present": False,
         "passed": False,
         "generation_error": error_text,
+        "output_validation": error.report if invalid_output else None,
         "feedback": feedback,
     }
     write_json(attempt_dir / "result.json", result)
@@ -165,6 +199,12 @@ def run_repair_loop(
         except BudgetExceeded:
             raise
         except Exception as error:
+            if isinstance(error, InvalidModelOutputError) and budget is not None:
+                budget.record_model_tokens(
+                    input_tokens=error.input_tokens,
+                    output_tokens=error.output_tokens,
+                    stage=f"repair_attempt_{attempt:03d}_generation",
+                )
             passed, final_dir, result = _exception_attempt(
                 config,
                 repo_root=REPO_ROOT,
