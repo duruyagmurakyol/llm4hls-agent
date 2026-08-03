@@ -9,6 +9,7 @@ from typing import Any
 
 from agent.budget import BudgetState
 from agent.tools.reports import write_json
+from agent.tools.validation import classify_failure
 
 
 def _can_attempt(config: dict[str, Any], budget: BudgetState | None) -> bool:
@@ -34,6 +35,77 @@ def _attempt_limit(config: dict[str, Any], budget: BudgetState | None) -> int:
     if config["independent_validation"].get("enabled", False):
         limits.append(budget.remaining("csim_calls"))
     return min(limits)
+
+
+def _exception_attempt(
+    config: dict[str, Any],
+    *,
+    repo_root: Path,
+    attempt_dir: Path,
+    attempt: int,
+    seed_source: Path | None,
+    error: Exception,
+) -> tuple[bool, Path, dict[str, Any]]:
+    """Turn a provider/attempt exception into retryable structured evidence."""
+    workspace = attempt_dir / "workspace"
+    editable = str(config["editable_files"][0])
+    if not workspace.is_dir():
+        benchmark_source = repo_root / str(config["benchmark_source"])
+        shutil.copytree(benchmark_source, workspace)
+        fault_metadata = workspace / "fault.txt"
+        if fault_metadata.exists():
+            fault_metadata.unlink()
+        if seed_source is not None:
+            shutil.copy2(seed_source, workspace / editable)
+
+    candidate = workspace / editable
+    if not candidate.is_file():
+        raise RuntimeError(
+            "Repair attempt failed before an editable candidate workspace was available"
+        ) from error
+
+    error_text = f"{type(error).__name__}: {error}"
+    (attempt_dir / "model_generation_error.log").write_text(
+        error_text + "\n",
+        encoding="utf-8",
+    )
+    pre_log = attempt_dir / "host_validation_before.log"
+    pre_output = pre_log.read_text(encoding="utf-8") if pre_log.is_file() else ""
+    feedback = {
+        "attempt": attempt,
+        "stage": "model_generation",
+        "failure_class": "model_generation_error",
+        "evidence": [error_text],
+    }
+    result = {
+        "schema_version": 4,
+        "experiment_id": str(config["experiment_id"]),
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"),
+        "attempt": attempt,
+        "repair_mode": "direct_api",
+        "provider": "siliconflow",
+        "model": config["model"],
+        "thinking_budget": config.get("thinking_budget"),
+        "failure_class": classify_failure(pre_output) if pre_output else "unknown",
+        "pre_host_validation_passed": False,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tokens_used": 0,
+        "latency_seconds": None,
+        "modified_files": [],
+        "protected_files_unchanged": True,
+        "editable_scope_respected": True,
+        "changed_line_count": 0,
+        "tokens_per_changed_line": None,
+        "post_host_validation_passed": False,
+        "independent_validation_passed": False,
+        "repair_diff_present": False,
+        "passed": False,
+        "generation_error": error_text,
+        "feedback": feedback,
+    }
+    write_json(attempt_dir / "result.json", result)
+    return False, attempt_dir, result
 
 
 def run_repair_loop(
@@ -66,15 +138,26 @@ def run_repair_loop(
                 budget.set_stop_reason("repair_budget_exhausted")
             break
         attempt_dir = run_root if maximum == 1 else run_root / f"attempt_{attempt:03d}"
-        passed, final_dir, result = _run_repair_once(
-            config,
-            run_dir=attempt_dir,
-            attempt=attempt,
-            seed_source=seed_source,
-            feedback=feedback,
-            keep_workspace=True,
-            budget=budget,
-        )
+        try:
+            passed, final_dir, result = _run_repair_once(
+                config,
+                run_dir=attempt_dir,
+                attempt=attempt,
+                seed_source=seed_source,
+                feedback=feedback,
+                keep_workspace=True,
+                budget=budget,
+            )
+        except Exception as error:
+            passed, final_dir, result = _exception_attempt(
+                config,
+                repo_root=REPO_ROOT,
+                attempt_dir=attempt_dir,
+                attempt=attempt,
+                seed_source=seed_source,
+                error=error,
+            )
+
         attempt_results.append(result)
         feedback = result.get("feedback")
         if not passed and not isinstance(feedback, dict):
