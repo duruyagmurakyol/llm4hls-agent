@@ -193,7 +193,7 @@ def _run_direct_api_repair(
             )
         )
 
-        if synthesis["passed"]:
+        if synthesis["passed"] and budget.max_cosim_calls > 0:
             cosim_stage = "post_repair_cosim"
             budget.charge_cosim(stage=cosim_stage)
             try:
@@ -229,18 +229,27 @@ def _run_direct_api_repair(
             )
 
     synthesis_passed = synthesis is not None and synthesis["passed"] is True
+    cosim_required = budget.max_cosim_calls > 0
     cosim_passed = cosim is not None and cosim["passed"] is True
-    success = passed and synthesis_passed and cosim_passed
+    success = passed and synthesis_passed and (cosim_passed if cosim_required else True)
     status = (
         "fully_verified"
+        if success and cosim_required
+        else "correctness_and_synthesis_established"
         if success
-        else "cosim_failed" if synthesis_passed else "synthesis_failed" if passed else "repair_failed"
+        else "cosim_failed"
+        if synthesis_passed and cosim_required
+        else "synthesis_failed"
+        if passed
+        else "repair_failed"
     )
     termination_reason = (
         "repair_synthesis_and_cosim_completed"
+        if success and cosim_required
+        else "repair_and_synthesis_completed"
         if success
         else "post_repair_cosim_failed"
-        if synthesis_passed
+        if synthesis_passed and cosim_required
         else "post_repair_synthesis_failed"
         if passed
         else "repair_failed"
