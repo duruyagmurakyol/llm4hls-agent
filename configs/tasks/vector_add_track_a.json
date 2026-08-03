@@ -34,9 +34,9 @@
   },
   "budgets": {
     "max_iterations": 3,
-    "max_csim_calls": 3,
-    "max_cosim_calls": 0,
-    "max_synthesis_calls": 2,
+    "max_csim_calls": 4,
+    "max_cosim_calls": 1,
+    "max_synthesis_calls": 3,
     "max_model_calls": 3,
     "max_total_tokens": null
   },
@@ -46,6 +46,43 @@
     "temperature": 0.0,
     "max_tokens": 4096,
     "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval/vector_add",
+    "editable_files": [
+      "src/vector_add.cpp"
+    ],
+    "protected_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_tb.cpp",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/vector_add.h",
+      "testbench/vector_add_tb.cpp"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/vector_add.cpp",
+        "testbench/vector_add_tb.cpp",
+        "-o",
+        "vector_add_test"
+      ],
+      "run_command": [
+        "./vector_add_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
   },
   "optimisation": {
     "target_loop_label": "vector_add_loop",
@@ -65,7 +102,7 @@
     ]
   },
   "adapter": {
-    "kind": "autonomous_ppa"
+    "kind": "auto"
   },
   "output_dir": "experiments/track_a/hls_eval_vector_add_001"
 }
