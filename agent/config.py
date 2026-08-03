@@ -28,6 +28,13 @@ REQUIRED_REPAIR_FIELDS = {
     "independent_validation",
 }
 
+SUPPORTED_ADAPTERS = {
+    "auto",
+    "autonomous_ppa",
+    "direct_api_repair",
+    "legacy_ppa",
+}
+
 
 @dataclass(frozen=True)
 class TaskManifest:
@@ -58,24 +65,42 @@ def load_task(path: Path) -> TaskManifest:
     return TaskManifest(path=resolved, data=data)
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _require_command(section: dict[str, Any], key: str, field: str) -> None:
     command = section.get(key)
-    if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
+    if not isinstance(command, list) or not command or not all(
+        isinstance(item, str) and item for item in command
+    ):
         raise ValueError(f"{field}.{key} must be a non-empty list of strings")
 
 
-def _require_file_list(repair: dict[str, Any], key: str, *, required: bool) -> list[str]:
+def _require_file_list(
+    repair: dict[str, Any],
+    key: str,
+    *,
+    required: bool,
+) -> list[str]:
     files = repair.get(key)
     if files is None and not required:
         return []
-    if not isinstance(files, list) or not files or not all(isinstance(item, str) and item for item in files):
+    if not isinstance(files, list) or not files or not all(
+        isinstance(item, str) and item for item in files
+    ):
         raise ValueError(f"repair.{key} must be a non-empty list of strings")
     return files
 
 
-def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -> None:
+def _validate_direct_api_repair(
+    data: dict[str, Any],
+    adapter: dict[str, Any],
+) -> None:
     if "config" in adapter:
-        raise ValueError("direct_api_repair must be configured directly in the task manifest")
+        raise ValueError(
+            "direct_api_repair must be configured directly in the task manifest"
+        )
 
     repair = data.get("repair")
     if not isinstance(repair, dict):
@@ -86,7 +111,7 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
         raise ValueError("Missing repair fields: " + ", ".join(missing))
 
     benchmark_source = repair["benchmark_source"]
-    if not isinstance(benchmark_source, str) or not benchmark_source:
+    if not isinstance(benchmark_source, str) or not benchmark_source.strip():
         raise ValueError("repair.benchmark_source must be a non-empty string")
 
     editable = _require_file_list(repair, "editable_files", required=True)
@@ -95,7 +120,9 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
 
     overlap = sorted(set(editable) & set(protected))
     if overlap:
-        raise ValueError("repair editable and protected files overlap: " + ", ".join(overlap))
+        raise ValueError(
+            "repair editable and protected files overlap: " + ", ".join(overlap)
+        )
 
     host = repair["host_validation"]
     if not isinstance(host, dict):
@@ -110,9 +137,14 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
         _require_command(independent, "command", "repair.independent_validation")
 
 
-def _validate_autonomous_ppa(data: dict[str, Any], adapter: dict[str, Any]) -> None:
+def _validate_autonomous_ppa(
+    data: dict[str, Any],
+    adapter: dict[str, Any],
+) -> None:
     if "config" in adapter:
-        raise ValueError("autonomous_ppa must be configured directly in the task manifest")
+        raise ValueError(
+            "autonomous_ppa must be configured directly in the task manifest"
+        )
 
     optimisation = data.get("optimisation", {})
     if not isinstance(optimisation, dict):
@@ -135,6 +167,12 @@ def _resolve_task_path(value: str) -> Path:
 
 
 def validate_task_paths(data: dict[str, Any]) -> None:
+    artifacts = data["artifacts"]
+    artifact_paths = [artifacts["source"], *artifacts["testbench"]]
+    for value in artifact_paths:
+        if not _resolve_task_path(value).is_file():
+            raise ValueError(f"task file does not exist: {value}")
+
     adapter = data["adapter"]
     if adapter["kind"] != "direct_api_repair":
         return
@@ -154,18 +192,58 @@ def validate_task_paths(data: dict[str, Any]) -> None:
 
 
 def validate_task(data: dict[str, Any]) -> None:
-    required = {"task_id", "task_kind", "artifacts", "interface", "target", "budgets", "model", "adapter", "output_dir"}
+    required = {
+        "task_id",
+        "task_kind",
+        "artifacts",
+        "interface",
+        "target",
+        "budgets",
+        "model",
+        "adapter",
+        "output_dir",
+    }
     missing = sorted(required - data.keys())
     if missing:
         raise ValueError("Missing task fields: " + ", ".join(missing))
 
     artifacts = data["artifacts"]
-    if not isinstance(artifacts, dict) or "source" not in artifacts or "testbench" not in artifacts:
-        raise ValueError("artifacts must define source and testbench")
+    if not isinstance(artifacts, dict):
+        raise ValueError("artifacts must be an object")
+
+    source = artifacts.get("source")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("artifacts.source must be a non-empty string")
+
+    testbench = artifacts.get("testbench")
+    if not isinstance(testbench, list) or not testbench or not all(
+        isinstance(item, str) and item.strip() for item in testbench
+    ):
+        raise ValueError("artifacts.testbench must be a non-empty list of strings")
 
     interface = data["interface"]
-    if not isinstance(interface, dict) or not interface.get("top_function"):
-        raise ValueError("interface.top_function is required")
+    top_function = interface.get("top_function") if isinstance(interface, dict) else None
+    if not isinstance(top_function, str) or not top_function.strip():
+        raise ValueError("interface.top_function must be a non-empty string")
+
+    target = data["target"]
+    if not isinstance(target, dict):
+        raise ValueError("target must be an object")
+
+    clock = target.get("clock_period_ns")
+    if not _is_number(clock) or clock <= 0:
+        raise ValueError("target.clock_period_ns must be a positive number")
+
+    minimum_frequency = target.get("minimum_frequency_mhz")
+    if not _is_number(minimum_frequency) or minimum_frequency <= 0:
+        raise ValueError("target.minimum_frequency_mhz must be a positive number")
+
+    platform = target.get("platform")
+    part = target.get("part")
+    has_platform = isinstance(platform, str) and bool(platform.strip())
+    has_part = isinstance(part, str) and bool(part.strip())
+    if not has_platform and not has_part:
+        raise ValueError("target must define a non-empty platform or part")
 
     budgets = data["budgets"]
     if not isinstance(budgets, dict):
@@ -176,14 +254,33 @@ def validate_task(data: dict[str, Any]) -> None:
 
     for key in REQUIRED_BUDGETS:
         value = budgets[key]
-        if not isinstance(value, int) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"budgets.{key} must be a non-negative integer")
 
+    if budgets["max_iterations"] == 0:
+        raise ValueError("budgets.max_iterations must be greater than zero")
+
+    max_total_tokens = budgets.get("max_total_tokens")
+    if max_total_tokens is not None and (
+        isinstance(max_total_tokens, bool)
+        or not isinstance(max_total_tokens, int)
+        or max_total_tokens <= 0
+    ):
+        raise ValueError("budgets.max_total_tokens must be null or a positive integer")
+
     adapter = data["adapter"]
-    if not isinstance(adapter, dict) or not adapter.get("kind"):
+    if not isinstance(adapter, dict) or not isinstance(adapter.get("kind"), str):
         raise ValueError("adapter.kind is required")
 
-    if adapter["kind"] == "direct_api_repair":
+    adapter_kind = adapter["kind"].strip()
+    if adapter_kind not in SUPPORTED_ADAPTERS:
+        raise ValueError(f"Unsupported adapter kind: {adapter_kind or '<empty>'}")
+
+    if adapter_kind == "direct_api_repair":
         _validate_direct_api_repair(data, adapter)
-    elif adapter["kind"] == "autonomous_ppa":
+    elif adapter_kind == "autonomous_ppa":
         _validate_autonomous_ppa(data, adapter)
+    elif adapter_kind == "legacy_ppa":
+        config = adapter.get("config")
+        if not isinstance(config, str) or not config.strip():
+            raise ValueError("legacy_ppa requires adapter.config")
