@@ -104,7 +104,7 @@ def _validate_direct_api_repair(
 
     repair = data.get("repair")
     if not isinstance(repair, dict):
-        raise ValueError("repair must be an object for direct_api_repair tasks")
+        raise ValueError("repair must be an object for repair-capable tasks")
 
     missing = sorted(REQUIRED_REPAIR_FIELDS - repair.keys())
     if missing:
@@ -146,9 +146,9 @@ def _validate_autonomous_ppa(
             "autonomous_ppa must be configured directly in the task manifest"
         )
 
-    optimisation = data.get("optimisation", {})
+    optimisation = data.get("optimisation")
     if not isinstance(optimisation, dict):
-        raise ValueError("optimisation must be an object")
+        raise ValueError("optimisation must be an object for optimisation-capable tasks")
 
     prompt_constraints = optimisation.get("prompt_constraints", [])
     if not isinstance(prompt_constraints, list) or not all(
@@ -159,6 +159,19 @@ def _validate_autonomous_ppa(
     validation = optimisation.get("validation", {})
     if not isinstance(validation, dict):
         raise ValueError("optimisation.validation must be an object")
+
+
+def _validate_auto(data: dict[str, Any], adapter: dict[str, Any]) -> None:
+    if "config" in adapter:
+        raise ValueError("auto tasks must be configured directly in the task manifest")
+
+    _validate_direct_api_repair(data, adapter)
+    _validate_autonomous_ppa(data, adapter)
+
+    budgets = data["budgets"]
+    for key in ("max_csim_calls", "max_synthesis_calls", "max_cosim_calls"):
+        if budgets[key] < 1:
+            raise ValueError(f"budgets.{key} must be at least 1 for auto tasks")
 
 
 def _resolve_task_path(value: str) -> Path:
@@ -174,7 +187,7 @@ def validate_task_paths(data: dict[str, Any]) -> None:
             raise ValueError(f"task file does not exist: {value}")
 
     adapter = data["adapter"]
-    if adapter["kind"] != "direct_api_repair":
+    if adapter["kind"] not in {"direct_api_repair", "auto"}:
         return
 
     repair = data["repair"]
@@ -276,7 +289,9 @@ def validate_task(data: dict[str, Any]) -> None:
     if adapter_kind not in SUPPORTED_ADAPTERS:
         raise ValueError(f"Unsupported adapter kind: {adapter_kind or '<empty>'}")
 
-    if adapter_kind == "direct_api_repair":
+    if adapter_kind == "auto":
+        _validate_auto(data, adapter)
+    elif adapter_kind == "direct_api_repair":
         _validate_direct_api_repair(data, adapter)
     elif adapter_kind == "autonomous_ppa":
         _validate_autonomous_ppa(data, adapter)
