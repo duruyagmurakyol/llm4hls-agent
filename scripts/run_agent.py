@@ -22,31 +22,31 @@ def main() -> None:
     parser.add_argument(
         "task",
         type=Path,
-        help="Unified task manifest or benchmark directory containing an HLS TCL flow",
+        help="Unified task manifest or benchmark directory containing an HLS build configuration",
     )
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--max-agent-steps", type=int, default=None)
     parser.add_argument(
         "--onboard-only",
         action="store_true",
-        help="Discover a benchmark directory and generate configuration without running the agent",
+        help="Discover and print a benchmark directory without running the agent",
     )
     args = parser.parse_args()
 
     try:
         target = args.task.resolve()
         if target.is_dir():
-            task_path = onboard_benchmark(target)
+            task_input = onboard_benchmark(target)
         else:
             if args.onboard_only:
                 raise ValueError("--onboard-only requires a benchmark directory.")
-            task_path = target
+            task_input = target
 
         if args.onboard_only:
             return
 
         result = run_agent(
-            task_path,
+            task_input,
             status_only=args.status_only,
             max_steps=args.max_agent_steps,
         )
