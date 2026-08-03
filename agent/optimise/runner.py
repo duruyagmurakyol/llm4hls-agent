@@ -10,11 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent.archive import preserve_candidate_state
 from agent.budget import BudgetState
 from agent.optimise.config_source import ConfigInput, ConfigSource, as_config_source
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate
-from agent.optimise.evaluate import evaluate_experiment
+from agent.optimise.evaluate import evaluate_experiment as _evaluate_experiment
 from agent.optimise.generate import generate_candidate
 from agent.tools.synthesis import ensure_baseline_synthesis, run_candidate_csim, run_candidate_synthesis
 from agent.tools.validation import validate_ppa_candidate
@@ -35,6 +36,14 @@ def _load_json(path: ConfigSource | Path) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"JSON file not found: {path}")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def evaluate_experiment(config_source: ConfigSource) -> dict[str, Any]:
+    """Evaluate candidates and persist best-so-far source selections."""
+    return preserve_candidate_state(
+        config_source,
+        _evaluate_experiment(config_source),
+    )
 
 
 def _candidate_indices(output_dir: Path) -> list[int]:
@@ -67,6 +76,39 @@ def _print_verdict(summary: dict[str, Any], index: int) -> None:
     print(
         f"Candidate {index:03d} verdict: {record.get('verdict')} — {record.get('reason')}",
         flush=True,
+    )
+
+
+def _finish(
+    success: bool,
+    status: str,
+    termination_reason: str,
+    summary: dict[str, Any],
+    trajectory: list[dict[str, Any]],
+) -> OptimisationRunResult:
+    """Return the best verified design even when the latest candidate failed."""
+    selected = summary.get("selected_design")
+    state = summary.get("candidate_state") if isinstance(summary.get("candidate_state"), dict) else {}
+    trajectory.append(
+        {
+            "stage": "select_best",
+            "passed": selected is not None,
+            "selected_design": selected,
+            "latest_candidate": state.get("latest_candidate"),
+            "best_correct_candidate": state.get("best_correct_candidate"),
+            "best_ppa_candidate": state.get("best_ppa_candidate"),
+            "pareto_archive": state.get("pareto_archive", []),
+        }
+    )
+    if selected is not None and not success:
+        success = True
+        status = "completed_with_fallback"
+    return OptimisationRunResult(
+        success,
+        status,
+        termination_reason,
+        summary,
+        trajectory,
     )
 
 
@@ -278,7 +320,7 @@ def run_optimisation(
         if local_budget["synthesis_calls_remaining"] <= 0:
             if budget is not None:
                 budget.set_stop_reason("synthesis_budget_exhausted")
-            return OptimisationRunResult(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
+            return _finish(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
 
         indices = _candidate_indices(output_dir)
         if not indices:
@@ -320,10 +362,10 @@ def run_optimisation(
             if index > maximum_candidates:
                 if budget is not None:
                     budget.set_stop_reason("candidate_budget_exhausted")
-                return OptimisationRunResult(True, "terminated_iteration_limit", "candidate_budget_exhausted", summary, trajectory)
+                return _finish(True, "terminated_iteration_limit", "candidate_budget_exhausted", summary, trajectory)
             completed = [item for item in summary.get("candidates", []) if item.get("verdict") != "incomplete"]
             if not completed:
-                return OptimisationRunResult(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
+                return _finish(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
             previous = completed[-1]
             _prepare_next_prompt(config_source, previous, int(previous["candidate_index"]), index)
 
@@ -331,7 +373,7 @@ def run_optimisation(
         if model_calls >= maximum_candidates:
             if budget is not None:
                 budget.set_stop_reason("model_call_budget_exhausted")
-            return OptimisationRunResult(True, "terminated_budget", "model_call_budget_exhausted", summary, trajectory)
+            return _finish(True, "terminated_budget", "model_call_budget_exhausted", summary, trajectory)
 
         if budget is not None:
             if not budget.can_generate_candidate(
@@ -339,7 +381,7 @@ def run_optimisation(
                 reserve_synthesis=1,
             ):
                 budget.set_stop_reason("validation_budget_exhausted")
-                return OptimisationRunResult(
+                return _finish(
                     True,
                     "terminated_budget",
                     "validation_budget_exhausted",
@@ -357,8 +399,8 @@ def run_optimisation(
         if record and record.get("verdict") == "accept_dominates_baseline":
             if budget is not None:
                 budget.set_stop_reason("candidate_dominates_baseline")
-            return OptimisationRunResult(True, "success", "candidate_dominates_baseline", summary, trajectory)
+            return _finish(True, "success", "candidate_dominates_baseline", summary, trajectory)
 
     if budget is not None:
         budget.set_stop_reason("max_agent_steps_reached")
-    return OptimisationRunResult(True, "terminated_step_limit", "max_agent_steps_reached", summary, trajectory)
+    return _finish(True, "terminated_step_limit", "max_agent_steps_reached", summary, trajectory)
