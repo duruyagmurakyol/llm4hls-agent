@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.failures import FailureStage, classify_failure as classify_hls_failure
 from agent.state import ValidationResult
 from agent.tools.command_runner import CommandResult
 from agent.tools.reports import load_json, write_json
@@ -15,17 +16,14 @@ from agent.tools.reports import load_json, write_json
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def classify_failure(output: str) -> str:
-    lower = output.lower()
-    if "undefined reference" in lower or "linker" in lower:
-        return "interface_or_link"
-    if "fail index=" in lower or ("expected=" in lower and "actual=" in lower):
-        return "functional"
-    if "error:" in lower or ("expected" in lower and "before" in lower):
-        return "compile"
-    if "timeout" in lower or "timed out" in lower:
-        return "timeout"
-    return "unknown"
+def classify_failure(
+    output: str,
+    *,
+    stage: FailureStage | None = None,
+    timed_out: bool = False,
+) -> str:
+    """Compatibility wrapper around the canonical HLS failure taxonomy."""
+    return classify_hls_failure(output, stage=stage, timed_out=timed_out)
 
 
 def extract_evidence(output: str, *, line_limit: int = 12, char_limit: int = 1200) -> list[str]:
@@ -35,17 +33,42 @@ def extract_evidence(output: str, *, line_limit: int = 12, char_limit: int = 120
         for line in lines
         if any(
             token in line.lower()
-            for token in ("error", "undefined", "fail", "expected", "actual", "timeout")
+            for token in (
+                "error",
+                "undefined",
+                "fail",
+                "expected",
+                "actual",
+                "timeout",
+                "deadlock",
+                "mismatch",
+                "unsupported",
+                "out of bounds",
+                "overflow",
+                "tolerance",
+            )
         )
     ]
     joined = "\n".join((selected[-line_limit:] or lines[-line_limit:]))[-char_limit:]
     return joined.splitlines()
 
 
-def from_command(result: CommandResult) -> ValidationResult:
+def from_command(
+    result: CommandResult,
+    *,
+    stage: FailureStage | None = None,
+) -> ValidationResult:
     return ValidationResult(
         passed=result.passed,
-        failure_class="none" if result.passed else classify_failure(result.output),
+        failure_class=(
+            "none"
+            if result.passed
+            else classify_failure(
+                result.output,
+                stage=stage,
+                timed_out=result.timed_out,
+            )
+        ),
         return_code=result.return_code,
         evidence=[] if result.passed else extract_evidence(result.output),
     )
