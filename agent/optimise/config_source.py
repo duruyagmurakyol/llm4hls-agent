@@ -68,6 +68,8 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     target = task.data.get("target") or {}
     target_clock_period_ns = float(target.get("clock_period_ns", 10.0))
     minimum_frequency_mhz = float(target.get("minimum_frequency_mhz", 100.0))
+    budgets = task.data["budgets"]
+    max_candidates = int(budgets["max_iterations"])
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
@@ -90,9 +92,9 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "output_dir": str(task.output_dir),
         "model": task.data["model"],
         "budget": {
-            "max_candidates": task.data["budgets"]["max_iterations"],
-            "max_synthesis_calls": task.data["budgets"]["max_synthesis_calls"],
-            "max_cosim_calls": task.data["budgets"]["max_cosim_calls"],
+            "max_candidates": max_candidates,
+            "max_synthesis_calls": int(budgets["max_synthesis_calls"]),
+            "max_cosim_calls": int(budgets.get("max_cosim_calls", max_candidates)),
         },
     }
 
