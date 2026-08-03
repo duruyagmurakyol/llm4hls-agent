@@ -10,14 +10,17 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SELECTION_OBJECTIVES = (
-    "latency_best_cycles",
-    "interval_min_cycles",
-    "clock_period_ns",
+    "latency_ns",
+    "throughput_period_ns",
     "resources_lut_used",
     "resources_ff_used",
     "resources_dsp_used",
     "resources_bram_used",
 )
+LEGACY_OBJECTIVE_FALLBACKS = {
+    "latency_ns": "latency_best_cycles",
+    "throughput_period_ns": "interval_min_cycles",
+}
 
 
 def _load_config(config_source: Any) -> dict[str, Any]:
@@ -42,13 +45,24 @@ def _hash(path: Path) -> str:
 
 
 def _number(value: Any) -> float:
-    return float(value) if isinstance(value, (int, float)) else float("inf")
+    return (
+        float(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else float("inf")
+    )
+
+
+def _objective(metrics: dict[str, Any], key: str) -> float:
+    value = metrics.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        value = metrics.get(LEGACY_OBJECTIVE_FALLBACKS.get(key, ""))
+    return _number(value)
 
 
 def _selection_key(record: dict[str, Any]) -> tuple[float, ...]:
     metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
     index = record.get("candidate_index")
-    return tuple(_number(metrics.get(key)) for key in SELECTION_OBJECTIVES) + (
+    return tuple(_objective(metrics, key) for key in SELECTION_OBJECTIVES) + (
         float(index) if isinstance(index, int) else float("inf"),
     )
 
@@ -66,6 +80,15 @@ def _is_verified(record: dict[str, Any]) -> bool:
     )
 
 
+def _is_frequency_compliant(record: dict[str, Any]) -> bool:
+    direct = record.get("meets_frequency_requirement")
+    if isinstance(direct, bool):
+        return direct
+    metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
+    nested = metrics.get("meets_minimum_frequency")
+    return nested is True
+
+
 def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[str, Any]:
     source = _resolve(str(record["candidate_file"]))
     baseline = record.get("candidate_index") == 0
@@ -81,6 +104,7 @@ def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[st
         "archived_file": _display(archived),
         "candidate_hash": _hash(source),
         "metrics": dict(record.get("metrics") or {}),
+        "meets_frequency_requirement": _is_frequency_compliant(record),
         "verdict": record.get("verdict"),
         "validation": {
             "static_validation": validation_value("static_validation"),
@@ -119,10 +143,18 @@ def preserve_candidate_state(
     archive_dir = output_dir / "candidate_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
+    frequency_requirement = (
+        summary.get("frequency_requirement")
+        if isinstance(summary.get("frequency_requirement"), dict)
+        else {}
+    )
     baseline = {
         "candidate_index": 0,
         "candidate_file": config["baseline"]["source"],
         "metrics": dict(summary.get("baseline_metrics") or {}),
+        "meets_frequency_requirement": frequency_requirement.get(
+            "baseline_meets_requirement"
+        ),
         "verdict": "baseline",
         "static_validation": True,
         "csim": True,
@@ -138,12 +170,18 @@ def preserve_candidate_state(
     )
     verified = [baseline, *[item for item in candidates if _is_verified(item)]]
     best_correct = min(verified, key=_selection_key)
+    compliant_verified = [item for item in verified if _is_frequency_compliant(item)]
+    best_compliant_correct = (
+        min(compliant_verified, key=_selection_key) if compliant_verified else None
+    )
 
     pareto_records = [
-        item for item in summary.get("pareto_archive", []) if isinstance(item, dict)
+        item
+        for item in summary.get("pareto_archive", [])
+        if isinstance(item, dict) and _is_frequency_compliant(item)
     ]
-    best_ppa = min(pareto_records, key=_selection_key) if pareto_records else best_correct
-    selected = best_ppa or best_correct
+    best_ppa = min(pareto_records, key=_selection_key) if pareto_records else None
+    selected = best_ppa or best_compliant_correct or best_correct
 
     previous_path = output_dir / "candidate_state.json"
     previous = {}
@@ -199,11 +237,15 @@ def preserve_candidate_state(
             archived_pareto.append(archived)
 
     state = {
-        "schema_version": 1,
+        "schema_version": 2,
         "selection_policy": (
-            "Select from the Pareto archive using latency, interval, clock period, "
-            "LUT, FF, DSP and BRAM in that order; fall back to the best verified design."
+            "Require the configured minimum frequency, then select from the Pareto "
+            "archive using actual latency, throughput period, LUT, FF, DSP and BRAM; "
+            "fall back to the best frequency-compliant verified design, then the best "
+            "correct design only when no compliant implementation exists."
         ),
+        "frequency_requirement": frequency_requirement,
+        "selected_design_frequency_compliant": _is_frequency_compliant(selected),
         "original_baseline": original,
         "latest_candidate": latest_record,
         "best_correct_candidate": best_correct_record,
@@ -221,6 +263,9 @@ def preserve_candidate_state(
             "best_correct_candidate": state["best_correct_candidate"],
             "best_ppa_candidate": state["best_ppa_candidate"],
             "selected_design": state["selected_design"],
+            "selected_design_frequency_compliant": state[
+                "selected_design_frequency_compliant"
+            ],
             "candidate_state": state,
         }
     )
