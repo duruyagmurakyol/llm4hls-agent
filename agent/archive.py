@@ -8,19 +8,13 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SELECTION_OBJECTIVES = (
-    "latency_ns",
-    "throughput_period_ns",
-    "resources_lut_used",
-    "resources_ff_used",
-    "resources_dsp_used",
-    "resources_bram_used",
+from agent.optimise.selection import (
+    configured_ranking,
+    deterministic_selection_key,
+    is_fully_verified,
 )
-LEGACY_OBJECTIVE_FALLBACKS = {
-    "latency_ns": "latency_best_cycles",
-    "throughput_period_ns": "interval_min_cycles",
-}
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_config(config_source: Any) -> dict[str, Any]:
@@ -44,42 +38,6 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _number(value: Any) -> float:
-    return (
-        float(value)
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-        else float("inf")
-    )
-
-
-def _objective(metrics: dict[str, Any], key: str) -> float:
-    value = metrics.get(key)
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        value = metrics.get(LEGACY_OBJECTIVE_FALLBACKS.get(key, ""))
-    return _number(value)
-
-
-def _selection_key(record: dict[str, Any]) -> tuple[float, ...]:
-    metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
-    index = record.get("candidate_index")
-    return tuple(_objective(metrics, key) for key in SELECTION_OBJECTIVES) + (
-        float(index) if isinstance(index, int) else float("inf"),
-    )
-
-
-def _is_verified(record: dict[str, Any]) -> bool:
-    if record.get("candidate_index") == 0:
-        return True
-    metrics = record.get("metrics")
-    return bool(
-        record.get("static_validation") is True
-        and record.get("csim") is True
-        and record.get("synthesis") is True
-        and isinstance(metrics, dict)
-        and metrics
-    )
-
-
 def _is_frequency_compliant(record: dict[str, Any]) -> bool:
     direct = record.get("meets_frequency_requirement")
     if isinstance(direct, bool):
@@ -99,8 +57,16 @@ def _is_frequency_compliant(record: dict[str, Any]) -> bool:
             and frequency >= minimum
         )
 
-    # Compatibility for archived summaries produced before FPT-603. New
-    # evaluator records always carry either a direct verdict or a minimum.
+    return True
+
+
+def _meets_resource_limits(record: dict[str, Any]) -> bool:
+    direct = record.get("meets_resource_limits")
+    if isinstance(direct, bool):
+        return direct
+    compliance = record.get("resource_limit_compliance")
+    if isinstance(compliance, dict) and isinstance(compliance.get("passed"), bool):
+        return bool(compliance["passed"])
     return True
 
 
@@ -119,12 +85,17 @@ def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[st
         "archived_file": _display(archived),
         "candidate_hash": _hash(source),
         "metrics": dict(record.get("metrics") or {}),
+        "fully_verified": is_fully_verified(record),
         "meets_frequency_requirement": _is_frequency_compliant(record),
+        "meets_resource_limits": _meets_resource_limits(record),
+        "resource_limit_compliance": dict(record.get("resource_limit_compliance") or {}),
+        "cost": dict(record.get("cost") or {}),
         "verdict": record.get("verdict"),
         "validation": {
             "static_validation": validation_value("static_validation"),
             "csim": validation_value("csim"),
             "synthesis": validation_value("synthesis"),
+            "cosim": validation_value("cosim"),
         },
     }
 
@@ -153,28 +124,45 @@ def preserve_candidate_state(
 ) -> dict[str, Any]:
     """Persist best-so-far state and return an enriched experiment summary."""
     config = _load_config(config_source)
+    selection = dict(config.get("selection") or {})
     output_dir = _resolve(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_dir = output_dir / "candidate_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
-    frequency_requirement = (
-        summary.get("frequency_requirement")
-        if isinstance(summary.get("frequency_requirement"), dict)
-        else {}
-    )
-    baseline = {
-        "candidate_index": 0,
-        "candidate_file": config["baseline"]["source"],
-        "metrics": dict(summary.get("baseline_metrics") or {}),
-        "meets_frequency_requirement": frequency_requirement.get(
-            "baseline_meets_requirement"
-        ),
-        "verdict": "baseline",
-        "static_validation": True,
-        "csim": True,
-        "synthesis": True,
-    }
+    baseline_from_summary = summary.get("baseline_record")
+    if isinstance(baseline_from_summary, dict):
+        baseline = dict(baseline_from_summary)
+    else:
+        frequency_requirement = (
+            summary.get("frequency_requirement")
+            if isinstance(summary.get("frequency_requirement"), dict)
+            else {}
+        )
+        baseline = {
+            "candidate_index": 0,
+            "candidate_file": config["baseline"]["source"],
+            "metrics": dict(summary.get("baseline_metrics") or {}),
+            "meets_frequency_requirement": frequency_requirement.get(
+                "baseline_meets_requirement"
+            ),
+            "meets_resource_limits": True,
+            "resource_limit_compliance": {"configured": False, "passed": True},
+            "fully_verified": True,
+            "verdict": "baseline",
+            "static_validation": True,
+            "csim": True,
+            "synthesis": True,
+            "cosim": True,
+            "cost": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "tool_calls": 0,
+                "tool_seconds": 0.0,
+            },
+        }
+
     candidates = [
         item for item in summary.get("candidates", []) if isinstance(item, dict)
     ]
@@ -183,20 +171,28 @@ def preserve_candidate_state(
         key=lambda item: int(item.get("candidate_index", -1)),
         default=None,
     )
-    verified = [baseline, *[item for item in candidates if _is_verified(item)]]
-    best_correct = min(verified, key=_selection_key)
-    compliant_verified = [item for item in verified if _is_frequency_compliant(item)]
-    best_compliant_correct = (
-        min(compliant_verified, key=_selection_key) if compliant_verified else None
+
+    verified = [item for item in [baseline, *candidates] if is_fully_verified(item)]
+    best_correct = (
+        min(verified, key=lambda item: deterministic_selection_key(item, selection))
+        if verified
+        else None
     )
 
     pareto_records = [
         item
         for item in summary.get("pareto_archive", [])
-        if isinstance(item, dict) and _is_frequency_compliant(item)
+        if isinstance(item, dict)
+        and is_fully_verified(item)
+        and _is_frequency_compliant(item)
+        and _meets_resource_limits(item)
     ]
-    best_ppa = min(pareto_records, key=_selection_key) if pareto_records else None
-    selected = best_ppa or best_compliant_correct or best_correct
+    best_ppa = (
+        min(pareto_records, key=lambda item: deterministic_selection_key(item, selection))
+        if pareto_records
+        else None
+    )
+    selected = best_ppa or best_correct
 
     previous_path = output_dir / "candidate_state.json"
     previous = {}
@@ -251,16 +247,28 @@ def preserve_candidate_state(
         if archived is not None:
             archived_pareto.append(archived)
 
+    ranking = list(configured_ranking(selection))
     state = {
-        "schema_version": 2,
-        "selection_policy": (
-            "Require the configured minimum frequency, then select from the Pareto "
-            "archive using actual latency, throughput period, LUT, FF, DSP and BRAM; "
-            "fall back to the best frequency-compliant verified design, then the best "
-            "correct design only when no compliant implementation exists."
+        "schema_version": 3,
+        "selection_policy": {
+            "ranking": ranking,
+            "description": (
+                "Select only fully verified designs. Prefer frequency- and resource-compliant "
+                "designs, then apply the configured deterministic ranking and candidate index "
+                "as the final stable tie-breaker."
+            ),
+        },
+        "frequency_requirement": summary.get("frequency_requirement", {}),
+        "resource_limits": summary.get("resource_limits", {}),
+        "selected_design_fully_verified": (
+            is_fully_verified(selected) if isinstance(selected, dict) else False
         ),
-        "frequency_requirement": frequency_requirement,
-        "selected_design_frequency_compliant": _is_frequency_compliant(selected),
+        "selected_design_frequency_compliant": (
+            _is_frequency_compliant(selected) if isinstance(selected, dict) else False
+        ),
+        "selected_design_resource_compliant": (
+            _meets_resource_limits(selected) if isinstance(selected, dict) else False
+        ),
         "original_baseline": original,
         "latest_candidate": latest_record,
         "best_correct_candidate": best_correct_record,
@@ -278,8 +286,14 @@ def preserve_candidate_state(
             "best_correct_candidate": state["best_correct_candidate"],
             "best_ppa_candidate": state["best_ppa_candidate"],
             "selected_design": state["selected_design"],
+            "selected_design_fully_verified": state[
+                "selected_design_fully_verified"
+            ],
             "selected_design_frequency_compliant": state[
                 "selected_design_frequency_compliant"
+            ],
+            "selected_design_resource_compliant": state[
+                "selected_design_resource_compliant"
             ],
             "candidate_state": state,
         }
