@@ -15,18 +15,24 @@ _SOURCE_LOCATION = re.compile(
 )
 
 _SUMMARIES = {
+    "none": "The current validation stage passed; any previous failed-stage diagnosis remains the repair target.",
     "syntax_or_compile": "The source does not compile because the compiler reported a syntax or type error.",
+    "compile": "The source does not compile because the compiler reported an error.",
     "missing_header": "Compilation failed because a required header could not be found.",
     "top_function_mismatch": "The configured top function is missing or does not match the required top-level contract.",
     "linkage_or_interface": "Compilation or linking failed because declarations, symbols, or interfaces do not agree.",
     "functional_mismatch": "The design compiled but produced output that differs from the expected behaviour.",
+    "functional": "The design compiled but produced output that differs from the expected behaviour.",
     "numerical_tolerance": "The design output exceeded the permitted numerical tolerance.",
     "out_of_bounds": "Validation detected an invalid or out-of-bounds memory access.",
     "csim_timeout": "C simulation did not complete within the configured timeout.",
+    "timeout": "Validation did not complete within the configured timeout.",
     "synthesis_unsupported_construct": "Synthesis rejected a construct that is not supported in hardware.",
     "synthesis_timeout": "Synthesis did not complete within the configured timeout.",
     "stream_deadlock": "A stream or dataflow process made no progress because of blocked communication.",
     "cosim_mismatch": "C/RTL co-simulation completed but the RTL output did not match the reference behaviour.",
+    "cosim_failed": "C/RTL co-simulation failed before a more specific cause could be established.",
+    "cosim_compile": "C/RTL co-simulation could not compile or elaborate the generated RTL test environment.",
     "cosim_deadlock": "C/RTL co-simulation made no progress and appears to be deadlocked.",
     "cosim_timeout": "C/RTL co-simulation did not complete within the configured timeout.",
     "tool_report_missing": "The tool completed without producing an expected report.",
@@ -39,15 +45,19 @@ _SUMMARIES = {
 
 _SOURCE_DEFECT_CLASSES = {
     "syntax_or_compile",
+    "compile",
     "missing_header",
     "top_function_mismatch",
     "linkage_or_interface",
     "functional_mismatch",
+    "functional",
     "numerical_tolerance",
     "out_of_bounds",
     "synthesis_unsupported_construct",
     "stream_deadlock",
     "cosim_mismatch",
+    "cosim_failed",
+    "cosim_compile",
     "cosim_deadlock",
 }
 
