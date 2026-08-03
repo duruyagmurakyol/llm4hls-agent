@@ -41,6 +41,7 @@ def _write_candidate(
     *,
     index: int,
     metrics: dict[str, object],
+    cosim_passed: bool = True,
 ) -> Path:
     output = root / "out"
     output.mkdir(parents=True, exist_ok=True)
@@ -64,6 +65,16 @@ def _write_candidate(
                 "synthesis_run": True,
                 "timed_out": False,
                 "metrics": metrics,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / f"{prefix}_cosim.json").write_text(
+        json.dumps(
+            {
+                "passed": cosim_passed,
+                "cosim_run": True,
+                "timed_out": False,
             }
         ),
         encoding="utf-8",
@@ -110,7 +121,8 @@ def test_fewer_cycles_are_rejected_when_actual_time_is_worse(
     assert record["metrics"]["latency_best_cycles"] == 5
     assert record["metrics"]["latency_ns"] == pytest.approx(30.0)
     assert record["performance_comparison"]["latency_metric"] == "latency_ns"
-    assert record["verdict"] == "reject_no_performance_gain"
+    assert record["fully_verified"] is True
+    assert record["verdict"] == "reject_no_objective_gain"
 
 
 def test_candidate_below_minimum_frequency_is_rejected_before_ppa_selection(
@@ -167,6 +179,7 @@ def test_compliant_real_time_improvement_can_dominate_baseline(
 
     assert record["metrics"]["latency_ns"] == pytest.approx(16.0)
     assert record["meets_frequency_requirement"] is True
+    assert record["fully_verified"] is True
     assert record["verdict"] == "accept_dominates_baseline"
 
 
@@ -188,7 +201,7 @@ def test_pareto_dominance_uses_actual_time_instead_of_cycle_count() -> None:
     assert record_dominates(more_cycles_but_faster, fewer_cycles_but_slower)
 
 
-def test_task_frequency_requirement_is_forwarded_to_ppa_config() -> None:
+def test_task_frequency_and_resource_requirements_are_forwarded_to_ppa_config() -> None:
     task = TaskManifest(
         path=Path("task.json"),
         data={
@@ -207,10 +220,25 @@ def test_task_frequency_requirement_is_forwarded_to_ppa_config() -> None:
                 "clock_period_ns": 8.0,
                 "minimum_frequency_mhz": 125.0,
                 "part": "xczu3eg-sfvc784-2-e",
+                "resource_limits": {"lut": 200, "dsp": 4},
             },
             "model": {"name": "model"},
-            "budgets": {"max_iterations": 2, "max_synthesis_calls": 3},
-            "optimisation": {},
+            "budgets": {
+                "max_iterations": 2,
+                "max_synthesis_calls": 3,
+                "max_cosim_calls": 2,
+            },
+            "optimisation": {
+                "selection": {
+                    "ranking": [
+                        "fully_verified",
+                        "frequency",
+                        "resource_limits",
+                        "latency_ns",
+                        "candidate_index",
+                    ]
+                }
+            },
             "output_dir": "experiments/kernel",
         },
     )
@@ -219,9 +247,12 @@ def test_task_frequency_requirement_is_forwarded_to_ppa_config() -> None:
 
     assert config["target_clock_period_ns"] == 8.0
     assert config["minimum_frequency_mhz"] == 125.0
+    assert config["resource_limits"] == {"lut": 200, "dsp": 4}
+    assert config["budget"]["max_cosim_calls"] == 2
+    assert config["selection"]["ranking"][-1] == "candidate_index"
 
 
-def test_durable_selection_prefers_frequency_compliant_design(
+def test_durable_selection_prefers_fully_verified_compliant_design(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -236,6 +267,7 @@ def test_durable_selection_prefers_frequency_compliant_design(
         {
             "output_dir": "out",
             "baseline": {"source": "baseline.cpp"},
+            "selection": {},
         },
         "selection-test",
     )
@@ -253,12 +285,33 @@ def test_durable_selection_prefers_frequency_compliant_design(
         "static_validation": True,
         "csim": True,
         "synthesis": True,
+        "cosim": True,
+        "fully_verified": True,
         "metrics": candidate_metrics,
         "meets_frequency_requirement": True,
+        "meets_resource_limits": True,
+        "resource_limit_compliance": {"configured": False, "passed": True},
+        "cost": {"total_tokens": 10, "tool_calls": 3, "tool_seconds": 1.0},
         "verdict": "keep_pareto_candidate",
+    }
+    baseline_record = {
+        "candidate_index": 0,
+        "candidate_file": "baseline.cpp",
+        "static_validation": True,
+        "csim": True,
+        "synthesis": True,
+        "cosim": True,
+        "fully_verified": True,
+        "metrics": baseline_metrics,
+        "meets_frequency_requirement": False,
+        "meets_resource_limits": True,
+        "resource_limit_compliance": {"configured": False, "passed": True},
+        "cost": {"total_tokens": 0, "tool_calls": 0, "tool_seconds": 0.0},
+        "verdict": "baseline",
     }
     summary = {
         "baseline_metrics": baseline_metrics,
+        "baseline_record": baseline_record,
         "frequency_requirement": {
             "minimum_frequency_mhz": 100.0,
             "maximum_clock_period_ns": 10.0,
@@ -271,4 +324,5 @@ def test_durable_selection_prefers_frequency_compliant_design(
     enriched = preserve_candidate_state(config, summary)
 
     assert enriched["selected_design"]["candidate_index"] == 1
+    assert enriched["selected_design_fully_verified"] is True
     assert enriched["selected_design_frequency_compliant"] is True
