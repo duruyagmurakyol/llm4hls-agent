@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.budget import BudgetExceeded, BudgetState
+from agent.repair.diagnose import build_diagnosis
 from agent.tools.reports import write_json
 from agent.tools.validation import classify_failure
 
@@ -71,11 +72,22 @@ def _exception_attempt(
     )
     pre_log = attempt_dir / "host_validation_before.log"
     pre_output = pre_log.read_text(encoding="utf-8") if pre_log.is_file() else ""
+    diagnosis = build_diagnosis(
+        stage="model_generation",
+        failure_class="model_generation_error",
+        evidence=[error_text],
+        editable_files=[str(item) for item in config.get("editable_files", [])],
+        protected_files=[str(item) for item in config.get("protected_files", [])],
+        top_function=str(config["top_function"]) if config.get("top_function") else None,
+        repair_constraints=[str(item) for item in config.get("repair_constraints", [])],
+    )
+    write_json(attempt_dir / "diagnosis_after.json", diagnosis)
     feedback = {
         "attempt": attempt,
         "stage": "model_generation",
         "failure_class": "model_generation_error",
         "evidence": [error_text],
+        "diagnosis": diagnosis,
     }
     result = {
         "schema_version": 4,
@@ -87,6 +99,8 @@ def _exception_attempt(
         "model": config["model"],
         "thinking_budget": config.get("thinking_budget"),
         "failure_class": classify_failure(pre_output) if pre_output else "unknown",
+        "diagnosis": None,
+        "final_diagnosis": diagnosis,
         "pre_host_validation_passed": False,
         "input_tokens": 0,
         "output_tokens": 0,
@@ -173,6 +187,7 @@ def run_repair_loop(
                 "failed_stage": None if passed else feedback.get("stage"),
                 "failure_class": "none" if passed else feedback.get("failure_class"),
                 "evidence": [] if passed else feedback.get("evidence", []),
+                "diagnosis": None if passed else feedback.get("diagnosis"),
                 "candidate_hash": _sha256(candidate),
             }
         )
@@ -192,6 +207,7 @@ def run_repair_loop(
         **final,
         "schema_version": 4,
         "failure_class": attempt_results[0]["failure_class"],
+        "initial_diagnosis": attempt_results[0].get("diagnosis"),
         "attempt_count": len(attempts),
         "attempts": attempts,
         "input_tokens": total_input,
