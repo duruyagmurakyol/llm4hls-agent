@@ -10,6 +10,11 @@ from typing import Any
 from agent.budget import BudgetExceeded, BudgetState
 from agent.repair.diagnose import build_diagnosis
 from agent.repair.output_validation import InvalidModelOutputError
+from agent.repair.strategy import (
+    DO_NOT_REPEAT_CONSTRAINT,
+    build_strategy,
+    strategy_feedback_evidence,
+)
 from agent.tools.reports import load_json, write_json
 from agent.tools.validation import classify_failure
 
@@ -37,6 +42,57 @@ def _attempt_limit(config: dict[str, Any], budget: BudgetState | None) -> int:
     if config["independent_validation"].get("enabled", False):
         limits.append(budget.remaining("csim_calls"))
     return min(limits)
+
+
+def _unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return result
+
+
+def _record_strategy(
+    *,
+    attempt_dir: Path,
+    editable: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the attempted source edit and enrich retry feedback with it."""
+    before_path = attempt_dir / "before.cpp"
+    candidate_path = attempt_dir / "workspace" / editable
+    before_source = before_path.read_text(encoding="utf-8") if before_path.is_file() else ""
+    candidate_source = (
+        candidate_path.read_text(encoding="utf-8") if candidate_path.is_file() else before_source
+    )
+    strategy = build_strategy(
+        before_source=before_source,
+        candidate_source=candidate_source,
+        editable_file=editable,
+    )
+    write_json(attempt_dir / "strategy.json", strategy)
+    result["strategy"] = strategy
+
+    feedback = result.get("feedback")
+    if isinstance(feedback, dict):
+        feedback["strategy"] = strategy
+        strategy_evidence = strategy_feedback_evidence(strategy)
+        feedback["evidence"] = _unique(
+            [str(item) for item in feedback.get("evidence", [])] + strategy_evidence
+        )
+
+        diagnosis = feedback.get("diagnosis")
+        if isinstance(diagnosis, dict):
+            diagnosis["evidence"] = _unique(
+                [str(item) for item in diagnosis.get("evidence", [])] + strategy_evidence
+            )
+            diagnosis["repair_constraints"] = _unique(
+                [str(item) for item in diagnosis.get("repair_constraints", [])]
+                + [DO_NOT_REPEAT_CONSTRAINT]
+            )
+
+    write_json(attempt_dir / "result.json", result)
+    return strategy
 
 
 def _exception_attempt(
@@ -179,6 +235,7 @@ def run_repair_loop(
     feedback: dict[str, Any] | None = None
     final_dir = run_root
     passed = False
+    editable = str(config["editable_files"][0])
 
     for attempt in range(1, maximum + 1):
         if not _can_attempt(config, budget):
@@ -214,11 +271,16 @@ def run_repair_loop(
                 error=error,
             )
 
+        strategy = _record_strategy(
+            attempt_dir=final_dir,
+            editable=editable,
+            result=result,
+        )
         attempt_results.append(result)
         feedback = result.get("feedback")
         if not passed and not isinstance(feedback, dict):
             raise RuntimeError("Failed repair attempt did not produce structured feedback")
-        candidate = final_dir / "workspace" / str(config["editable_files"][0])
+        candidate = final_dir / "workspace" / editable
         attempts.append(
             {
                 "attempt": attempt,
@@ -228,6 +290,7 @@ def run_repair_loop(
                 "failure_class": "none" if passed else feedback.get("failure_class"),
                 "evidence": [] if passed else feedback.get("evidence", []),
                 "diagnosis": None if passed else feedback.get("diagnosis"),
+                "strategy": strategy,
                 "candidate_hash": _sha256(candidate),
             }
         )
