@@ -390,7 +390,40 @@ def run_optimisation(
                 )
             budget.charge_iteration(stage=f"candidate_{index:03d}_iteration")
 
-        generate_candidate(config_source, index, budget=budget)
+        try:
+            generate_candidate(config_source, index, budget=budget)
+        except Exception as error:
+            error_report = {
+                "candidate_index": index,
+                "stage": "generation",
+                "passed": False,
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+            error_path = output_dir / f"candidate_{index:03d}_generation_error.json"
+            error_path.write_text(json.dumps(error_report, indent=2) + "\n", encoding="utf-8")
+            trajectory.append(
+                {
+                    "candidate": index,
+                    "stage": "generation",
+                    "passed": False,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "error_file": str(error_path.relative_to(REPO_ROOT)),
+                }
+            )
+            _print_stage(index, "generation", False, type(error).__name__)
+            if budget is not None:
+                budget.set_stop_reason("model_generation_failed")
+            summary = evaluate_experiment(config_source)
+            return _finish(
+                False,
+                "failed",
+                "model_generation_failed",
+                summary,
+                trajectory,
+            )
+
         trajectory.append({"candidate": index, "stage": "generation", "passed": True})
         _print_stage(index, "generation", True)
         summary = _evaluate_candidate(config_source, index, trajectory, budget)
