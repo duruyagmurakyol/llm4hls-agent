@@ -46,9 +46,25 @@
     "max_tokens": 4096,
     "enable_thinking": false
   },
+  "optimisation": {
+    "target_loop_label": "vector_add_loop",
+    "validation": {
+      "constant_loop_tail_bounds": true,
+      "required_loop_labels": [
+        "vector_add_loop"
+      ],
+      "preserve_diagnosed_loop_label": true
+    },
+    "prompt_constraints": [
+      "VECTOR_SIZE is 1024 and every output must equal a[i] + b[i].",
+      "The baseline loop is already automatically pipelined at II=1, so do not return a pipeline-only change.",
+      "A latency improvement requires processing multiple elements per cycle with matching memory banking, partitioning, or reshaping.",
+      "Prefer factor-2 parallelism first and include safe remainder handling if the loop structure changes.",
+      "Treat increased resources as acceptable only when the result creates a meaningful latency-resource trade-off."
+    ]
+  },
   "adapter": {
-    "kind": "autonomous_ppa",
-    "config": "configs/vector_add_ppa.json"
+    "kind": "autonomous_ppa"
   },
   "output_dir": "experiments/track_a/hls_eval_vector_add_001"
 }
