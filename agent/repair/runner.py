@@ -6,13 +6,14 @@ import argparse
 import difflib
 import hashlib
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from agent.budget import BudgetState
-from agent.repair.diagnose import diagnose
+from agent.repair.diagnose import build_diagnosis, diagnose, format_diagnosis
 from agent.repair.generate import generate_repair
 from agent.state import ValidationResult
 from agent.tools.command_runner import run_command
@@ -35,6 +36,41 @@ def _sha256(path: Path) -> str:
 
 def _hashes(root: Path, files: list[str]) -> dict[str, str]:
     return {name: _sha256(root / name) for name in files}
+
+
+def _infer_top_function(config: dict[str, Any], workspace: Path) -> str | None:
+    explicit = config.get("top_function")
+    if explicit:
+        return str(explicit)
+    declaration = re.compile(
+        r"\b(?:void|int|float|double|bool|long|short|unsigned|signed|auto)\s+"
+        r"([A-Za-z_]\w*)\s*\("
+    )
+    for name in config.get("context_files", config.get("protected_files", [])):
+        path = workspace / str(name)
+        if path.suffix.lower() not in {".h", ".hh", ".hpp"} or not path.is_file():
+            continue
+        match = declaration.search(path.read_text(encoding="utf-8", errors="ignore"))
+        if match:
+            return match.group(1)
+    return None
+
+
+def _diagnosis(
+    config: dict[str, Any],
+    workspace: Path,
+    validation: ValidationResult,
+    *,
+    stage: str,
+) -> dict[str, object]:
+    return diagnose(
+        validation,
+        stage=stage,
+        editable_files=[str(item) for item in config.get("editable_files", [])],
+        protected_files=[str(item) for item in config.get("protected_files", [])],
+        top_function=_infer_top_function(config, workspace),
+        repair_constraints=[str(item) for item in config.get("repair_constraints", [])],
+    )
 
 
 def _validate(config: dict[str, Any], workspace: Path) -> tuple[ValidationResult, str]:
@@ -61,6 +97,25 @@ def _validate(config: dict[str, Any], workspace: Path) -> tuple[ValidationResult
     ), output
 
 
+def _feedback_diagnosis(
+    config: dict[str, Any],
+    workspace: Path,
+    feedback: dict[str, Any],
+) -> dict[str, object]:
+    existing = feedback.get("diagnosis")
+    if isinstance(existing, dict):
+        return existing
+    return build_diagnosis(
+        stage=str(feedback.get("stage", "validation")),
+        failure_class=str(feedback.get("failure_class", "unknown")),
+        evidence=[str(item) for item in feedback.get("evidence", [])],
+        editable_files=[str(item) for item in config.get("editable_files", [])],
+        protected_files=[str(item) for item in config.get("protected_files", [])],
+        top_function=_infer_top_function(config, workspace),
+        repair_constraints=[str(item) for item in config.get("repair_constraints", [])],
+    )
+
+
 def _prompts(
     config: dict[str, Any],
     workspace: Path,
@@ -72,7 +127,12 @@ def _prompts(
     contexts = []
     for name in config.get("context_files", config["protected_files"]):
         contexts.append(f"FILE: {name}\n```\n{(workspace / name).read_text(encoding='utf-8')}\n```")
-    diagnosis = diagnose(validation)
+    current_diagnosis = _diagnosis(
+        config,
+        workspace,
+        validation,
+        stage="host_validation",
+    )
     system = (
         "You repair AMD/Xilinx HLS C++ code. Return only the complete repaired contents "
         "of the editable source file. Do not use Markdown fences, explanations, JSON, or patches. "
@@ -80,19 +140,17 @@ def _prompts(
     )
     retry = ""
     if feedback:
-        evidence = "\n".join(str(item) for item in feedback.get("evidence", []))
+        retry_diagnosis = _feedback_diagnosis(config, workspace, feedback)
         retry = (
             f"Previous repair attempt {feedback.get('attempt')} failed.\n"
-            f"Failed stage: {feedback.get('stage', 'validation')}\n"
-            f"Failure class: {feedback.get('failure_class', 'unknown')}\n"
-            f"Failure evidence:\n{evidence or 'No concise evidence was extracted.'}\n"
+            "Previous structured diagnosis:\n"
+            f"{format_diagnosis(retry_diagnosis)}\n"
             "The editable file below is the previous candidate. Correct it without repeating the failed change.\n\n"
         )
     user = (
         retry
-        + f"Failure class: {diagnosis['failure_class']}\n"
-        + "Failure evidence:\n"
-        + "\n".join(validation.evidence)
+        + "Current structured diagnosis:\n"
+        + format_diagnosis(current_diagnosis)
         + "\n\n"
         + f"EDITABLE FILE: {editable}\n```\n{source}\n```\n\n"
         + "\n\n".join(contexts)
@@ -101,9 +159,29 @@ def _prompts(
     return system, user
 
 
+def _feedback(
+    attempt: int,
+    diagnosis: dict[str, object],
+    *,
+    return_code: int | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "attempt": attempt,
+        "stage": diagnosis["stage"],
+        "failure_class": diagnosis["failure_class"],
+        "evidence": diagnosis["evidence"],
+        "diagnosis": diagnosis,
+    }
+    if return_code is not None:
+        result["return_code"] = return_code
+    return result
+
+
 def _failure_feedback(
     attempt: int,
     *,
+    config: dict[str, Any],
+    workspace: Path,
     scope_ok: bool,
     protected_unchanged: bool,
     post_validation: ValidationResult,
@@ -111,38 +189,52 @@ def _failure_feedback(
     independent_output: str,
     independent_timed_out: bool,
 ) -> dict[str, Any]:
-    if not scope_ok:
-        return {
-            "attempt": attempt,
-            "stage": "editable_scope",
-            "failure_class": "scope_violation",
-            "evidence": ["The response modified a file outside repair.editable_files."],
-        }
-    if not protected_unchanged:
-        return {
-            "attempt": attempt,
-            "stage": "protected_files",
-            "failure_class": "protected_file_modified",
-            "evidence": ["A protected source, header, testbench, or build file changed."],
-        }
-    if not post_validation.passed:
-        return {
-            "attempt": attempt,
-            "stage": "host_validation",
-            "failure_class": post_validation.failure_class,
-            "evidence": list(post_validation.evidence),
-        }
-    return {
-        "attempt": attempt,
-        "stage": "independent_validation",
-        "failure_class": classify_failure(
-            independent_output,
-            stage="csim",
-            timed_out=independent_timed_out,
-        ),
-        "evidence": extract_evidence(independent_output),
-        "return_code": independent_code,
+    editable = [str(item) for item in config.get("editable_files", [])]
+    protected = [str(item) for item in config.get("protected_files", [])]
+    common = {
+        "editable_files": editable,
+        "protected_files": protected,
+        "top_function": _infer_top_function(config, workspace),
+        "repair_constraints": [str(item) for item in config.get("repair_constraints", [])],
     }
+    if not scope_ok:
+        diagnosis = build_diagnosis(
+            stage="editable_scope",
+            failure_class="scope_violation",
+            evidence=["The response modified a file outside repair.editable_files."],
+            **common,
+        )
+        return _feedback(attempt, diagnosis)
+    if not protected_unchanged:
+        diagnosis = build_diagnosis(
+            stage="protected_files",
+            failure_class="protected_file_modified",
+            evidence=["A protected source, header, testbench, or build file changed."],
+            **common,
+        )
+        return _feedback(attempt, diagnosis)
+    if not post_validation.passed:
+        diagnosis = _diagnosis(
+            config,
+            workspace,
+            post_validation,
+            stage="host_validation",
+        )
+        return _feedback(attempt, diagnosis, return_code=post_validation.return_code)
+
+    evidence = extract_evidence(independent_output)
+    failure_class = classify_failure(
+        independent_output,
+        stage="csim",
+        timed_out=independent_timed_out,
+    )
+    diagnosis = build_diagnosis(
+        stage="csim",
+        failure_class=failure_class,
+        evidence=evidence,
+        **common,
+    )
+    return _feedback(attempt, diagnosis, return_code=independent_code)
 
 
 def _run_repair_once(
@@ -183,7 +275,14 @@ def _run_repair_once(
     (run_dir / "before.cpp").write_text(before_source, encoding="utf-8")
 
     pre_validation, pre_output = _validate(config, workspace)
+    pre_diagnosis = _diagnosis(
+        config,
+        workspace,
+        pre_validation,
+        stage="host_validation",
+    )
     (run_dir / "host_validation_before.log").write_text(pre_output, encoding="utf-8")
+    write_json(run_dir / "diagnosis_before.json", pre_diagnosis)
     system_prompt, user_prompt = _prompts(config, workspace, pre_validation, feedback)
     (run_dir / "system_prompt.txt").write_text(system_prompt + "\n", encoding="utf-8")
     (run_dir / "prompt.txt").write_text(user_prompt + "\n", encoding="utf-8")
@@ -261,6 +360,8 @@ def _run_repair_once(
     passed = scope_ok and protected_unchanged and post_validation.passed and independent_passed
     failure = None if passed else _failure_feedback(
         attempt,
+        config=config,
+        workspace=workspace,
         scope_ok=scope_ok,
         protected_unchanged=protected_unchanged,
         post_validation=post_validation,
@@ -268,6 +369,10 @@ def _run_repair_once(
         independent_output=independent_output,
         independent_timed_out=independent_timed_out,
     )
+    final_diagnosis = failure.get("diagnosis") if isinstance(failure, dict) else None
+    if isinstance(final_diagnosis, dict):
+        write_json(run_dir / "diagnosis_after.json", final_diagnosis)
+
     result = {
         "schema_version": 4,
         "experiment_id": experiment_id,
@@ -278,6 +383,8 @@ def _run_repair_once(
         "model": config["model"],
         "thinking_budget": thinking_budget_value,
         "failure_class": pre_validation.failure_class,
+        "diagnosis": pre_diagnosis,
+        "final_diagnosis": final_diagnosis,
         "pre_host_validation_passed": pre_validation.passed,
         "input_tokens": response.input_tokens,
         "output_tokens": response.output_tokens,
