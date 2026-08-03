@@ -25,7 +25,7 @@ agent/
 
 - `autonomous_ppa`: run the budgeted optimisation state machine.
 - `legacy_ppa`: accepted as a compatibility alias for the optimisation path.
-- `direct_api_repair`: run correctness repair and synthesise the successfully repaired candidate.
+- `direct_api_repair`: repair, synthesise and co-simulate the successfully repaired candidate.
 
 Every path returns an `AgentResult`, which is serialised as `unified_agent_result.json`.
 
@@ -93,7 +93,9 @@ Contains benchmark-independent optimisation guidance. Do not add benchmark names
 
 The repair workflow handles designs that are not yet correct. It classifies observed failures, produces a constrained repair prompt, generates a replacement source, and validates it against the supplied build and testbench.
 
-After host and independent validation pass, the controller synthesises the exact repaired source retained in the run workspace. The repair task is successful only when that synthesis also completes and produces a valid top-level synthesis report. The synthesis call is charged before Vitis is invoked, including failed or timed-out attempts.
+After host and independent validation pass, the controller synthesises the exact repaired source retained in the run workspace. Co-simulation runs only when synthesis succeeds and uses that same repaired source. The repair task is successful only when repair validation, synthesis and C/RTL co-simulation all pass.
+
+Synthesis and co-simulation calls are charged before Vitis is invoked, including failed, timed-out or exceptional attempts. Each stage remains in the unified trajectory so a later failure does not discard earlier successful evidence.
 
 The repair path must not silently weaken the testbench or change the public top-level contract.
 
@@ -135,6 +137,8 @@ The older `run_candidate_csim()` and `run_candidate_synthesis()` entry points re
 `run_cosim(task, candidate)` runs `csynth_design` followed by `cosim_design` in a fresh temporary project while reusing the same task parsing and shared process runner as CSim and synthesis.
 
 It returns structured pass, timeout, return-code, duration, command and candidate-provenance fields. Failures distinguish RTL/testbench compilation errors, simulation mismatches, deadlocks, timeouts, missing reports and other co-simulation failures. Only the generated Vitis report files are copied into `output_dir/cosim/<candidate-hash>/reports/`.
+
+The repair controller calls this boundary only after synthesis passes, records a `post_repair_cosim` trajectory event, and requires it to pass before returning `fully_verified`.
 
 Baseline source files and testbenches must never be modified.
 
