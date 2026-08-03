@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agent.budget import BudgetState
 from agent.repair.diagnose import diagnose
 from agent.repair.generate import generate_repair
 from agent.state import ValidationResult
@@ -79,6 +80,7 @@ def run_repair(
     config_source: dict[str, Any] | str | Path,
     *,
     keep_workspace: bool = False,
+    budget: BudgetState | None = None,
 ) -> tuple[bool, Path, dict[str, Any]]:
     config = _load_config(config_source)
     if config.get("repair_mode") != "direct_api":
@@ -111,15 +113,34 @@ def run_repair(
     (run_dir / "prompt.txt").write_text(user_prompt + "\n", encoding="utf-8")
 
     thinking_budget_value = config.get("thinking_budget")
-    repaired, response = generate_repair(
-        model=str(config["model"]),
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=float(config.get("temperature", 0.0)),
-        max_tokens=int(config.get("max_output_tokens", 2048)),
-        timeout_seconds=int(config.get("api_timeout_seconds", 120)),
-        thinking_budget=int(thinking_budget_value) if thinking_budget_value is not None else None,
-    )
+    stage = "repair_generation"
+    if budget is not None:
+        budget.charge_iteration(stage="repair_iteration")
+        budget.charge_model_call(stage=stage)
+
+    try:
+        repaired, response = generate_repair(
+            model=str(config["model"]),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=float(config.get("temperature", 0.0)),
+            max_tokens=int(config.get("max_output_tokens", 2048)),
+            timeout_seconds=int(config.get("api_timeout_seconds", 120)),
+            thinking_budget=int(thinking_budget_value) if thinking_budget_value is not None else None,
+        )
+    except Exception:
+        if budget is not None:
+            budget.update_last_event(success=False)
+        raise
+
+    if budget is not None:
+        budget.update_last_event(success=True)
+        budget.record_model_tokens(
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            stage=stage,
+        )
+
     (run_dir / "raw_response.txt").write_text(response.content, encoding="utf-8")
     write_json(run_dir / "api_response.json", response.raw_response)
     (workspace / editable[0]).write_text(repaired, encoding="utf-8")
@@ -141,9 +162,14 @@ def run_repair(
     independent = config["independent_validation"]
     independent_code: int | None = None
     if independent.get("enabled", False):
+        validation_stage = "repair_independent_validation"
+        if budget is not None:
+            budget.charge_csim(stage=validation_stage)
         command = [str(x).replace("{workspace}", str(workspace)) for x in independent["command"]]
         process = run_command(command, cwd=REPO_ROOT, echo=False)
         independent_code = process.return_code
+        if budget is not None:
+            budget.update_last_event(success=process.passed)
         (run_dir / "independent_validation.log").write_text(process.output, encoding="utf-8")
 
     result = {
