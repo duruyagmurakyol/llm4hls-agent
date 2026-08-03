@@ -38,6 +38,7 @@ _SUMMARIES = {
     "tool_report_missing": "The tool completed without producing an expected report.",
     "report_parse": "A generated tool report could not be parsed.",
     "model_generation_error": "The model call failed before a usable repaired source was produced.",
+    "invalid_model_output": "The model returned source that failed the pre-write safety and interface checks.",
     "scope_violation": "The repair changed a file outside the editable scope.",
     "protected_file_modified": "The repair changed a protected source, header, testbench, or build file.",
     "unknown": "Validation failed, but the available evidence is insufficient for a more specific diagnosis.",
@@ -59,6 +60,7 @@ _SOURCE_DEFECT_CLASSES = {
     "cosim_failed",
     "cosim_compile",
     "cosim_deadlock",
+    "invalid_model_output",
 }
 
 
