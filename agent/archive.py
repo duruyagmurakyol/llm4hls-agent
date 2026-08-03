@@ -68,6 +68,12 @@ def _is_verified(record: dict[str, Any]) -> bool:
 
 def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[str, Any]:
     source = _resolve(str(record["candidate_file"]))
+    baseline = record.get("candidate_index") == 0
+
+    def validation_value(key: str) -> Any:
+        value = record.get(key)
+        return True if baseline and value is None else value
+
     return {
         "role": role,
         "candidate_index": record.get("candidate_index"),
@@ -77,9 +83,9 @@ def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[st
         "metrics": dict(record.get("metrics") or {}),
         "verdict": record.get("verdict"),
         "validation": {
-            "static_validation": record.get("static_validation"),
-            "csim": record.get("csim"),
-            "synthesis": record.get("synthesis"),
+            "static_validation": validation_value("static_validation"),
+            "csim": validation_value("csim"),
+            "synthesis": validation_value("synthesis"),
         },
     }
 
