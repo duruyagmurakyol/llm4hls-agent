@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from agent.config import TaskManifest
+from agent.optimise.metrics import DEFAULT_MINIMUM_FREQUENCY_MHZ
 
 
 @dataclass(frozen=True)
@@ -65,14 +66,18 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         if task_root
         else Path(str(artifacts["source"])).parent.parent.name
     )
-    target = task.data["target"]
+    target = task.data.get("target") or {}
+    target_clock_period_ns = float(target.get("clock_period_ns", 10.0))
+    minimum_frequency_mhz = float(
+        target.get("minimum_frequency_mhz", DEFAULT_MINIMUM_FREQUENCY_MHZ)
+    )
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
         "benchmark": benchmark,
         "top_function": task.data["interface"]["top_function"],
-        "target_clock_period_ns": target["clock_period_ns"],
-        "minimum_frequency_mhz": target["minimum_frequency_mhz"],
+        "target_clock_period_ns": target_clock_period_ns,
+        "minimum_frequency_mhz": minimum_frequency_mhz,
         "baseline": {
             "source": artifacts["source"],
             "tcl": build_files[0],
