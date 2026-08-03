@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 REQUIRED_BUDGETS = {
     "max_iterations",
     "max_csim_calls",
@@ -52,6 +54,7 @@ def load_task(path: Path) -> TaskManifest:
 
     data = json.loads(resolved.read_text(encoding="utf-8"))
     validate_task(data)
+    validate_task_paths(data)
     return TaskManifest(path=resolved, data=data)
 
 
@@ -59,6 +62,15 @@ def _require_command(section: dict[str, Any], key: str, field: str) -> None:
     command = section.get(key)
     if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
         raise ValueError(f"{field}.{key} must be a non-empty list of strings")
+
+
+def _require_file_list(repair: dict[str, Any], key: str, *, required: bool) -> list[str]:
+    files = repair.get(key)
+    if files is None and not required:
+        return []
+    if not isinstance(files, list) or not files or not all(isinstance(item, str) and item for item in files):
+        raise ValueError(f"repair.{key} must be a non-empty list of strings")
+    return files
 
 
 def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -> None:
@@ -73,10 +85,17 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
     if missing:
         raise ValueError("Missing repair fields: " + ", ".join(missing))
 
-    for key in ("editable_files", "protected_files"):
-        files = repair[key]
-        if not isinstance(files, list) or not files or not all(isinstance(item, str) and item for item in files):
-            raise ValueError(f"repair.{key} must be a non-empty list of strings")
+    benchmark_source = repair["benchmark_source"]
+    if not isinstance(benchmark_source, str) or not benchmark_source:
+        raise ValueError("repair.benchmark_source must be a non-empty string")
+
+    editable = _require_file_list(repair, "editable_files", required=True)
+    protected = _require_file_list(repair, "protected_files", required=True)
+    _require_file_list(repair, "context_files", required=False)
+
+    overlap = sorted(set(editable) & set(protected))
+    if overlap:
+        raise ValueError("repair editable and protected files overlap: " + ", ".join(overlap))
 
     host = repair["host_validation"]
     if not isinstance(host, dict):
@@ -89,6 +108,30 @@ def _validate_direct_api_repair(data: dict[str, Any], adapter: dict[str, Any]) -
         raise ValueError("repair.independent_validation must be an object")
     if independent.get("enabled", False):
         _require_command(independent, "command", "repair.independent_validation")
+
+
+def _resolve_task_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def validate_task_paths(data: dict[str, Any]) -> None:
+    adapter = data["adapter"]
+    if adapter["kind"] != "direct_api_repair":
+        return
+
+    repair = data["repair"]
+    benchmark_source = _resolve_task_path(str(repair["benchmark_source"]))
+    if not benchmark_source.is_dir():
+        raise ValueError(
+            "repair.benchmark_source does not exist or is not a directory: "
+            f"{repair['benchmark_source']}"
+        )
+
+    for key in ("editable_files", "protected_files", "context_files"):
+        for relative_path in repair.get(key, []):
+            if not (benchmark_source / relative_path).is_file():
+                raise ValueError(f"repair file does not exist: {relative_path}")
 
 
 def validate_task(data: dict[str, Any]) -> None:
