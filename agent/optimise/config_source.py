@@ -1,0 +1,99 @@
+"""In-memory compatibility layer for the existing PPA optimisation helpers."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, TypeAlias
+
+from agent.config import TaskManifest
+
+
+@dataclass(frozen=True)
+class InMemoryConfig:
+    """Path-like JSON source backed by task data instead of a file."""
+
+    data: dict[str, Any]
+    identity: str
+
+    def resolve(self) -> "InMemoryConfig":
+        return self
+
+    def is_file(self) -> bool:
+        return True
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        del encoding
+        return json.dumps(self.data)
+
+    def __str__(self) -> str:
+        return f"in-memory:{self.identity}"
+
+
+ConfigSource: TypeAlias = Path | InMemoryConfig
+ConfigInput: TypeAlias = Path | TaskManifest | dict[str, Any]
+
+
+def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
+    """Translate one authoritative task manifest into the existing PPA shape."""
+
+    artifacts = task.data["artifacts"]
+    build_files = artifacts.get("build_files") or []
+    if len(build_files) != 1:
+        raise ValueError("PPA tasks must define exactly one build file")
+
+    optimisation = task.data.get("optimisation") or {}
+    validation = {
+        "constant_loop_tail_bounds": True,
+        "preserve_diagnosed_loop_label": True,
+        **optimisation.get("validation", {}),
+    }
+    prompt_constraints = optimisation.get(
+        "prompt_constraints",
+        [
+            "Preserve the top-level function signature and all testbench-observed semantics.",
+            "Do not modify the supplied testbench or baseline source in place.",
+        ],
+    )
+
+    config: dict[str, Any] = {
+        "experiment_name": f"{task.task_id}_ppa",
+        "benchmark": Path(str(task.data.get("task_root", task.task_id))).name,
+        "top_function": task.data["interface"]["top_function"],
+        "baseline": {
+            "source": artifacts["source"],
+            "tcl": build_files[0],
+            "project_dir": optimisation.get(
+                "baseline_project_dir",
+                f"/tmp/llm4hls-agent/{task.task_id}_baseline",
+            ),
+        },
+        "validation": validation,
+        "prompt_constraints": prompt_constraints,
+        "output_dir": str(task.output_dir),
+        "model": task.data["model"],
+        "budget": {
+            "max_candidates": task.data["budgets"]["max_iterations"],
+            "max_synthesis_calls": task.data["budgets"]["max_synthesis_calls"],
+        },
+    }
+
+    target_loop_label = optimisation.get("target_loop_label")
+    if target_loop_label:
+        config["target_loop_label"] = target_loop_label
+
+    timeouts = optimisation.get("timeouts")
+    if timeouts:
+        config["timeouts"] = timeouts
+
+    return config
+
+
+def as_config_source(value: ConfigInput) -> ConfigSource:
+    if isinstance(value, TaskManifest):
+        return InMemoryConfig(ppa_config_from_task(value), value.task_id)
+    if isinstance(value, dict):
+        identity = str(value.get("experiment_name", "ppa"))
+        return InMemoryConfig(value, identity)
+    return value.expanduser().resolve()
