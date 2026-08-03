@@ -19,10 +19,10 @@ def classify_failure(output: str) -> str:
     lower = output.lower()
     if "undefined reference" in lower or "linker" in lower:
         return "interface_or_link"
-    if "error:" in lower or ("expected" in lower and "before" in lower):
-        return "compile"
     if "fail index=" in lower or ("expected=" in lower and "actual=" in lower):
         return "functional"
+    if "error:" in lower or ("expected" in lower and "before" in lower):
+        return "compile"
     if "timeout" in lower or "timed out" in lower:
         return "timeout"
     return "unknown"
