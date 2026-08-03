@@ -34,10 +34,13 @@ DEFAULT_RESOURCE_WEIGHTS = {
     "resources_dsp_used": 100.0,
     "resources_bram_used": 200.0,
 }
-DEFAULT_RANKING = (
+MANDATORY_RANKING_PREFIX = (
     "fully_verified",
     "frequency",
     "resource_limits",
+)
+DEFAULT_RANKING = (
+    *MANDATORY_RANKING_PREFIX,
     "latency_ns",
     "throughput_period_ns",
     "resource_cost",
@@ -223,7 +226,11 @@ def configured_ranking(selection: dict[str, Any] | None = None) -> tuple[str, ..
     unknown = [item for item in configured if item not in ALLOWED_RANKING_FIELDS]
     if unknown:
         raise ValueError("Unsupported selection ranking fields: " + ", ".join(unknown))
-    result = list(configured)
+
+    result = list(MANDATORY_RANKING_PREFIX)
+    for field in configured:
+        if field not in result:
+            result.append(field)
     if "candidate_index" not in result:
         result.append("candidate_index")
     return tuple(result)
