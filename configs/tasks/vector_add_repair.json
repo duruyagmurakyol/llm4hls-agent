@@ -84,8 +84,15 @@
       ]
     }
   },
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Preserve the vector_add function signature and functional behaviour.",
+      "Do not optimise until the design has become a fully verified baseline."
+    ]
+  },
   "adapter": {
-    "kind": "direct_api_repair"
+    "kind": "auto"
   },
   "output_dir": "experiments/track_a/vector_add_functional_repair_001"
 }
