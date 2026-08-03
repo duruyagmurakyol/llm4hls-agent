@@ -35,7 +35,7 @@
   "budgets": {
     "max_iterations": 3,
     "max_csim_calls": 4,
-    "max_cosim_calls": 1,
+    "max_cosim_calls": 2,
     "max_synthesis_calls": 3,
     "max_model_calls": 3,
     "max_total_tokens": null
