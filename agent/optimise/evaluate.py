@@ -9,25 +9,42 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.metrics import (
+    comparison_metric,
+    derive_hardware_metrics,
+    maximum_clock_period_ns,
+    metric_delta_percent,
+)
 from agent.state import SynthesisMetrics
 from agent.tools.synthesis import parse_csynth_xml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MINIMUM_FREQUENCY_MHZ = 100.0
 METRIC_KEYS = (
     "clock_period_ns",
+    "frequency_mhz",
+    "minimum_frequency_mhz",
+    "maximum_clock_period_ns",
     "latency_best_cycles",
     "latency_average_cycles",
     "latency_worst_cycles",
+    "latency_ns",
+    "latency_best_ns",
+    "latency_average_ns",
+    "latency_worst_ns",
     "interval_min_cycles",
     "interval_max_cycles",
+    "throughput_period_ns",
+    "throughput_period_min_ns",
+    "throughput_period_max_ns",
     "resources_lut_used",
     "resources_ff_used",
     "resources_dsp_used",
     "resources_bram_used",
 )
 OBJECTIVES = (
-    "latency_best_cycles",
-    "interval_min_cycles",
+    "latency_ns",
+    "throughput_period_ns",
     "resources_lut_used",
     "resources_ff_used",
     "resources_dsp_used",
@@ -42,9 +59,27 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _actual_or_cycles(metrics: SynthesisMetrics) -> tuple[float | int | None, float | int | None]:
+    if metrics.clock_period_ns is not None and metrics.clock_period_ns > 0:
+        latency = (
+            metrics.latency_cycles * metrics.clock_period_ns
+            if metrics.latency_cycles is not None
+            else None
+        )
+        interval = (
+            metrics.interval_cycles * metrics.clock_period_ns
+            if metrics.interval_cycles is not None
+            else None
+        )
+        return latency, interval
+    return metrics.latency_cycles, metrics.interval_cycles
+
+
 def dominates(left: SynthesisMetrics, right: SynthesisMetrics) -> bool:
-    left_values = (left.latency_cycles, left.lut, left.ff, left.dsp, left.bram)
-    right_values = (right.latency_cycles, right.lut, right.ff, right.dsp, right.bram)
+    left_latency, left_interval = _actual_or_cycles(left)
+    right_latency, right_interval = _actual_or_cycles(right)
+    left_values = (left_latency, left_interval, left.lut, left.ff, left.dsp, left.bram)
+    right_values = (right_latency, right_interval, right.lut, right.ff, right.dsp, right.bram)
     if any(value is None for value in (*left_values, *right_values)):
         return False
     return all(a <= b for a, b in zip(left_values, right_values)) and any(
@@ -148,11 +183,7 @@ def baseline_metrics(config: dict[str, Any], output_dir: Path) -> dict[str, Any]
 
 
 def percent_change(value: Any, baseline: Any) -> float | None:
-    if not isinstance(value, (int, float)) or not isinstance(baseline, (int, float)):
-        return None
-    if baseline == 0:
-        return 0.0 if value == 0 else None
-    return ((value - baseline) / baseline) * 100.0
+    return metric_delta_percent(value, baseline)
 
 
 def load_optional(path: Path) -> dict[str, Any] | None:
@@ -164,6 +195,8 @@ def classify_candidate(
     index: int,
     baseline: dict[str, Any],
     duplicates: dict[int, int],
+    *,
+    minimum_frequency_mhz: float = DEFAULT_MINIMUM_FREQUENCY_MHZ,
 ) -> dict[str, Any]:
     prefix = f"candidate_{index:03d}"
     source = output_dir / f"{prefix}.cpp"
@@ -186,6 +219,9 @@ def classify_candidate(
         "synthesis_run": synthesis_attempted,
         "metrics": {},
         "deltas_percent": {},
+        "performance_comparison": {},
+        "minimum_frequency_mhz": minimum_frequency_mhz,
+        "meets_frequency_requirement": None,
         "verdict": "incomplete",
         "reason": "Candidate has not completed all required evaluation stages.",
     }
@@ -219,13 +255,63 @@ def classify_candidate(
     if not synthesis_completed:
         return record
 
-    metrics = synthesis.get("metrics") or {}
+    metrics = derive_hardware_metrics(
+        synthesis.get("metrics") or {},
+        minimum_frequency_mhz=minimum_frequency_mhz,
+    )
     record["metrics"] = {key: metrics.get(key) for key in METRIC_KEYS}
+    record["meets_frequency_requirement"] = metrics.get("meets_minimum_frequency")
+
+    frequency = metrics.get("frequency_mhz")
+    maximum_period = metrics.get("maximum_clock_period_ns")
+    if frequency is None:
+        record.update(
+            verdict="reject_frequency_unavailable",
+            reason=(
+                "No valid estimated clock period was available, so compliance with the "
+                f"{minimum_frequency_mhz:g} MHz minimum cannot be established."
+            ),
+        )
+        return record
+    if metrics.get("meets_minimum_frequency") is not True:
+        record.update(
+            verdict="reject_frequency_threshold",
+            reason=(
+                f"Estimated frequency {frequency:.3f} MHz is below the required "
+                f"{minimum_frequency_mhz:g} MHz (clock period must be at most "
+                f"{maximum_period:.3f} ns)."
+            ),
+        )
+        return record
+
     record["deltas_percent"] = {
         key: percent_change(metrics.get(key), baseline.get(key)) for key in METRIC_KEYS
     }
-    latency_delta = record["deltas_percent"].get("latency_best_cycles")
-    interval_delta = record["deltas_percent"].get("interval_min_cycles")
+    latency_key, candidate_latency, baseline_latency = comparison_metric(
+        metrics,
+        baseline,
+        actual_key="latency_ns",
+        cycle_key="latency_best_cycles",
+    )
+    interval_key, candidate_interval, baseline_interval = comparison_metric(
+        metrics,
+        baseline,
+        actual_key="throughput_period_ns",
+        cycle_key="interval_min_cycles",
+    )
+    latency_delta = percent_change(candidate_latency, baseline_latency)
+    interval_delta = percent_change(candidate_interval, baseline_interval)
+    record["performance_comparison"] = {
+        "latency_metric": latency_key,
+        "latency_candidate": candidate_latency,
+        "latency_baseline": baseline_latency,
+        "latency_delta_percent": latency_delta,
+        "throughput_metric": interval_key,
+        "throughput_candidate": candidate_interval,
+        "throughput_baseline": baseline_interval,
+        "throughput_delta_percent": interval_delta,
+    }
+
     resource_deltas = [
         record["deltas_percent"].get(key)
         for key in ("resources_lut_used", "resources_ff_used", "resources_dsp_used", "resources_bram_used")
@@ -239,17 +325,26 @@ def classify_candidate(
     if same_performance and all(value == 0 for value in numeric_resources):
         record.update(verdict="reject_no_change", reason="Synthesis metrics are identical to the baseline.")
     elif (improves_latency or improves_interval) and no_resource_increase:
-        record.update(verdict="accept_dominates_baseline", reason="Improves performance without increasing measured resources.")
+        record.update(
+            verdict="accept_dominates_baseline",
+            reason="Improves actual latency or throughput without increasing measured resources.",
+        )
     elif improves_latency or improves_interval:
-        record.update(verdict="keep_pareto_candidate", reason="Improves performance with a resource trade-off.")
+        record.update(
+            verdict="keep_pareto_candidate",
+            reason="Improves actual latency or throughput with a resource trade-off.",
+        )
     else:
-        record.update(verdict="reject_no_performance_gain", reason="Does not improve latency or interval over the baseline.")
+        record.update(
+            verdict="reject_no_performance_gain",
+            reason="Does not improve actual latency or throughput over the baseline.",
+        )
     return record
 
 
 def objective_value(metrics: dict[str, Any], key: str) -> float:
     value = metrics.get(key)
-    return float(value) if isinstance(value, (int, float)) else float("inf")
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else float("inf")
 
 
 def record_dominates(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -267,23 +362,47 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
     output_dir = REPO_ROOT / config["output_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
     indices = candidate_indices(output_dir)
-    baseline = baseline_metrics(config, output_dir)
+    minimum_frequency = float(
+        config.get("minimum_frequency_mhz", DEFAULT_MINIMUM_FREQUENCY_MHZ)
+    )
+    baseline = derive_hardware_metrics(
+        baseline_metrics(config, output_dir),
+        minimum_frequency_mhz=minimum_frequency,
+    )
     duplicates = duplicate_map(output_dir, indices)
-    records = [classify_candidate(output_dir, index, baseline, duplicates) for index in indices]
+    records = [
+        classify_candidate(
+            output_dir,
+            index,
+            baseline,
+            duplicates,
+            minimum_frequency_mhz=minimum_frequency,
+        )
+        for index in indices
+    ]
     eligible = [record for record in records if record.get("verdict") in PARETO_ELIGIBLE_VERDICTS]
     baseline_record = {
         "candidate_index": 0,
         "candidate_file": config["baseline"]["source"],
         "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
+        "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
         "verdict": "baseline",
     }
-    pool = [baseline_record, *eligible]
+    pool = [*([baseline_record] if baseline.get("meets_minimum_frequency") is True else []), *eligible]
     pareto = [item for item in pool if not any(other is not item and record_dominates(other, item) for other in pool)]
     synthesis_calls_used = sum(1 for record in records if record.get("synthesis_run"))
     maximum = int(config["budget"]["max_synthesis_calls"])
     summary = {
         "experiment_name": config["experiment_name"],
         "benchmark": config["benchmark"],
+        "minimum_frequency_mhz": minimum_frequency,
+        "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
+        "frequency_requirement": {
+            "minimum_frequency_mhz": minimum_frequency,
+            "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
+            "baseline_frequency_mhz": baseline.get("frequency_mhz"),
+            "baseline_meets_requirement": baseline.get("meets_minimum_frequency"),
+        },
         "baseline_metrics": {key: baseline.get(key) for key in METRIC_KEYS},
         "budget": {
             "max_candidates": config["budget"]["max_candidates"],
@@ -297,6 +416,7 @@ def evaluate_experiment(config_path: Path) -> dict[str, Any]:
                 "candidate_index": item["candidate_index"],
                 "candidate_file": item["candidate_file"],
                 "metrics": item["metrics"],
+                "meets_frequency_requirement": item.get("meets_frequency_requirement"),
                 "verdict": item["verdict"],
             }
             for item in pareto
@@ -314,6 +434,11 @@ def main() -> None:
     print("\nPPA experiment evaluation")
     print(f"Benchmark: {summary['benchmark']}")
     print(f"Candidates found: {len(summary['candidates'])}")
+    print(
+        "Frequency requirement: "
+        f"{summary['minimum_frequency_mhz']:g} MHz "
+        f"(period <= {summary['maximum_clock_period_ns']:.3f} ns)"
+    )
     budget = summary["budget"]
     print(f"Synthesis calls used: {budget['synthesis_calls_used']}/{budget['max_synthesis_calls']}")
     print("\nCandidate verdicts")
@@ -323,7 +448,14 @@ def main() -> None:
     for item in summary["pareto_archive"]:
         label = "baseline" if item["candidate_index"] == 0 else f"candidate_{item['candidate_index']:03d}"
         metrics = item["metrics"]
-        print(f"  {label}: latency={metrics.get('latency_best_cycles')}, LUT={metrics.get('resources_lut_used')}, FF={metrics.get('resources_ff_used')}, DSP={metrics.get('resources_dsp_used')}")
+        print(
+            f"  {label}: latency={metrics.get('latency_ns')} ns, "
+            f"throughput_period={metrics.get('throughput_period_ns')} ns, "
+            f"frequency={metrics.get('frequency_mhz')} MHz, "
+            f"LUT={metrics.get('resources_lut_used')}, "
+            f"FF={metrics.get('resources_ff_used')}, "
+            f"DSP={metrics.get('resources_dsp_used')}"
+        )
     print("No model call, CSim, or synthesis was run.")
 
 
