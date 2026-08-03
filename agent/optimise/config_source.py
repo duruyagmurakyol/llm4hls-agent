@@ -49,17 +49,26 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "preserve_diagnosed_loop_label": True,
         **optimisation.get("validation", {}),
     }
-    prompt_constraints = optimisation.get(
-        "prompt_constraints",
-        [
+
+    protected_contract = task.data["interface"].get("protected_contract", [])
+    configured_constraints = optimisation.get("prompt_constraints", [])
+    prompt_constraints = [*protected_contract, *configured_constraints]
+    if not prompt_constraints:
+        prompt_constraints = [
             "Preserve the top-level function signature and all testbench-observed semantics.",
             "Do not modify the supplied testbench or baseline source in place.",
-        ],
+        ]
+
+    task_root = task.data.get("task_root")
+    benchmark = (
+        Path(str(task_root)).name
+        if task_root
+        else Path(str(artifacts["source"])).parent.parent.name
     )
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
-        "benchmark": Path(str(task.data.get("task_root", task.task_id))).name,
+        "benchmark": benchmark,
         "top_function": task.data["interface"]["top_function"],
         "baseline": {
             "source": artifacts["source"],
