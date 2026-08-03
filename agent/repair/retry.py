@@ -19,6 +19,19 @@ from agent.tools.reports import load_json, write_json
 from agent.tools.validation import classify_failure
 
 
+ATTEMPT_ARTIFACTS = {
+    "diagnosis": "diagnosis.json",
+    "system_prompt": "system_prompt.txt",
+    "prompt": "prompt.txt",
+    "raw_response": "raw_response.txt",
+    "candidate": "candidate.cpp",
+    "diff": "diff.patch",
+    "strategy": "strategy.json",
+    "validation": "validation.json",
+    "token_usage": "token_usage.json",
+}
+
+
 def _can_attempt(config: dict[str, Any], budget: BudgetState | None) -> bool:
     if budget is None:
         return True
@@ -93,6 +106,130 @@ def _record_strategy(
 
     write_json(attempt_dir / "result.json", result)
     return strategy
+
+
+def _stage_record(
+    *,
+    ran: bool,
+    passed: bool | None,
+    reason: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "run": ran,
+        "passed": passed if ran else None,
+    }
+    if reason:
+        record["reason"] = reason
+    if details:
+        record["details"] = details
+    return record
+
+
+def _write_attempt_contract(
+    *,
+    attempt_dir: Path,
+    editable: str,
+    result: dict[str, Any],
+) -> None:
+    """Materialise the small, stable FPT-507 artefact contract."""
+    workspace_candidate = attempt_dir / "workspace" / editable
+    if not workspace_candidate.is_file():
+        raise FileNotFoundError(f"Attempt candidate not found: {workspace_candidate}")
+
+    raw_response = attempt_dir / ATTEMPT_ARTIFACTS["raw_response"]
+    raw_response.touch(exist_ok=True)
+    shutil.copy2(workspace_candidate, attempt_dir / ATTEMPT_ARTIFACTS["candidate"])
+
+    legacy_diff = attempt_dir / "repair.diff"
+    canonical_diff = attempt_dir / ATTEMPT_ARTIFACTS["diff"]
+    if legacy_diff.is_file():
+        shutil.copy2(legacy_diff, canonical_diff)
+    else:
+        canonical_diff.write_text("", encoding="utf-8")
+
+    write_json(
+        attempt_dir / ATTEMPT_ARTIFACTS["diagnosis"],
+        {
+            "initial": result.get("diagnosis"),
+            "final": result.get("final_diagnosis"),
+        },
+    )
+
+    output_validation = result.get("output_validation")
+    invalid_output = isinstance(output_validation, dict)
+    generation_error = result.get("generation_error")
+    provider_error = generation_error is not None and not invalid_output
+    host_before_ran = (attempt_dir / "host_validation_before.log").is_file()
+    host_after_ran = (attempt_dir / "host_validation_after.log").is_file()
+    independent_ran = (attempt_dir / "independent_validation.log").is_file()
+
+    validation = {
+        "model_generation": _stage_record(
+            ran=True,
+            passed=not provider_error,
+            reason=str(generation_error) if provider_error else None,
+        ),
+        "model_output_validation": _stage_record(
+            ran=not provider_error,
+            passed=False if invalid_output else True if not provider_error else None,
+            reason="provider_error" if provider_error else None,
+            details=output_validation if invalid_output else None,
+        ),
+        "host_before": _stage_record(
+            ran=host_before_ran,
+            passed=result.get("pre_host_validation_passed"),
+        ),
+        "host_after": _stage_record(
+            ran=host_after_ran,
+            passed=result.get("post_host_validation_passed"),
+            reason=None if host_after_ran else "generation_did_not_produce_an_accepted_candidate",
+        ),
+        "independent_csim": _stage_record(
+            ran=independent_ran,
+            passed=result.get("independent_validation_passed"),
+            reason=None if independent_ran else "candidate_did_not_reach_independent_validation",
+        ),
+    }
+    write_json(attempt_dir / ATTEMPT_ARTIFACTS["validation"], validation)
+
+    write_json(
+        attempt_dir / ATTEMPT_ARTIFACTS["token_usage"],
+        {
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "input_tokens": result.get("input_tokens"),
+            "output_tokens": result.get("output_tokens"),
+            "total_tokens": result.get("tokens_used"),
+            "latency_seconds": result.get("latency_seconds"),
+            "thinking_budget": result.get("thinking_budget"),
+        },
+    )
+
+    result["candidate_record_kind"] = (
+        "last_valid_source" if provider_error or invalid_output else "generated_candidate"
+    )
+    result["validation"] = validation
+    result["artifacts"] = dict(ATTEMPT_ARTIFACTS)
+    write_json(attempt_dir / "result.json", result)
+
+
+def _write_budget_summary(
+    *,
+    run_root: Path,
+    budget: BudgetState | None,
+    termination_reason: str,
+) -> None:
+    if budget is None:
+        summary: dict[str, Any] = {
+            "schema_version": 1,
+            "available": False,
+            "reason": "No BudgetState was supplied to this repair run.",
+        }
+    else:
+        summary = budget.summary()
+    summary["termination_reason"] = termination_reason
+    write_json(run_root / "budget_summary.json", summary)
 
 
 def _exception_attempt(
@@ -242,7 +379,7 @@ def run_repair_loop(
             if budget is not None:
                 budget.set_stop_reason("repair_budget_exhausted")
             break
-        attempt_dir = run_root if maximum == 1 else run_root / f"attempt_{attempt:03d}"
+        attempt_dir = run_root / f"attempt_{attempt:03d}"
         try:
             passed, final_dir, result = _run_repair_once(
                 config,
@@ -276,6 +413,11 @@ def run_repair_loop(
             editable=editable,
             result=result,
         )
+        _write_attempt_contract(
+            attempt_dir=final_dir,
+            editable=editable,
+            result=result,
+        )
         attempt_results.append(result)
         feedback = result.get("feedback")
         if not passed and not isinstance(feedback, dict):
@@ -292,6 +434,7 @@ def run_repair_loop(
                 "diagnosis": None if passed else feedback.get("diagnosis"),
                 "strategy": strategy,
                 "candidate_hash": _sha256(candidate),
+                "artifacts": dict(ATTEMPT_ARTIFACTS),
             }
         )
         if passed:
@@ -306,6 +449,13 @@ def run_repair_loop(
     final = attempt_results[-1]
     total_input = sum(int(item.get("input_tokens") or 0) for item in attempt_results)
     total_output = sum(int(item.get("output_tokens") or 0) for item in attempt_results)
+    termination_reason = (
+        "repair_validated"
+        if passed
+        else "repair_budget_exhausted"
+        if budget is not None and not _can_attempt(config, budget)
+        else "repair_attempt_limit_reached"
+    )
     result = {
         **final,
         "schema_version": 4,
@@ -316,16 +466,15 @@ def run_repair_loop(
         "input_tokens": total_input,
         "output_tokens": total_output,
         "tokens_used": total_input + total_output,
-        "termination_reason": (
-            "repair_validated"
-            if passed
-            else "repair_budget_exhausted"
-            if budget is not None and not _can_attempt(config, budget)
-            else "repair_attempt_limit_reached"
-        ),
+        "termination_reason": termination_reason,
     }
     write_json(run_root / "repair_attempts.json", result)
     write_json(final_dir / "result.json", result)
+    _write_budget_summary(
+        run_root=run_root,
+        budget=budget,
+        termination_reason=termination_reason,
+    )
 
     if not keep_workspace:
         for item in attempts:
