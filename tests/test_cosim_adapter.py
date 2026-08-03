@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from agent.budget import BudgetState
 from agent.config import TaskManifest
+from agent.controller import _run_direct_api_repair
 from agent.tools.command_runner import CommandResult
 from agent.tools.cosim import run_cosim
 
@@ -147,3 +149,91 @@ def test_run_cosim_requires_report(tmp_path: Path, monkeypatch) -> None:
     assert not report["passed"]
     assert report["failure_class"] == "missing_cosim_report"
     assert report["reports"] == []
+
+
+def test_repair_runs_synthesis_then_cosim(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "results" / "run"
+    candidate = run_dir / "workspace/src/kernel.cpp"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("void kernel() {}\n", encoding="utf-8")
+    task = TaskManifest(
+        path=tmp_path / "task.json",
+        data={
+            "task_id": "repair_then_cosim",
+            "artifacts": {"build_files": ["task.cfg"]},
+            "repair": {
+                "benchmark_source": "benchmark",
+                "editable_files": ["src/kernel.cpp"],
+                "protected_files": ["src/kernel.h"],
+                "host_validation": {"command": ["true"], "run_command": ["true"]},
+                "independent_validation": {"enabled": True, "command": ["true"]},
+            },
+            "model": {"name": "model"},
+            "output_dir": str(tmp_path / "output"),
+        },
+    )
+    repair_result = {
+        "experiment_id": "repair_then_cosim",
+        "model": "model",
+        "failure_class": "functional",
+        "tokens_used": 10,
+        "input_tokens": 6,
+        "output_tokens": 4,
+        "modified_files": ["src/kernel.cpp"],
+        "post_host_validation_passed": True,
+        "independent_validation_passed": True,
+    }
+    supplied_candidates: list[Path] = []
+
+    monkeypatch.setattr("agent.controller.REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "agent.controller.run_repair",
+        lambda *args, **kwargs: (True, run_dir, repair_result),
+    )
+
+    def fake_synthesis(supplied_task: TaskManifest, supplied_candidate: Path) -> dict[str, object]:
+        supplied_candidates.append(supplied_candidate)
+        return {
+            "passed": True,
+            "return_code": 0,
+            "timed_out": False,
+            "failure_class": "none",
+            "evidence": [],
+            "duration_seconds": 0.2,
+            "log_path": "synthesis.log",
+            "candidate_hash": "a" * 64,
+            "metrics": {"latency_best_cycles": 4},
+        }
+
+    def fake_cosim(supplied_task: TaskManifest, supplied_candidate: Path) -> dict[str, object]:
+        supplied_candidates.append(supplied_candidate)
+        return {
+            "passed": True,
+            "return_code": 0,
+            "timed_out": False,
+            "failure_class": "none",
+            "evidence": [],
+            "duration_seconds": 0.3,
+            "log_path": "cosim.log",
+            "candidate_hash": "a" * 64,
+            "reports": ["vector_add_cosim.rpt"],
+        }
+
+    monkeypatch.setattr("agent.controller.run_synthesis", fake_synthesis)
+    monkeypatch.setattr("agent.controller.run_cosim", fake_cosim)
+    budget = BudgetState(1, 1, 1, 1, 1, 100)
+
+    result = _run_direct_api_repair(task, budget)
+
+    assert result.success
+    assert result.status == "fully_verified"
+    assert result.termination_reason == "repair_synthesis_and_cosim_completed"
+    assert [event.stage for event in result.trajectory] == [
+        "repair",
+        "post_repair_synthesis",
+        "post_repair_cosim",
+    ]
+    assert supplied_candidates == [candidate, candidate]
+    assert budget.synthesis_calls_used == 1
+    assert budget.cosim_calls_used == 1
+    assert budget.events[-1]["success"] is True
