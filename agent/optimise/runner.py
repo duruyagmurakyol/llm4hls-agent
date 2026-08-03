@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent.budget import BudgetState
 from agent.optimise.config_source import ConfigInput, ConfigSource, as_config_source
 from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_prompt
 from agent.optimise.duplicate import check_candidate_duplicate
@@ -106,10 +107,33 @@ def _status_summary(config: dict[str, Any], output_dir: Path) -> tuple[str, dict
     return f"status_{status}", summary
 
 
-def _initialise(config_source: ConfigSource, config: dict[str, Any], output_dir: Path) -> None:
+def _initialise(
+    config_source: ConfigSource,
+    config: dict[str, Any],
+    output_dir: Path,
+    budget: BudgetState | None,
+) -> None:
+    project_dir = REPO_ROOT / config["baseline"]["project_dir"]
+    cached = project_dir.is_dir() and any(project_dir.rglob("*_csynth.xml"))
+    if budget is not None and not cached:
+        budget.require("csim_calls")
+        budget.require("synthesis_calls")
+
     baseline = ensure_baseline_synthesis(config_source)
+    if budget is not None and baseline.get("cached") is not True:
+        budget.charge_csim(
+            stage="baseline_csim",
+            success=baseline.get("passed") is True,
+            timed_out=bool(baseline.get("timed_out", False)),
+        )
+        budget.charge_synthesis(
+            stage="baseline_synthesis",
+            success=baseline.get("passed") is True,
+            timed_out=bool(baseline.get("timed_out", False)),
+        )
     if baseline.get("passed") is not True:
         raise RuntimeError("Baseline synthesis failed.")
+
     required = (
         output_dir / "baseline_hierarchical_diagnosis.json",
         output_dir / "baseline_source_target.json",
@@ -162,6 +186,7 @@ def _evaluate_candidate(
     config_source: ConfigSource,
     index: int,
     trajectory: list[dict[str, Any]],
+    budget: BudgetState | None,
 ) -> dict[str, Any]:
     print(f"\n=== Evaluate candidate {index:03d} ===", flush=True)
 
@@ -183,7 +208,15 @@ def _evaluate_candidate(
         _print_verdict(summary, index)
         return summary
 
+    if budget is not None:
+        budget.require("csim_calls")
     csim = run_candidate_csim(config_source, index)
+    if budget is not None:
+        budget.charge_csim(
+            stage=f"candidate_{index:03d}_csim",
+            success=csim["passed"],
+            timed_out=bool(csim.get("timed_out", False)),
+        )
     trajectory.append({"candidate": index, "stage": "csim", "passed": csim["passed"]})
     _print_stage(index, "CSim", csim["passed"], f"return code {csim.get('return_code')}")
     if not csim["passed"]:
@@ -191,7 +224,15 @@ def _evaluate_candidate(
         _print_verdict(summary, index)
         return summary
 
+    if budget is not None:
+        budget.require("synthesis_calls")
     synthesis = run_candidate_synthesis(config_source, index)
+    if budget is not None:
+        budget.charge_synthesis(
+            stage=f"candidate_{index:03d}_synthesis",
+            success=synthesis["passed"],
+            timed_out=bool(synthesis.get("timed_out", False)),
+        )
     trajectory.append({
         "candidate": index,
         "stage": "synthesis",
@@ -214,6 +255,7 @@ def run_optimisation(
     *,
     status_only: bool = False,
     max_steps: int | None = None,
+    budget: BudgetState | None = None,
 ) -> OptimisationRunResult:
     config_source = as_config_source(config_input)
     config = _load_json(config_source)
@@ -225,15 +267,17 @@ def run_optimisation(
         status, summary = _status_summary(config, output_dir)
         return OptimisationRunResult(True, status, "status_requested", summary, trajectory)
 
-    _initialise(config_source, config, output_dir)
+    _initialise(config_source, config, output_dir, budget)
     summary = evaluate_experiment(config_source)
     maximum_candidates = int(config["budget"]["max_candidates"])
     step_limit = max_steps if max_steps is not None else maximum_candidates
 
     for _ in range(step_limit):
         summary = evaluate_experiment(config_source)
-        budget = summary["budget"]
-        if budget["synthesis_calls_remaining"] <= 0:
+        local_budget = summary["budget"]
+        if local_budget["synthesis_calls_remaining"] <= 0:
+            if budget is not None:
+                budget.set_stop_reason("synthesis_budget_exhausted")
             return OptimisationRunResult(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
 
         indices = _candidate_indices(output_dir)
@@ -247,18 +291,26 @@ def run_optimisation(
                 csim_path = output_dir / f"candidate_{latest:03d}_csim_validation.json"
                 synthesis_path = output_dir / f"candidate_{latest:03d}_synthesis.json"
                 if not static_path.is_file():
-                    summary = _evaluate_candidate(config_source, latest, trajectory)
+                    summary = _evaluate_candidate(config_source, latest, trajectory, budget)
                     continue
                 if _load_json(static_path).get("passed") is not True:
                     summary = evaluate_experiment(config_source)
                     _print_verdict(summary, latest)
                     continue
                 if not csim_path.is_file() or _load_json(csim_path).get("passed") is not True:
-                    summary = _evaluate_candidate(config_source, latest, trajectory)
+                    summary = _evaluate_candidate(config_source, latest, trajectory, budget)
                     continue
                 if not synthesis_path.is_file():
                     print(f"\n=== Resume candidate {latest:03d} synthesis ===", flush=True)
+                    if budget is not None:
+                        budget.require("synthesis_calls")
                     synthesis = run_candidate_synthesis(config_source, latest)
+                    if budget is not None:
+                        budget.charge_synthesis(
+                            stage=f"candidate_{latest:03d}_synthesis",
+                            success=synthesis["passed"],
+                            timed_out=bool(synthesis.get("timed_out", False)),
+                        )
                     trajectory.append({"candidate": latest, "stage": "synthesis", "passed": synthesis["passed"], "timed_out": synthesis.get("timed_out", False)})
                     _print_stage(latest, "synthesis", synthesis["passed"])
                     summary = evaluate_experiment(config_source)
@@ -266,6 +318,8 @@ def run_optimisation(
                     continue
             index = latest + 1
             if index > maximum_candidates:
+                if budget is not None:
+                    budget.set_stop_reason("candidate_budget_exhausted")
                 return OptimisationRunResult(True, "terminated_iteration_limit", "candidate_budget_exhausted", summary, trajectory)
             completed = [item for item in summary.get("candidates", []) if item.get("verdict") != "incomplete"]
             if not completed:
@@ -275,14 +329,36 @@ def run_optimisation(
 
         model_calls = len(list(output_dir.glob("candidate_*_model_metadata.json")))
         if model_calls >= maximum_candidates:
+            if budget is not None:
+                budget.set_stop_reason("model_call_budget_exhausted")
             return OptimisationRunResult(True, "terminated_budget", "model_call_budget_exhausted", summary, trajectory)
-        generate_candidate(config_source, index)
+
+        if budget is not None:
+            if not budget.can_generate_candidate(
+                reserve_csim=2,
+                reserve_synthesis=2,
+            ):
+                budget.set_stop_reason("final_validation_budget_reserved")
+                return OptimisationRunResult(
+                    True,
+                    "terminated_budget",
+                    "final_validation_budget_reserved",
+                    summary,
+                    trajectory,
+                )
+            budget.charge_iteration(stage=f"candidate_{index:03d}_iteration")
+
+        generate_candidate(config_source, index, budget=budget)
         trajectory.append({"candidate": index, "stage": "generation", "passed": True})
         _print_stage(index, "generation", True)
-        summary = _evaluate_candidate(config_source, index, trajectory)
+        summary = _evaluate_candidate(config_source, index, trajectory, budget)
 
         record = _record(summary, index)
         if record and record.get("verdict") == "accept_dominates_baseline":
+            if budget is not None:
+                budget.set_stop_reason("candidate_dominates_baseline")
             return OptimisationRunResult(True, "success", "candidate_dominates_baseline", summary, trajectory)
 
+    if budget is not None:
+        budget.set_stop_reason("max_agent_steps_reached")
     return OptimisationRunResult(True, "terminated_step_limit", "max_agent_steps_reached", summary, trajectory)
