@@ -25,6 +25,7 @@ from agent.tools.synthesis import parse_csynth_xml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MINIMUM_FREQUENCY_MHZ = 100.0
+PROMISING_RESOURCE_REDUCTION_PERCENT = 25.0
 METRIC_KEYS = (
     "clock_period_ns",
     "frequency_mhz",
@@ -244,6 +245,8 @@ def classify_candidate(
         "metrics": {},
         "deltas_percent": {},
         "performance_comparison": {},
+        "usefulness_classification": None,
+        "refinement_eligible": False,
         "minimum_frequency_mhz": minimum_frequency_mhz,
         "meets_frequency_requirement": None,
         "resource_limit_compliance": evaluate_resource_limits({}, resource_limits),
@@ -333,6 +336,15 @@ def classify_candidate(
     numeric_resources = [
         value for value in resource_deltas if isinstance(value, (int, float))
     ]
+    significant_resource_reduction = any(
+        value <= -PROMISING_RESOURCE_REDUCTION_PERCENT
+        for value in numeric_resources
+    )
+    constraint_usefulness = (
+        "promising_constraint_violation"
+        if significant_resource_reduction
+        else "constraint_violation"
+    )
 
     frequency = metrics.get("frequency_mhz")
     maximum_period = metrics.get("maximum_clock_period_ns")
@@ -348,6 +360,8 @@ def classify_candidate(
     if metrics.get("meets_minimum_frequency") is not True:
         record.update(
             verdict="reject_frequency_threshold",
+            usefulness_classification=constraint_usefulness,
+            refinement_eligible=significant_resource_reduction,
             reason=(
                 f"Estimated frequency {frequency:.3f} MHz is below the required "
                 f"{minimum_frequency_mhz:g} MHz (clock period must be at most "
@@ -362,6 +376,8 @@ def classify_candidate(
         )
         record.update(
             verdict="reject_resource_limits",
+            usefulness_classification=constraint_usefulness,
+            refinement_eligible=significant_resource_reduction,
             reason="Candidate violates task-specific resource limits: " + labels,
         )
         return record
