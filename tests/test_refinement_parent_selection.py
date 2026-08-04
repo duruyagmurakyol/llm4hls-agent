@@ -62,7 +62,7 @@ def test_duplicate_candidate_is_never_selected() -> None:
     assert reason == "csim_passed_candidate"
 
 
-def test_fully_verified_candidate_beats_promising_synthesis_candidate() -> None:
+def test_pareto_candidate_beats_promising_synthesis_candidate() -> None:
     selected = select_refinement_parent(
         [
             {
@@ -89,7 +89,109 @@ def test_fully_verified_candidate_beats_promising_synthesis_candidate() -> None:
     assert selected is not None
     record, reason = selected
     assert record["candidate_index"] == 1
-    assert reason == "fully_verified_candidate"
+    assert reason == "pareto_candidate"
+
+
+def test_pareto_candidate_beats_newer_dominated_verified_candidates() -> None:
+    selected = select_refinement_parent(
+        [
+            {
+                "candidate_index": 4,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "keep_pareto_candidate",
+            },
+            {
+                "candidate_index": 5,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "reject_dominated",
+            },
+            {
+                "candidate_index": 6,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "reject_dominated",
+            },
+            {
+                "candidate_index": 7,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "reject_dominated",
+            },
+        ]
+    )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 4
+    assert reason == "pareto_candidate"
+
+
+def test_promising_constraint_violation_beats_generic_verified_candidate() -> None:
+    selected = select_refinement_parent(
+        [
+            {
+                "candidate_index": 1,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": False,
+                "refinement_eligible": True,
+                "verdict": "reject_frequency_threshold",
+            },
+            {
+                "candidate_index": 2,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "refinement_eligible": False,
+                "verdict": "reject_no_objective_gain",
+            },
+        ]
+    )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 1
+    assert reason == "synthesis_passed_refinement_eligible"
+
+
+def test_dominating_candidate_beats_newer_pareto_candidate() -> None:
+    selected = select_refinement_parent(
+        [
+            {
+                "candidate_index": 1,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "accept_dominates_baseline",
+            },
+            {
+                "candidate_index": 2,
+                "static_validation": True,
+                "csim": True,
+                "synthesis": True,
+                "fully_verified": True,
+                "verdict": "keep_pareto_candidate",
+            },
+        ]
+    )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 1
+    assert reason == "dominates_baseline_candidate"
 
 
 def test_latest_candidate_wins_within_same_quality_tier() -> None:
