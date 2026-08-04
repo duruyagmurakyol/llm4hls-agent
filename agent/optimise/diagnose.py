@@ -403,7 +403,7 @@ Original baseline source:
 {baseline_path.read_text(encoding='utf-8')}
 """
     prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
-    feedback_path = output_dir / f"candidate_{previous_index:03d}_feedback.json"
+    feedback_path = output_dir / f"candidate_{next_index:03d}_feedback.json"
     prompt_path.write_text(prompt, encoding="utf-8")
     feedback_path.write_text(json.dumps({
         "previous_candidate_index": previous_index,
@@ -496,7 +496,7 @@ Original baseline source:
 {baseline_path.read_text(encoding='utf-8')}
 """
     prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
-    feedback_path = output_dir / f"candidate_{source_index:03d}_tradeoff_feedback.json"
+    feedback_path = output_dir / f"candidate_{next_index:03d}_tradeoff_feedback.json"
     prompt_path.write_text(prompt, encoding="utf-8")
     feedback_path.write_text(json.dumps({
         "source_candidate_index": source_index,
