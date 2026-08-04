@@ -7,7 +7,10 @@ from agent.optimise.diagnose import (
     _recover_latency_tradeoff_strategy,
     prepare_tradeoff_prompt,
 )
-from agent.optimise.generate import _attach_latency_recovery_factor
+from agent.optimise.generate import (
+    _attach_latency_recovery_factor,
+    _latency_recovery_prompt_suffix,
+)
 from agent.optimise.refinement_strategy import (
     apply_strategy_directives,
     check_strategy_compliance,
@@ -194,24 +197,31 @@ def test_generation_persists_next_untried_latency_recovery_factor(
     assert persisted["parameters"]["factor"] == 8
 
 
-def test_latency_recovery_factor_is_applied_and_checked() -> None:
-    source = (
-        "void kernel(int a[8]) {\n"
-        "  for (int i = 0; i < 8; ++i) {\n"
-        "    a[i] += 1;\n"
-        "  }\n"
-        "}\n"
-    )
+def test_latency_recovery_factor_is_supplied_and_checked() -> None:
     strategy = {
         "name": "recover_latency_tradeoff",
         "parameters": {"factor": 4},
     }
+    suffix = _latency_recovery_prompt_suffix(strategy)
 
-    rewritten = apply_strategy_directives(source, strategy)
-    result = check_strategy_compliance(rewritten, strategy)
+    assert "selected performance-critical loop" in suffix
+    assert "#pragma HLS PIPELINE II=1" in suffix
+    assert "#pragma HLS UNROLL factor=4" in suffix
+    assert apply_strategy_directives("void kernel() {}\n", strategy) == (
+        "void kernel() {}\n"
+    )
 
-    assert "#pragma HLS PIPELINE II=1" in rewritten
-    assert "#pragma HLS UNROLL factor=4" in rewritten
+    source = (
+        "void kernel(int a[8]) {\n"
+        "  for (int i = 0; i < 8; ++i) {\n"
+        "    #pragma HLS PIPELINE II=1\n"
+        "    #pragma HLS UNROLL factor=4\n"
+        "    a[i] += 1;\n"
+        "  }\n"
+        "}\n"
+    )
+    result = check_strategy_compliance(source, strategy)
+
     assert result["required"] is True
     assert result["passed"] is True
     assert result["strategy"] == "recover_latency_tradeoff"
