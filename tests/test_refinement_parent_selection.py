@@ -120,17 +120,45 @@ def test_latest_candidate_wins_within_same_quality_tier() -> None:
     assert reason == "csim_passed_candidate"
 
 
-def test_returns_none_when_no_candidate_is_viable() -> None:
+def test_static_rejection_is_retained_as_last_resort_feedback_parent() -> None:
+    selected = select_refinement_parent(
+        [
+            {
+                "candidate_index": 1,
+                "static_validation": False,
+                "csim": None,
+                "synthesis": None,
+                "fully_verified": False,
+                "verdict": "reject_static",
+            },
+            {
+                "candidate_index": 2,
+                "static_validation": True,
+                "csim": None,
+                "synthesis": None,
+                "fully_verified": False,
+                "verdict": "reject_duplicate",
+            },
+        ]
+    )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 1
+    assert reason == "latest_non_duplicate_fallback"
+
+
+def test_returns_none_when_every_candidate_is_a_duplicate() -> None:
     assert (
         select_refinement_parent(
             [
                 {
                     "candidate_index": 1,
-                    "static_validation": False,
+                    "static_validation": True,
                     "csim": None,
                     "synthesis": None,
                     "fully_verified": False,
-                    "verdict": "reject_static",
+                    "verdict": "reject_duplicate",
                 },
                 {
                     "candidate_index": 2,
