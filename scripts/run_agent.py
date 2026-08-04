@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from agent.controller import run_agent  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
+from agent.resume import resume_agent  # noqa: E402
 
 
 def main() -> None:
@@ -26,6 +27,14 @@ def main() -> None:
     )
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--max-agent-steps", type=int, default=None)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume an automatic task from its saved fully verified baseline, "
+            "skipping initial validation and repair"
+        ),
+    )
     parser.add_argument(
         "--onboard-only",
         action="store_true",
@@ -44,11 +53,17 @@ def main() -> None:
 
         if args.onboard_only:
             return
+        if args.resume and args.status_only:
+            raise ValueError("--resume cannot be combined with --status-only")
 
-        result = run_agent(
-            task_input,
-            status_only=args.status_only,
-            max_steps=args.max_agent_steps,
+        result = (
+            resume_agent(task_input, max_steps=args.max_agent_steps)
+            if args.resume
+            else run_agent(
+                task_input,
+                status_only=args.status_only,
+                max_steps=args.max_agent_steps,
+            )
         )
     except (FileNotFoundError, ValueError, KeyError) as error:
         print(f"Agent configuration error: {error}", file=sys.stderr)
