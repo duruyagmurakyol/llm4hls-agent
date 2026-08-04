@@ -78,6 +78,36 @@ def _loop_bodies(source: str) -> list[str]:
     return bodies
 
 
+def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
+    """Deterministically place directives for the one supported strategy."""
+    if strategy.get("name") != "partial_unroll":
+        return source
+
+    factor = int(strategy.get("parameters", {}).get("factor", 0))
+    if factor <= 0:
+        return source
+
+    cleaned = re.sub(
+        r"^[ \t]*#\s*pragma\s+HLS\s+(?:PIPELINE|UNROLL)\b[^\n]*\n?",
+        "",
+        source,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    loop = re.search(r"\bfor\s*\([^)]*\)\s*\{", cleaned)
+    if not loop:
+        return cleaned
+
+    opening = cleaned.find("{", loop.start())
+    line_start = cleaned.rfind("\n", 0, loop.start()) + 1
+    loop_indent = re.match(r"[ \t]*", cleaned[line_start:loop.start()]).group(0)
+    directive_indent = loop_indent + "    "
+    directives = (
+        f"\n{directive_indent}#pragma HLS PIPELINE II=1"
+        f"\n{directive_indent}#pragma HLS UNROLL factor={factor}"
+    )
+    return cleaned[: opening + 1] + directives + cleaned[opening + 1 :]
+
+
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
     """Check the one strategy currently supported by evidence-directed refinement."""
     name = strategy.get("name")
