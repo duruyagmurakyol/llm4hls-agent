@@ -194,6 +194,97 @@ def test_dominating_candidate_beats_newer_pareto_candidate() -> None:
     assert reason == "dominates_baseline_candidate"
 
 
+def test_default_final_ranking_selects_candidate_6_over_newer_candidate_7() -> None:
+    candidate_6 = {
+        "candidate_index": 6,
+        "static_validation": True,
+        "csim": True,
+        "synthesis": True,
+        "cosim": True,
+        "fully_verified": True,
+        "meets_frequency_requirement": True,
+        "resource_limit_compliance": {"passed": True},
+        "verdict": "keep_pareto_candidate",
+        "metrics": {
+            "latency_ns": 7712.928,
+            "throughput_period_ns": 7720.512,
+            "resources_lut_used": 9996,
+            "resources_ff_used": 21911,
+            "resources_dsp_used": 56,
+            "resources_bram_used": 0,
+        },
+    }
+    candidate_7 = {
+        "candidate_index": 7,
+        "static_validation": True,
+        "csim": True,
+        "synthesis": True,
+        "cosim": True,
+        "fully_verified": True,
+        "meets_frequency_requirement": True,
+        "resource_limit_compliance": {"passed": True},
+        "verdict": "keep_pareto_candidate",
+        "metrics": {
+            "latency_ns": 15240.142,
+            "throughput_period_ns": 15247.785,
+            "resources_lut_used": 9135,
+            "resources_ff_used": 23057,
+            "resources_dsp_used": 28,
+            "resources_bram_used": 0,
+        },
+    }
+
+    selected = select_refinement_parent([candidate_6, candidate_7])
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 6
+    assert reason == "pareto_candidate"
+
+
+def test_configured_resource_first_ranking_can_select_candidate_7() -> None:
+    candidate_6 = {
+        "candidate_index": 6,
+        "fully_verified": True,
+        "meets_frequency_requirement": True,
+        "resource_limit_compliance": {"passed": True},
+        "verdict": "keep_pareto_candidate",
+        "metrics": {
+            "latency_ns": 7712.928,
+            "throughput_period_ns": 7720.512,
+            "resources_lut_used": 9996,
+            "resources_ff_used": 21911,
+            "resources_dsp_used": 56,
+            "resources_bram_used": 0,
+        },
+    }
+    candidate_7 = {
+        "candidate_index": 7,
+        "fully_verified": True,
+        "meets_frequency_requirement": True,
+        "resource_limit_compliance": {"passed": True},
+        "verdict": "keep_pareto_candidate",
+        "metrics": {
+            "latency_ns": 15240.142,
+            "throughput_period_ns": 15247.785,
+            "resources_lut_used": 9135,
+            "resources_ff_used": 23057,
+            "resources_dsp_used": 28,
+            "resources_bram_used": 0,
+        },
+    }
+
+    selected = select_refinement_parent(
+        [candidate_6, candidate_7],
+        {"ranking": ["resource_cost", "latency_ns"]},
+    )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 7
+    assert reason == "pareto_candidate"
+
+
 def test_latest_candidate_wins_within_same_quality_tier() -> None:
     selected = select_refinement_parent(
         [
