@@ -17,6 +17,12 @@ METRIC_KEYS = (
     "resources_lut_used", "resources_ff_used", "resources_dsp_used",
     "resources_bram_used",
 )
+RESOURCE_KEYS = (
+    "resources_lut_used",
+    "resources_ff_used",
+    "resources_dsp_used",
+    "resources_bram_used",
+)
 
 
 def diagnose_reports(report_root: Path, *, interface_frozen: bool = False) -> dict[str, Any]:
@@ -80,7 +86,67 @@ def _completed_partial_unroll_factors(
     return factors
 
 
+def _recover_frequency_strategy(record: dict[str, Any]) -> dict[str, Any] | None:
+    if not (
+        record.get("verdict") == "reject_frequency_threshold"
+        and record.get("usefulness_classification") == "promising_constraint_violation"
+        and record.get("refinement_eligible") is True
+    ):
+        return None
+
+    deltas = record.get("deltas_percent") or {}
+    reductions = {
+        key: value
+        for key in RESOURCE_KEYS
+        if isinstance((value := deltas.get(key)), (int, float)) and value < 0
+    }
+    metrics = record.get("metrics") or {}
+    return {
+        "name": "recover_frequency",
+        "parameters": {
+            "minimum_frequency_mhz": record.get("minimum_frequency_mhz"),
+            "maximum_clock_period_ns": metrics.get("maximum_clock_period_ns"),
+        },
+        "reason": (
+            "The candidate passed CSim and synthesis and saved measured resources, "
+            "but failed the required frequency constraint."
+        ),
+        "preserve": list(reductions),
+        "resource_reductions_percent": reductions,
+        "improve": ["clock_period_ns", "frequency_mhz", "latency_ns"],
+        "required_changes": [
+            "Preserve the resource-saving structure where possible.",
+            "Recover the required frequency by shortening the critical path or restoring focused pipelining or parallelism.",
+            "Make one focused transformation and preserve functional behaviour.",
+        ],
+        "forbidden_changes": [
+            "Do not revert completely to the baseline architecture.",
+            "Do not perform a large unrelated rewrite.",
+            "Do not completely partition top-level interface arrays.",
+            "Do not repeat an already evaluated source.",
+        ],
+    }
+
+
 def _strategy_text(strategy: dict[str, Any]) -> str:
+    if strategy.get("name") == "recover_frequency":
+        reductions = strategy.get("resource_reductions_percent") or {}
+        preserved = "\n".join(
+            f"- {key}: {value:.3f}%" for key, value in reductions.items()
+        ) or "- Preserve the measured resource-saving structure."
+        return (
+            "Selected strategy: recover_frequency.\n"
+            f"Reason: {strategy['reason']}\n"
+            "Preserve:\n"
+            + preserved
+            + "\nImprove:\n"
+            + "\n".join(f"- {item}" for item in strategy["improve"])
+            + "\nRequired changes:\n"
+            + "\n".join(f"- {item}" for item in strategy["required_changes"])
+            + "\nForbidden changes:\n"
+            + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
+        )
+
     factor = strategy["parameters"]["factor"]
     return (
         f"Selected strategy: partial loop unrolling with factor {factor}.\n"
@@ -111,6 +177,9 @@ def _write_strategy(
         "next_candidate_index": next_index,
         "trigger": trigger,
     }
+    for key in ("preserve", "resource_reductions_percent", "improve"):
+        if key in strategy:
+            payload[key] = strategy[key]
     if retry_of is not None:
         payload["retry_of_candidate_index"] = retry_of
     (output_dir / f"candidate_{next_index:03d}_strategy.json").write_text(
@@ -142,6 +211,7 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
         {},
     )
     verdict = str(record.get("verdict") or "incomplete")
+    recover_frequency = _recover_frequency_strategy(record)
 
     if static and static.get("passed") is False:
         failed = [name for name, passed in (static.get("checks") or {}).items() if not passed]
@@ -163,6 +233,26 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
     elif synthesis and synthesis.get("passed") is False:
         measured = "CSim passed, but Vitis synthesis failed.\n" + _failure_evidence(synthesis)
         direction = "repair synthesizability while preserving the verified functional behaviour"
+    elif synthesis and synthesis.get("passed") is True and recover_frequency:
+        metrics = record.get("metrics") or {}
+        measured = (
+            "Static validation, CSim, and synthesis passed. The candidate substantially reduced measured resources "
+            "but failed the required frequency constraint.\n"
+            f"- Estimated frequency: {metrics.get('frequency_mhz')} MHz\n"
+            f"- Required minimum frequency: {record.get('minimum_frequency_mhz')} MHz\n"
+            f"- Estimated clock period: {metrics.get('clock_period_ns')} ns\n"
+            f"- Maximum permitted clock period: {metrics.get('maximum_clock_period_ns')} ns\n"
+            "- Resource reductions to preserve:\n"
+            + "\n".join(
+                f"  - {key}: {value:.3f}%"
+                for key, value in recover_frequency["resource_reductions_percent"].items()
+            )
+        )
+        direction = (
+            "preserve the resource-saving structure while recovering the required frequency through one focused "
+            "critical-path, pipelining, or parallelism change; do not revert completely to the baseline or perform "
+            "an unrelated rewrite"
+        )
     elif synthesis and synthesis.get("passed") is True:
         measured = (
             "Static validation, CSim, and synthesis passed, but the candidate did not provide the required PPA result.\n\n"
@@ -177,10 +267,12 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
     previous_strategy = load_optional(
         output_dir / f"candidate_{previous_index:03d}_strategy.json"
     )
-    strategy: dict[str, Any] | None = None
-    strategy_trigger: str | None = None
+    strategy: dict[str, Any] | None = recover_frequency
+    strategy_trigger: str | None = (
+        "promising_frequency_constraint_violation" if recover_frequency else None
+    )
     retry_of: int | None = None
-    if previous_strategy:
+    if strategy is None and previous_strategy:
         if record.get("fully_verified") is True:
             completed = _completed_partial_unroll_factors(output_dir, summary)
             strategy = select_tradeoff_strategy("", completed)
@@ -192,8 +284,9 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
 
     strategy_section = ""
     if strategy:
-        factor = strategy["parameters"]["factor"]
-        direction += f"; implement and preserve partial loop unrolling with factor {factor}"
+        if strategy.get("name") == "partial_unroll":
+            factor = strategy["parameters"]["factor"]
+            direction += f"; implement and preserve partial loop unrolling with factor {factor}"
         strategy_section = "\n\n" + _strategy_text(strategy)
         _write_strategy(
             output_dir,
