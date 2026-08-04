@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from agent.optimise.diagnose import prepare_refinement_prompt
+from agent.optimise.refinement_strategy import check_strategy_compliance
 
 
 def test_promising_frequency_violation_generates_recover_frequency_feedback(
@@ -138,3 +139,17 @@ def test_promising_frequency_violation_generates_recover_frequency_feedback(
     assert strategy["preserve"] == ["resources_lut_used", "resources_ff_used"]
     assert strategy["improve"] == ["clock_period_ns", "frequency_mhz", "latency_ns"]
     assert feedback["selected_strategy"]["name"] == "recover_frequency"
+
+
+def test_recover_frequency_strategy_requires_post_synthesis_evidence() -> None:
+    result = check_strategy_compliance(
+        "void kernel() {}\n",
+        {"name": "recover_frequency", "parameters": {}},
+    )
+
+    assert result == {
+        "required": False,
+        "passed": True,
+        "strategy": "recover_frequency",
+        "reason": "requires_post_synthesis_evidence",
+    }
