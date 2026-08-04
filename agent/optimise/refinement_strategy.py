@@ -42,10 +42,12 @@ def select_tradeoff_strategy(
         ),
         "required_changes": [
             f"Keep the loop and apply partial unrolling with factor {factor}.",
-            "Preserve legal loop pipelining and the existing interface contract.",
+            "If pipelining is used, apply it to the target loop rather than the entire function.",
+            "Preserve the existing interface contract.",
         ],
         "forbidden_changes": [
             "Do not completely unroll the loop.",
+            "Do not pipeline the entire top function.",
             "Do not completely partition top-level interface arrays.",
         ],
     }
@@ -73,13 +75,29 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         not re.search(r"\bfactor\s*=\s*\d+", arguments, re.I)
         for arguments in pragmas
     )
+
+    first_loop = re.search(r"\bfor\s*\(", source)
+    function_prefix = source[: first_loop.start()] if first_loop else source
+    function_pipeline = bool(
+        re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", function_prefix, re.I)
+    )
+
     return {
         "required": True,
-        "passed": factor > 0 and factor in observed_factors and not complete_unroll,
+        "passed": (
+            factor > 0
+            and factor in observed_factors
+            and not complete_unroll
+            and not function_pipeline
+        ),
         "strategy": name,
-        "expected": {"factor": factor},
+        "expected": {
+            "factor": factor,
+            "function_pipeline": False,
+        },
         "observed": {
             "unroll_factors": observed_factors,
             "complete_unroll": complete_unroll,
+            "function_pipeline": function_pipeline,
         },
     }
