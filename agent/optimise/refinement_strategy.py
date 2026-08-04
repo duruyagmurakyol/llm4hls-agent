@@ -111,7 +111,7 @@ def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
     """Check source-enforceable strategies before running Vitis."""
     name = strategy.get("name")
-    if name == "recover_frequency":
+    if name in {"recover_frequency", "recover_latency_tradeoff"}:
         return {
             "required": False,
             "passed": True,
