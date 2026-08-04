@@ -140,6 +140,7 @@ def test_tradeoff_prompt_records_selected_partial_unroll_strategy(
 
     assert "partial loop unrolling with factor 8" in prompt
     assert "Do not completely unroll the loop" in prompt
+    assert "Do not pipeline the entire top function" in prompt
     assert "Do not completely partition top-level interface arrays" in prompt
     assert strategy["name"] == "partial_unroll"
     assert strategy["parameters"] == {"factor": 8}
@@ -253,6 +254,22 @@ def test_partial_unroll_strategy_compliance(pragma: str, expected: bool) -> None
     assert result["passed"] is expected
 
 
+def test_partial_unroll_rejects_function_level_pipeline() -> None:
+    strategy = {"name": "partial_unroll", "parameters": {"factor": 2}}
+    source = (
+        "void vector_add(int a[16], int b[16], int c[16]) {\n"
+        "#pragma HLS PIPELINE II=1\n"
+        "#pragma HLS UNROLL factor=2\n"
+        "  for (int i = 0; i < 16; ++i) c[i] = a[i] + b[i];\n"
+        "}\n"
+    )
+
+    result = check_strategy_compliance(source, strategy)
+
+    assert result["passed"] is False
+    assert result["observed"]["function_pipeline"] is True
+
+
 def test_static_validation_rejects_candidate_ignoring_selected_strategy(
     tmp_path: Path,
     monkeypatch,
@@ -297,5 +314,5 @@ def test_static_validation_rejects_candidate_ignoring_selected_strategy(
 
     assert report["passed"] is False
     assert report["checks"]["strategy_compliant"] is False
-    assert report["strategy_compliance"]["expected"] == {"factor": 8}
+    assert report["strategy_compliance"]["expected"]["factor"] == 8
     assert report["strategy_compliance"]["observed"]["unroll_factors"] == [4]
