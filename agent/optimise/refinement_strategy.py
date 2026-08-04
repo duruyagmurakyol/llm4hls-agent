@@ -6,6 +6,18 @@ import re
 from typing import Any, Iterable
 
 PARTIAL_UNROLL_FACTORS = (8, 4, 2)
+LATENCY_RECOVERY_FACTORS = (2, 4, 8)
+
+
+def select_latency_recovery_factor(
+    completed_factors: Iterable[int] = (),
+) -> int | None:
+    """Return the next bounded factor for latency-recovery exploration."""
+    completed = {int(factor) for factor in completed_factors}
+    return next(
+        (factor for factor in LATENCY_RECOVERY_FACTORS if factor not in completed),
+        None,
+    )
 
 
 def select_tradeoff_strategy(
@@ -79,8 +91,8 @@ def _loop_bodies(source: str) -> list[str]:
 
 
 def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
-    """Deterministically place directives for the one supported strategy."""
-    if strategy.get("name") != "partial_unroll":
+    """Deterministically place directives for supported factor strategies."""
+    if strategy.get("name") not in {"partial_unroll", "recover_latency_tradeoff"}:
         return source
 
     factor = int(strategy.get("parameters", {}).get("factor", 0))
@@ -111,14 +123,17 @@ def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
     """Check source-enforceable strategies before running Vitis."""
     name = strategy.get("name")
-    if name in {"recover_frequency", "recover_latency_tradeoff"}:
+    factor = int(strategy.get("parameters", {}).get("factor", 0))
+    if name == "recover_frequency" or (
+        name == "recover_latency_tradeoff" and factor <= 0
+    ):
         return {
             "required": False,
             "passed": True,
             "strategy": name,
             "reason": "requires_post_synthesis_evidence",
         }
-    if name != "partial_unroll":
+    if name not in {"partial_unroll", "recover_latency_tradeoff"}:
         return {
             "required": True,
             "passed": False,
@@ -126,7 +141,6 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
             "reason": "unsupported_strategy",
         }
 
-    factor = int(strategy.get("parameters", {}).get("factor", 0))
     all_unroll_pragmas = re.findall(
         r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)",
         source,
