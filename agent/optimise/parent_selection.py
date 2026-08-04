@@ -10,12 +10,20 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     index = record.get("candidate_index")
     if not isinstance(index, int):
         return None
-    if record.get("verdict") == "reject_duplicate":
+
+    verdict = record.get("verdict")
+    if verdict == "reject_duplicate":
         return None
-    if record.get("fully_verified") is True:
-        return 4, index, "fully_verified_candidate"
+
+    fully_verified = record.get("fully_verified") is True
+    if fully_verified and verdict == "accept_dominates_baseline":
+        return 6, index, "dominates_baseline_candidate"
+    if fully_verified and verdict == "keep_pareto_candidate":
+        return 5, index, "pareto_candidate"
     if record.get("synthesis") is True and record.get("refinement_eligible") is True:
-        return 3, index, "synthesis_passed_refinement_eligible"
+        return 4, index, "synthesis_passed_refinement_eligible"
+    if fully_verified:
+        return 3, index, "fully_verified_candidate"
     if record.get("csim") is True:
         return 2, index, "csim_passed_candidate"
     if record.get("static_validation") is True:
