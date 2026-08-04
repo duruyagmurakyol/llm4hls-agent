@@ -91,8 +91,8 @@ def _loop_bodies(source: str) -> list[str]:
 
 
 def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
-    """Deterministically place directives for supported factor strategies."""
-    if strategy.get("name") not in {"partial_unroll", "recover_latency_tradeoff"}:
+    """Deterministically place directives for the supported source rewrite."""
+    if strategy.get("name") != "partial_unroll":
         return source
 
     factor = int(strategy.get("parameters", {}).get("factor", 0))
