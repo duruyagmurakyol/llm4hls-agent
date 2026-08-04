@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Iterable
+
+PARTIAL_UNROLL_FACTORS = (8, 4, 2)
 
 
-def select_tradeoff_strategy(synthesis_log: str) -> dict[str, Any] | None:
-    """Select one legal follow-up for the observed full-unroll bottleneck."""
+def select_tradeoff_strategy(
+    synthesis_log: str,
+    completed_factors: Iterable[int] = (),
+) -> dict[str, Any] | None:
+    """Choose the next untested partial-unroll factor for the observed bottleneck."""
+    completed = {int(factor) for factor in completed_factors}
     lowered = synthesis_log.lower()
     memory_limited = (
         "lower bound of ii" in lowered
@@ -16,19 +22,26 @@ def select_tradeoff_strategy(synthesis_log: str) -> dict[str, Any] | None:
     full_unroll = "complete unroll" in lowered or (
         "unrolling loop" in lowered and "completely" in lowered
     )
-    if not (memory_limited and full_unroll):
+    if not completed and not (memory_limited and full_unroll):
+        return None
+
+    factor = next(
+        (value for value in PARTIAL_UNROLL_FACTORS if value not in completed),
+        None,
+    )
+    if factor is None:
         return None
 
     return {
         "name": "partial_unroll",
-        "parameters": {"factor": 8},
+        "parameters": {"factor": factor},
         "reason": (
             "The previous complete-unroll design was limited by memory-port "
             "contention, so reduce parallel accesses while retaining useful "
             "loop-level parallelism."
         ),
         "required_changes": [
-            "Keep the loop and apply partial unrolling with factor 8.",
+            f"Keep the loop and apply partial unrolling with factor {factor}.",
             "Preserve legal loop pipelining and the existing interface contract.",
         ],
         "forbidden_changes": [
