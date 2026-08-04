@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from agent.budget import BudgetState
-from agent.optimise.refinement_strategy import apply_strategy_directives
+from agent.optimise.refinement_strategy import (
+    apply_strategy_directives,
+    select_latency_recovery_factor,
+)
 from agent.providers.siliconflow import complete
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +29,46 @@ def configured_top(config: dict[str, Any]) -> str:
     if not isinstance(top, str) or not top.strip():
         raise ValueError("Config is missing a non-empty 'top_function' field")
     return top.strip()
+
+
+def _attach_latency_recovery_factor(
+    output_dir: Path,
+    strategy_path: Path,
+    strategy: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the next untested factor for bounded latency recovery."""
+    if strategy.get("name") != "recover_latency_tradeoff":
+        return strategy
+
+    parameters = strategy.get("parameters") or {}
+    configured = parameters.get("factor")
+    if isinstance(configured, int) and configured > 0:
+        return strategy
+
+    completed: list[int] = []
+    for path in sorted(output_dir.glob("candidate_*_strategy.json")):
+        if path == strategy_path:
+            continue
+        previous = load_json(path)
+        if previous.get("name") != "recover_latency_tradeoff":
+            continue
+        factor = (previous.get("parameters") or {}).get("factor")
+        if isinstance(factor, int) and factor > 0 and factor not in completed:
+            completed.append(factor)
+
+    factor = select_latency_recovery_factor(completed)
+    if factor is None:
+        return strategy
+
+    updated = dict(strategy)
+    updated_parameters = dict(parameters)
+    updated_parameters["factor"] = factor
+    updated["parameters"] = updated_parameters
+    strategy_path.write_text(
+        json.dumps(updated, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return updated
 
 
 def extract_cpp(text: str, required_top: str) -> str:
@@ -104,6 +147,11 @@ def generate_candidate(
     candidate_source = extract_cpp(response.content, required_top)
     strategy = load_json(strategy_path) if strategy_path.is_file() else None
     if strategy:
+        strategy = _attach_latency_recovery_factor(
+            output_dir,
+            strategy_path,
+            strategy,
+        )
         candidate_source = apply_strategy_directives(candidate_source, strategy)
 
     metadata_path.write_text(json.dumps({
