@@ -71,6 +71,21 @@ def _attach_latency_recovery_factor(
     return updated
 
 
+def _latency_recovery_prompt_suffix(strategy: dict[str, Any] | None) -> str:
+    if not strategy or strategy.get("name") != "recover_latency_tradeoff":
+        return ""
+    factor = int((strategy.get("parameters") or {}).get("factor", 0))
+    if factor <= 0:
+        return ""
+    return (
+        "\n\nDeterministic bounded parameter choice:\n"
+        f"- In the selected performance-critical loop, apply #pragma HLS PIPELINE II=1 "
+        f"and #pragma HLS UNROLL factor={factor}.\n"
+        f"- Use exactly unroll factor {factor}; do not completely unroll the loop.\n"
+        "- Keep these directives inside the selected loop body, not at function scope."
+    )
+
+
 def extract_cpp(text: str, required_top: str) -> str:
     fenced = re.search(r"```(?:cpp|c\+\+|c)?\s*\n(.*?)```", text, re.DOTALL | re.IGNORECASE)
     candidate = (fenced.group(1) if fenced else text).strip()
@@ -98,8 +113,22 @@ def generate_candidate(
 
     output_dir = REPO_ROOT / config["output_dir"]
     prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
+    strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
     if not prompt_path.is_file():
         raise FileNotFoundError(f"Prompt not found: {prompt_path}")
+
+    strategy = load_json(strategy_path) if strategy_path.is_file() else None
+    if strategy:
+        strategy = _attach_latency_recovery_factor(
+            output_dir,
+            strategy_path,
+            strategy,
+        )
+
+    user_prompt = (
+        prompt_path.read_text(encoding="utf-8")
+        + _latency_recovery_prompt_suffix(strategy)
+    )
 
     model_name = str(model_config["name"])
     print("\nSiliconFlow candidate generation")
@@ -119,7 +148,7 @@ def generate_candidate(
                 "You are an FPGA HLS optimisation agent. Follow the supplied constraints "
                 "exactly and return only one complete compilable C++ source file."
             ),
-            user_prompt=prompt_path.read_text(encoding="utf-8"),
+            user_prompt=user_prompt,
             temperature=float(model_config.get("temperature", 0.0)),
             max_tokens=int(model_config.get("max_tokens", 4096)),
             enable_thinking=model_config.get("enable_thinking"),
@@ -141,18 +170,13 @@ def generate_candidate(
     raw_path = output_dir / f"candidate_{candidate_index:03d}_model_response.txt"
     metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
     candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
-    strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
 
     raw_path.write_text(response.content.rstrip() + "\n", encoding="utf-8")
     candidate_source = extract_cpp(response.content, required_top)
-    strategy = load_json(strategy_path) if strategy_path.is_file() else None
-    if strategy:
-        strategy = _attach_latency_recovery_factor(
-            output_dir,
-            strategy_path,
-            strategy,
-        )
+    directives_applied = False
+    if strategy and strategy.get("name") == "partial_unroll":
         candidate_source = apply_strategy_directives(candidate_source, strategy)
+        directives_applied = True
 
     metadata_path.write_text(json.dumps({
         "provider": "siliconflow",
@@ -170,7 +194,7 @@ def generate_candidate(
             if strategy_path.is_file()
             else None
         ),
-        "strategy_directives_applied": strategy is not None,
+        "strategy_directives_applied": directives_applied,
     }, indent=2) + "\n", encoding="utf-8")
     candidate_path.write_text(candidate_source, encoding="utf-8")
 
@@ -180,8 +204,10 @@ def generate_candidate(
     print(f"Output tokens: {response.output_tokens}")
     print(f"Total tokens: {response.total_tokens}")
     print(f"Latency: {response.latency_seconds:.2f} seconds")
-    if strategy:
+    if directives_applied:
         print("Selected strategy directives were applied deterministically.")
+    elif _latency_recovery_prompt_suffix(strategy):
+        print("Selected latency-recovery factor was supplied to the model.")
     print("No Vitis synthesis was run and the baseline source was not modified.")
     return candidate_path
 
