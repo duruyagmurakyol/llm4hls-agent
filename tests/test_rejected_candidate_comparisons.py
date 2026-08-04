@@ -114,6 +114,8 @@ def test_frequency_rejection_preserves_baseline_relative_evidence(
     assert record["deltas_percent"]["resources_ff_used"] == pytest.approx(-75.0)
     assert record["deltas_percent"]["resources_dsp_used"] is None
     assert record["deltas_percent"]["resources_bram_used"] == pytest.approx(0.0)
+    assert record["usefulness_classification"] == "promising_constraint_violation"
+    assert record["refinement_eligible"] is True
     assert record["verdict"] not in PARETO_ELIGIBLE_VERDICTS
 
 
@@ -143,7 +145,33 @@ def test_resource_limit_rejection_preserves_baseline_relative_evidence(
     assert record["performance_comparison"]["throughput_delta_percent"] == pytest.approx(-20.0)
     assert record["deltas_percent"]["resources_lut_used"] == pytest.approx(50.0)
     assert record["deltas_percent"]["resources_ff_used"] == pytest.approx(-50.0)
+    assert record["usefulness_classification"] == "promising_constraint_violation"
+    assert record["refinement_eligible"] is True
     assert record["verdict"] not in PARETO_ELIGIBLE_VERDICTS
+
+
+def test_small_resource_reduction_is_not_refinement_eligible(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("agent.optimise.evaluate.REPO_ROOT", tmp_path)
+    output = _write_candidate(
+        tmp_path,
+        index=1,
+        metrics=_metrics(clock=12.0, latency=1, interval=1, lut=90, ff=19),
+    )
+
+    record = classify_candidate(
+        output,
+        1,
+        _baseline(),
+        {},
+        minimum_frequency_mhz=100,
+    )
+
+    assert record["verdict"] == "reject_frequency_threshold"
+    assert record["usefulness_classification"] == "constraint_violation"
+    assert record["refinement_eligible"] is False
 
 
 def test_frequency_rejected_candidate_remains_outside_pareto_archive(
@@ -190,4 +218,6 @@ def test_frequency_rejected_candidate_remains_outside_pareto_archive(
     rejected = summary["candidates"][0]
     assert rejected["verdict"] == "reject_frequency_threshold"
     assert rejected["performance_comparison"]["latency_delta_percent"] == pytest.approx(-40.0)
+    assert rejected["usefulness_classification"] == "promising_constraint_violation"
+    assert rejected["refinement_eligible"] is True
     assert [item["candidate_index"] for item in summary["pareto_archive"]] == [0]
