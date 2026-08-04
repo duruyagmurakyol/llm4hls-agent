@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.analysis.hierarchical_hls_analyzer import analyse_hierarchy
+from agent.optimise.refinement_strategy import select_tradeoff_strategy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 METRIC_KEYS = (
@@ -44,6 +45,19 @@ def _failure_evidence(report: dict[str, Any] | None) -> str:
         return "\n".join(f"- {item}" for item in evidence[-12:])
     log = report.get("log_file")
     return f"- See tool log: {log}" if log else "- The stage returned a failed result."
+
+
+def _tool_log(report: dict[str, Any]) -> str:
+    value = report.get("log_file") or report.get("log_path")
+    if not value:
+        return ""
+    path = Path(str(value))
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index: int) -> Path:
@@ -169,6 +183,45 @@ def prepare_tradeoff_prompt(config_path: Path, source_index: int, next_index: in
     baseline_metrics = summary.get("baseline_metrics") or {}
     source_metrics = synthesis.get("metrics") or {}
     top = config["top_function"]
+
+    strategy = select_tradeoff_strategy(_tool_log(synthesis))
+    if strategy:
+        factor = strategy["parameters"]["factor"]
+        strategy_text = (
+            f"Selected strategy: partial loop unrolling with factor {factor}.\n"
+            f"Reason: {strategy['reason']}\n"
+            "Required changes:\n"
+            + "\n".join(f"- {item}" for item in strategy["required_changes"])
+            + "\nForbidden changes:\n"
+            + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
+        )
+        objective = (
+            f"Implement partial loop unrolling with factor {factor} to retain useful "
+            f"parallelism while reducing memory pressure and LUT usage relative to "
+            f"candidate {source_index:03d}."
+        )
+        strategy_path = output_dir / f"candidate_{next_index:03d}_strategy.json"
+        strategy_path.write_text(
+            json.dumps(
+                {
+                    **strategy,
+                    "source_candidate_index": source_index,
+                    "next_candidate_index": next_index,
+                    "trigger": "memory_port_limited_complete_unroll",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    else:
+        strategy_text = "Selected strategy: lower-cost structural alternative or lower parallelism."
+        objective = (
+            f"Create a genuinely different implementation that preserves a meaningful "
+            f"performance improvement while reducing resource usage relative to candidate "
+            f"{source_index:03d}."
+        )
+
     prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
 
 Candidate {source_index:03d} is a valid Pareto point, not a failed optimisation.
@@ -180,11 +233,12 @@ Pareto candidate metrics:
 {metric_summary(source_metrics)}
 
 Objective:
-Create a genuinely different implementation that preserves a meaningful performance improvement while reducing resource usage relative to candidate {source_index:03d}.
+{objective}
+
+{strategy_text}
 
 Required direction:
 - Do not reproduce candidate {source_index:03d} verbatim.
-- Use a lower-cost structural alternative or lower parallelism.
 - Preserve every input element exactly once and keep all accesses in bounds.
 - Avoid complete partitioning of top-level interface arrays and conflicting DATAFLOW/PIPELINE regions.
 
@@ -209,7 +263,8 @@ Original baseline source:
         "verdict": "refine_pareto_tradeoff",
         "baseline_metrics": baseline_metrics,
         "source_metrics": source_metrics,
-        "required_direction": "retain performance gain with lower resource cost",
+        "required_direction": objective,
+        "selected_strategy": strategy,
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
     }, indent=2) + "\n", encoding="utf-8")
     return prompt_path
