@@ -37,7 +37,7 @@ def select_refinement_parent(
     records: Iterable[dict[str, Any]],
     selection: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str] | None:
-    """Return the strongest parent using PPA ranking for top verified tiers."""
+    """Return the strongest parent using PPA ranking for synthesis-backed tiers."""
     ranked = [
         (rank, record)
         for record in records
@@ -53,7 +53,7 @@ def select_refinement_parent(
         if rank[0] == strongest_tier
     ]
 
-    if strongest_tier in {5, 6}:
+    if strongest_tier in {4, 5, 6}:
         rank, record = min(
             strongest,
             key=lambda item: deterministic_selection_key(item[1], selection),
