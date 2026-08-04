@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.failures import FailureStage, classify_failure as classify_hls_failure
+from agent.optimise.refinement_strategy import check_strategy_compliance
 from agent.state import ValidationResult
 from agent.tools.command_runner import CommandResult
 from agent.tools.reports import load_json, write_json
@@ -178,7 +179,10 @@ def _pipeline_complete_unroll_conflicts(text: str, top: str) -> list[dict[str, A
         region = body[prefix_start : min(closing + 1, opening + 500)]
         has_pipeline = bool(re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", region, re.I))
         unrolls = list(re.finditer(r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)", region, re.I))
-        complete_unroll = any(not re.search(r"\bfactor\s*=\s*\d+", item.group(1), re.I) for item in unrolls)
+        complete_unroll = any(
+            not re.search(r"\bfactor\s*=\s*\d+", item.group(1), re.I)
+            for item in unrolls
+        )
         if has_pipeline and complete_unroll:
             conflicts.append(
                 {
@@ -252,6 +256,13 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
     candidate = candidate_path.read_text(encoding="utf-8")
     source_target_path = output_dir / "baseline_source_target.json"
     source_target = load_json(source_target_path) if source_target_path.is_file() else {}
+    strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+    strategy = load_json(strategy_path) if strategy_path.is_file() else None
+    strategy_compliance = (
+        check_strategy_compliance(candidate, strategy)
+        if strategy is not None
+        else {"required": False, "passed": True}
+    )
 
     bounds_enabled = bool(validation_config.get("constant_loop_tail_bounds", True))
     bounds_safe, bounds_issues = _loop_tail_bounds_safe(candidate) if bounds_enabled else (True, [])
@@ -278,6 +289,8 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         ),
         "top_linkage_preserved": baseline_c == candidate_c,
     }
+    if strategy is not None:
+        checks["strategy_compliant"] = bool(strategy_compliance["passed"])
     if bounds_enabled:
         checks["constant_loop_tail_bounds_safe"] = bounds_safe
     if partition_guard:
@@ -323,6 +336,10 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         "diff_file": str(diff_path.relative_to(REPO_ROOT)),
         "passed": all(checks.values()),
         "checks": checks,
+        "strategy_file": (
+            str(strategy_path.relative_to(REPO_ROOT)) if strategy_path.is_file() else None
+        ),
+        "strategy_compliance": strategy_compliance,
         "bounds_check_enabled": bounds_enabled,
         "bounds_issues": bounds_issues,
         "partition_guard_enabled": partition_guard,
