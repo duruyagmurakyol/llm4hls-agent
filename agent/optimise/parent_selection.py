@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from agent.optimise.selection import deterministic_selection_key
+
 
 def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     index = record.get("candidate_index")
@@ -33,8 +35,9 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
 
 def select_refinement_parent(
     records: Iterable[dict[str, Any]],
+    selection: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str] | None:
-    """Return the strongest parent, preferring the latest within a quality tier."""
+    """Return the strongest parent using PPA ranking for top verified tiers."""
     ranked = [
         (rank, record)
         for record in records
@@ -42,5 +45,19 @@ def select_refinement_parent(
     ]
     if not ranked:
         return None
-    rank, record = max(ranked, key=lambda item: item[0][:2])
+
+    strongest_tier = max(rank[0] for rank, _ in ranked)
+    strongest = [
+        (rank, record)
+        for rank, record in ranked
+        if rank[0] == strongest_tier
+    ]
+
+    if strongest_tier in {5, 6}:
+        rank, record = min(
+            strongest,
+            key=lambda item: deterministic_selection_key(item[1], selection),
+        )
+    else:
+        rank, record = max(strongest, key=lambda item: item[0][1])
     return record, rank[2]
