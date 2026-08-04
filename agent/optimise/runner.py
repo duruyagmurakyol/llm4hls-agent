@@ -17,6 +17,7 @@ from agent.optimise.diagnose import prepare_refinement_prompt, prepare_tradeoff_
 from agent.optimise.duplicate import check_candidate_duplicate
 from agent.optimise.evaluate import evaluate_experiment as _evaluate_experiment
 from agent.optimise.generate import generate_candidate
+from agent.optimise.parent_selection import select_refinement_parent
 from agent.tools.cosim import run_candidate_cosim
 from agent.tools.synthesis import ensure_baseline_synthesis, run_candidate_csim, run_candidate_synthesis
 from agent.tools.validation import validate_ppa_candidate
@@ -436,8 +437,21 @@ def run_optimisation(
             ]
             if not completed:
                 return _finish(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
-            previous = completed[-1]
-            _prepare_next_prompt(config_source, previous, int(previous["candidate_index"]), index)
+            parent_selection = select_refinement_parent(completed)
+            if parent_selection is None:
+                return _finish(False, "failed", "no_viable_refinement_parent", summary, trajectory)
+            previous, parent_reason = parent_selection
+            previous_index = int(previous["candidate_index"])
+            trajectory.append(
+                {
+                    "stage": "select_refinement_parent",
+                    "passed": True,
+                    "selected_parent": previous_index,
+                    "reason": parent_reason,
+                    "next_candidate": index,
+                }
+            )
+            _prepare_next_prompt(config_source, previous, previous_index, index)
 
         model_calls = len(list(output_dir.glob("candidate_*_model_metadata.json")))
         if model_calls >= maximum_candidates:
