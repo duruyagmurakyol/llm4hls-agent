@@ -116,19 +116,28 @@ def test_latest_duplicate_forces_structural_escape_from_selected_parent(
 
     prompt_path = prepare_refinement_prompt(config, 1, 3)
     prompt = prompt_path.read_text(encoding="utf-8")
-    feedback = json.loads(
-        (output / "candidate_001_feedback.json").read_text(encoding="utf-8")
-    )
+    first_feedback_path = output / "candidate_003_feedback.json"
+    first_feedback = json.loads(first_feedback_path.read_text(encoding="utf-8"))
+
+    prepare_refinement_prompt(config, 1, 4)
+    second_feedback_path = output / "candidate_004_feedback.json"
+    second_feedback = json.loads(second_feedback_path.read_text(encoding="utf-8"))
 
     assert "Selected strategy: recover_frequency" in prompt
     assert "Duplicate escape requirement" in prompt
     assert "Candidate 002 duplicated candidate 001" in prompt
     assert "change at least one structural mechanism" in prompt
     assert "exact directive placement, loop rewrite, or transformation combination" in prompt
-    assert feedback["selected_strategy"]["name"] == "recover_frequency"
-    assert feedback["duplicate_escape"]["trigger_candidate_index"] == 2
-    assert feedback["duplicate_escape"]["duplicate_of_candidate_index"] == 1
-    assert feedback["duplicate_escape"]["attempted_strategy"] == {
+    assert first_feedback_path.is_file()
+    assert second_feedback_path.is_file()
+    assert first_feedback["previous_candidate_index"] == 1
+    assert first_feedback["next_candidate_index"] == 3
+    assert second_feedback["previous_candidate_index"] == 1
+    assert second_feedback["next_candidate_index"] == 4
+    assert first_feedback["selected_strategy"]["name"] == "recover_frequency"
+    assert first_feedback["duplicate_escape"]["trigger_candidate_index"] == 2
+    assert first_feedback["duplicate_escape"]["duplicate_of_candidate_index"] == 1
+    assert first_feedback["duplicate_escape"]["attempted_strategy"] == {
         "name": "partial_unroll",
         "parameters": {"factor": 8},
     }
