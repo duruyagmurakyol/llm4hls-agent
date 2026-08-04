@@ -128,6 +128,47 @@ def _recover_frequency_strategy(record: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _latest_duplicate_escape(
+    output_dir: Path,
+    summary: dict[str, Any],
+    previous_index: int,
+) -> dict[str, Any] | None:
+    candidates = [
+        item
+        for item in summary.get("candidates", [])
+        if isinstance(item.get("candidate_index"), int)
+    ]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda item: int(item["candidate_index"]))
+    latest_index = int(latest["candidate_index"])
+    if latest_index <= previous_index or latest.get("verdict") != "reject_duplicate":
+        return None
+
+    duplicate_report = load_optional(
+        output_dir / f"candidate_{latest_index:03d}_duplicate_check.json"
+    ) or {}
+    duplicate_of = latest.get("duplicate_of", duplicate_report.get("duplicate_of"))
+    attempted_strategy = load_optional(
+        output_dir / f"candidate_{latest_index:03d}_strategy.json"
+    )
+    payload: dict[str, Any] = {
+        "trigger_candidate_index": latest_index,
+        "duplicate_of_candidate_index": duplicate_of,
+        "required": True,
+        "required_change": (
+            "Keep the selected parent and objective, but change at least one structural "
+            "mechanism in the target region."
+        ),
+    }
+    if attempted_strategy:
+        payload["attempted_strategy"] = {
+            "name": attempted_strategy.get("name"),
+            "parameters": attempted_strategy.get("parameters") or {},
+        }
+    return payload
+
+
 def _strategy_text(strategy: dict[str, Any]) -> str:
     if strategy.get("name") == "recover_frequency":
         reductions = strategy.get("resource_reductions_percent") or {}
@@ -212,6 +253,7 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
     )
     verdict = str(record.get("verdict") or "incomplete")
     recover_frequency = _recover_frequency_strategy(record)
+    duplicate_escape = _latest_duplicate_escape(output_dir, summary, previous_index)
 
     if static and static.get("passed") is False:
         failed = [name for name, passed in (static.get("checks") or {}).items() if not passed]
@@ -297,6 +339,30 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
             retry_of=retry_of,
         )
 
+    duplicate_escape_section = ""
+    if duplicate_escape:
+        trigger_index = duplicate_escape["trigger_candidate_index"]
+        duplicate_of = duplicate_escape.get("duplicate_of_candidate_index")
+        attempted = duplicate_escape.get("attempted_strategy") or {}
+        attempted_text = (
+            f"\n- Rejected attempted strategy: {attempted.get('name')} "
+            f"{attempted.get('parameters') or {}}."
+            if attempted
+            else ""
+        )
+        direction += (
+            f"; candidate {trigger_index:03d} duplicated an earlier source, so change at least one "
+            "structural mechanism in the selected target region"
+        )
+        duplicate_escape_section = (
+            "\n\nDuplicate escape requirement:\n"
+            f"- Candidate {trigger_index:03d} duplicated candidate {duplicate_of:03d}."
+            f"{attempted_text}\n"
+            "- Keep the selected parent and optimisation objective, but change at least one structural mechanism in the target region.\n"
+            "- Do not reuse the rejected source's exact directive placement, loop rewrite, or transformation combination.\n"
+            "- A formatting, comment, or identifier-only change is not acceptable."
+        )
+
     target = load_json(target_path)
     cause = load_json(cause_path)
     top = config["top_function"]
@@ -313,7 +379,7 @@ Selected target:
 - Function/report: {target.get('target_name')}
 - Loop label: {target.get('loop_label')}
 - Primary cause: {(cause.get('primary_hypothesis') or {}).get('category')}
-- Interpretation: {(cause.get('primary_hypothesis') or {}).get('interpretation')}{strategy_section}
+- Interpretation: {(cause.get('primary_hypothesis') or {}).get('interpretation')}{strategy_section}{duplicate_escape_section}
 
 Required direction:
 - {direction}.
@@ -345,6 +411,7 @@ Original baseline source:
         "verdict": verdict,
         "required_direction": direction,
         "selected_strategy": strategy,
+        "duplicate_escape": duplicate_escape,
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
     }, indent=2) + "\n", encoding="utf-8")
     print("\nPPA refinement prompt")
