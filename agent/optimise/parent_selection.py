@@ -20,13 +20,13 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
         return 2, index, "csim_passed_candidate"
     if record.get("static_validation") is True:
         return 1, index, "static_valid_candidate"
-    return None
+    return 0, index, "latest_non_duplicate_fallback"
 
 
 def select_refinement_parent(
     records: Iterable[dict[str, Any]],
 ) -> tuple[dict[str, Any], str] | None:
-    """Return the strongest viable parent, preferring the latest within a tier."""
+    """Return the strongest parent, preferring the latest within a quality tier."""
     ranked = [
         (rank, record)
         for record in records
