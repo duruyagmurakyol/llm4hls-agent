@@ -69,8 +69,10 @@ def _write_tradeoff_fixture(
     (output / f"candidate_{source_index:03d}.cpp").write_text(
         "#include \"vector_add.h\"\n"
         f"{signature} {{\n"
+        "  for (int i = 0; i < 16; ++i) {\n"
         "#pragma HLS UNROLL factor=8\n"
-        "  for (int i = 0; i < 16; ++i) c[i] = a[i] + b[i];\n"
+        "    c[i] = a[i] + b[i];\n"
+        "  }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -139,6 +141,8 @@ def test_tradeoff_prompt_records_selected_partial_unroll_strategy(
     )
 
     assert "partial loop unrolling with factor 8" in prompt
+    assert "inside the target loop body" in prompt
+    assert "Do not place PIPELINE or UNROLL before the target loop" in prompt
     assert "Do not completely unroll the loop" in prompt
     assert "Do not pipeline the entire top function" in prompt
     assert "Do not completely partition top-level interface arrays" in prompt
@@ -205,7 +209,7 @@ def test_unfinished_factor_is_retried_in_refinement_prompt(
             {
                 "passed": False,
                 "checks": {"strategy_compliant": False},
-                "evidence": ["Expected UNROLL factor=8."],
+                "evidence": ["Expected UNROLL factor=8 inside the loop body."],
             }
         ),
         encoding="utf-8",
@@ -247,27 +251,53 @@ def test_unfinished_factor_is_retried_in_refinement_prompt(
 )
 def test_partial_unroll_strategy_compliance(pragma: str, expected: bool) -> None:
     strategy = {"name": "partial_unroll", "parameters": {"factor": 8}}
-    source = f"void kernel() {{\n{pragma}\n}}\n"
+    source = (
+        "void kernel() {\n"
+        "  for (int i = 0; i < 16; ++i) {\n"
+        f"{pragma}\n"
+        "  }\n"
+        "}\n"
+    )
 
     result = check_strategy_compliance(source, strategy)
 
     assert result["passed"] is expected
 
 
-def test_partial_unroll_rejects_function_level_pipeline() -> None:
+def test_partial_unroll_accepts_loop_pipeline_and_unroll() -> None:
+    strategy = {"name": "partial_unroll", "parameters": {"factor": 8}}
+    source = (
+        "void kernel() {\n"
+        "  for (int i = 0; i < 16; ++i) {\n"
+        "#pragma HLS PIPELINE II=1\n"
+        "#pragma HLS UNROLL factor=8\n"
+        "  }\n"
+        "}\n"
+    )
+
+    result = check_strategy_compliance(source, strategy)
+
+    assert result["passed"] is True
+    assert result["observed"]["loop_pipeline"] is True
+
+
+def test_partial_unroll_rejects_directives_before_loop() -> None:
     strategy = {"name": "partial_unroll", "parameters": {"factor": 2}}
     source = (
         "void vector_add(int a[16], int b[16], int c[16]) {\n"
         "#pragma HLS PIPELINE II=1\n"
         "#pragma HLS UNROLL factor=2\n"
-        "  for (int i = 0; i < 16; ++i) c[i] = a[i] + b[i];\n"
+        "  for (int i = 0; i < 16; ++i) {\n"
+        "    c[i] = a[i] + b[i];\n"
+        "  }\n"
         "}\n"
     )
 
     result = check_strategy_compliance(source, strategy)
 
     assert result["passed"] is False
-    assert result["observed"]["function_pipeline"] is True
+    assert result["observed"]["outer_pipeline"] is True
+    assert result["observed"]["outer_unroll"] is True
 
 
 def test_static_validation_rejects_candidate_ignoring_selected_strategy(
@@ -289,7 +319,9 @@ def test_static_validation_rejects_candidate_ignoring_selected_strategy(
         "#include \"vector_add.h\"\n"
         f"{signature} {{\n"
         "#pragma HLS UNROLL factor=4\n"
-        "  for (int i = 0; i < 16; ++i) c[i] = a[i] + b[i];\n"
+        "  for (int i = 0; i < 16; ++i) {\n"
+        "    c[i] = a[i] + b[i];\n"
+        "  }\n"
         "}\n",
         encoding="utf-8",
     )
@@ -315,4 +347,5 @@ def test_static_validation_rejects_candidate_ignoring_selected_strategy(
     assert report["passed"] is False
     assert report["checks"]["strategy_compliant"] is False
     assert report["strategy_compliance"]["expected"]["factor"] == 8
-    assert report["strategy_compliance"]["observed"]["unroll_factors"] == [4]
+    assert report["strategy_compliance"]["observed"]["loop_unroll_factors"] == []
+    assert report["strategy_compliance"]["observed"]["outer_unroll"] is True
