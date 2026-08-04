@@ -38,6 +38,18 @@ def test_controlled_variants_clone_one_template_and_change_only_factor(
         json.dumps(template_strategy),
         encoding="utf-8",
     )
+    (output / "candidate_003_model_metadata.json").write_text(
+        json.dumps({"provider": "siliconflow"}),
+        encoding="utf-8",
+    )
+    (output / "candidate_003_static_validation.json").write_text(
+        json.dumps({"passed": True}),
+        encoding="utf-8",
+    )
+    (output / "candidate_003_csim_validation.json").write_text(
+        json.dumps({"passed": True}),
+        encoding="utf-8",
+    )
 
     for candidate_index, factor in ((4, 4), (5, 8)):
         strategy_path = output / f"candidate_{candidate_index:03d}_strategy.json"
@@ -75,6 +87,68 @@ def test_controlled_variants_clone_one_template_and_change_only_factor(
         assert not (
             output / f"candidate_{candidate_index:03d}_model_metadata.json"
         ).exists()
+
+
+def test_unverified_factor_two_source_is_not_reused(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("agent.optimise.generate.REPO_ROOT", tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+
+    (output / "candidate_003.cpp").write_text(
+        "void kernel(int a[8]) {\n"
+        "  for (int i = 0; i < 8; ++i) {\n"
+        "    #pragma HLS UNROLL factor=2\n"
+        "    a[i] += 1;\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (output / "candidate_003_strategy.json").write_text(
+        json.dumps(
+            {
+                "name": "recover_latency_tradeoff",
+                "parameters": {"factor": 2},
+                "source_candidate_index": 2,
+                "next_candidate_index": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output / "candidate_003_model_metadata.json").write_text(
+        json.dumps({"provider": "siliconflow"}),
+        encoding="utf-8",
+    )
+    (output / "candidate_003_static_validation.json").write_text(
+        json.dumps({"passed": True}),
+        encoding="utf-8",
+    )
+    (output / "candidate_003_csim_validation.json").write_text(
+        json.dumps({"passed": False}),
+        encoding="utf-8",
+    )
+
+    strategy_path = output / "candidate_004_strategy.json"
+    strategy = {
+        "name": "recover_latency_tradeoff",
+        "parameters": {"factor": 4},
+        "source_candidate_index": 2,
+        "next_candidate_index": 4,
+    }
+    strategy_path.write_text(json.dumps(strategy), encoding="utf-8")
+
+    assert (
+        _generate_controlled_latency_variant(
+            output,
+            4,
+            strategy_path,
+            strategy,
+        )
+        is None
+    )
+    assert not (output / "candidate_004.cpp").exists()
 
 
 def test_exhausted_ladder_retires_active_strategy_file(tmp_path: Path) -> None:
