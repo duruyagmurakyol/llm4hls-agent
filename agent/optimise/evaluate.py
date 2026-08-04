@@ -209,6 +209,10 @@ def _baseline_fully_verified(config: dict[str, Any]) -> bool:
     )
 
 
+def _objective_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def classify_candidate(
     output_dir: Path,
     index: int,
@@ -414,16 +418,52 @@ def classify_candidate(
         )
         return record
 
-    improves_latency = isinstance(latency_delta, (int, float)) and latency_delta < 0
-    improves_interval = isinstance(interval_delta, (int, float)) and interval_delta < 0
-    improves_resource = any(value < 0 for value in numeric_resources)
-    same_performance = latency_delta == 0 and interval_delta == 0
-    same_resources = all(value == 0 for value in numeric_resources)
+    objective_pairs = [
+        (latency_key, candidate_latency, baseline_latency),
+        (interval_key, candidate_interval, baseline_interval),
+        *[
+            (key, metrics.get(key), baseline.get(key))
+            for key in OBJECTIVES[2:]
+        ],
+    ]
+    missing_objectives = [
+        key
+        for key, candidate_value, baseline_value in objective_pairs
+        if not (
+            _objective_number(candidate_value)
+            and _objective_number(baseline_value)
+        )
+    ]
+    if missing_objectives:
+        record.update(
+            verdict="reject_objective_metrics_unavailable",
+            missing_objectives=missing_objectives,
+            reason=(
+                "Required objective metrics are unavailable for comparison: "
+                + ", ".join(missing_objectives)
+                + "."
+            ),
+        )
+        return record
+
+    candidate_objectives = [float(candidate_value) for _, candidate_value, _ in objective_pairs]
+    baseline_objectives = [float(baseline_value) for _, _, baseline_value in objective_pairs]
+    same_performance = candidate_objectives[:2] == baseline_objectives[:2]
+    same_resources = candidate_objectives[2:] == baseline_objectives[2:]
     no_objective_increase = all(
-        value is None or value <= 0
-        for value in [latency_delta, interval_delta, *resource_deltas]
+        candidate_value <= baseline_value
+        for candidate_value, baseline_value in zip(
+            candidate_objectives,
+            baseline_objectives,
+        )
     )
-    any_improvement = improves_latency or improves_interval or improves_resource
+    any_improvement = any(
+        candidate_value < baseline_value
+        for candidate_value, baseline_value in zip(
+            candidate_objectives,
+            baseline_objectives,
+        )
+    )
 
     if same_performance and same_resources:
         record.update(verdict="reject_no_change", reason="Synthesis metrics are identical to the baseline.")
