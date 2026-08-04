@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.budget import BudgetState
+from agent.optimise.refinement_strategy import apply_strategy_directives
 from agent.providers.siliconflow import complete
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,7 +98,14 @@ def generate_candidate(
     raw_path = output_dir / f"candidate_{candidate_index:03d}_model_response.txt"
     metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
     candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
+    strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+
     raw_path.write_text(response.content.rstrip() + "\n", encoding="utf-8")
+    candidate_source = extract_cpp(response.content, required_top)
+    strategy = load_json(strategy_path) if strategy_path.is_file() else None
+    if strategy:
+        candidate_source = apply_strategy_directives(candidate_source, strategy)
+
     metadata_path.write_text(json.dumps({
         "provider": "siliconflow",
         "model": model_name,
@@ -109,8 +117,14 @@ def generate_candidate(
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
         "raw_response_file": str(raw_path.relative_to(REPO_ROOT)),
         "candidate_file": str(candidate_path.relative_to(REPO_ROOT)),
+        "strategy_file": (
+            str(strategy_path.relative_to(REPO_ROOT))
+            if strategy_path.is_file()
+            else None
+        ),
+        "strategy_directives_applied": strategy is not None,
     }, indent=2) + "\n", encoding="utf-8")
-    candidate_path.write_text(extract_cpp(response.content, required_top), encoding="utf-8")
+    candidate_path.write_text(candidate_source, encoding="utf-8")
 
     print("\nCandidate generated")
     print(f"Source: {candidate_path.relative_to(REPO_ROOT)}")
@@ -118,6 +132,8 @@ def generate_candidate(
     print(f"Output tokens: {response.output_tokens}")
     print(f"Total tokens: {response.total_tokens}")
     print(f"Latency: {response.latency_seconds:.2f} seconds")
+    if strategy:
+        print("Selected strategy directives were applied deterministically.")
     print("No Vitis synthesis was run and the baseline source was not modified.")
     return candidate_path
 
