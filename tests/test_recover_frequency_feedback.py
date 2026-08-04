@@ -120,7 +120,7 @@ def test_promising_frequency_violation_generates_recover_frequency_feedback(
         (output / "candidate_002_strategy.json").read_text(encoding="utf-8")
     )
     feedback = json.loads(
-        (output / "candidate_001_feedback.json").read_text(encoding="utf-8")
+        (output / "candidate_002_feedback.json").read_text(encoding="utf-8")
     )
 
     assert "Selected strategy: recover_frequency" in prompt
@@ -138,6 +138,8 @@ def test_promising_frequency_violation_generates_recover_frequency_feedback(
     assert strategy["trigger"] == "promising_frequency_constraint_violation"
     assert strategy["preserve"] == ["resources_lut_used", "resources_ff_used"]
     assert strategy["improve"] == ["clock_period_ns", "frequency_mhz", "latency_ns"]
+    assert feedback["previous_candidate_index"] == 1
+    assert feedback["next_candidate_index"] == 2
     assert feedback["selected_strategy"]["name"] == "recover_frequency"
 
 
