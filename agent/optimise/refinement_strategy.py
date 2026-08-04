@@ -109,8 +109,15 @@ def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
 
 
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
-    """Check the one strategy currently supported by evidence-directed refinement."""
+    """Check source-enforceable strategies before running Vitis."""
     name = strategy.get("name")
+    if name == "recover_frequency":
+        return {
+            "required": False,
+            "passed": True,
+            "strategy": name,
+            "reason": "requires_post_synthesis_evidence",
+        }
     if name != "partial_unroll":
         return {
             "required": True,
