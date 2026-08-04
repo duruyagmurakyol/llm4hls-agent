@@ -23,6 +23,8 @@ RESOURCE_KEYS = (
     "resources_dsp_used",
     "resources_bram_used",
 )
+LATENCY_RECOVERY_THRESHOLD_PERCENT = 50.0
+RESOURCE_RECOVERY_THRESHOLD_PERCENT = 25.0
 
 
 def diagnose_reports(report_root: Path, *, interface_frozen: bool = False) -> dict[str, Any]:
@@ -128,6 +130,61 @@ def _recover_frequency_strategy(record: dict[str, Any]) -> dict[str, Any] | None
     }
 
 
+def _recover_latency_tradeoff_strategy(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not (
+        record.get("fully_verified") is True
+        and record.get("verdict") == "keep_pareto_candidate"
+    ):
+        return None
+
+    deltas = record.get("deltas_percent") or {}
+    latency_regression = deltas.get("latency_ns")
+    if not isinstance(latency_regression, (int, float)) or (
+        latency_regression < LATENCY_RECOVERY_THRESHOLD_PERCENT
+    ):
+        return None
+
+    reductions = {
+        key: value
+        for key in RESOURCE_KEYS
+        if isinstance((value := deltas.get(key)), (int, float))
+        and value <= -RESOURCE_RECOVERY_THRESHOLD_PERCENT
+    }
+    if not reductions:
+        return None
+
+    return {
+        "name": "recover_latency_tradeoff",
+        "parameters": {
+            "latency_regression_percent": latency_regression,
+            "minimum_resource_reduction_percent": RESOURCE_RECOVERY_THRESHOLD_PERCENT,
+        },
+        "reason": (
+            "The fully verified Pareto candidate saved substantial measured resources, "
+            "but its latency regressed substantially relative to the baseline."
+        ),
+        "preserve": list(reductions),
+        "resource_reductions_percent": reductions,
+        "improve": ["latency_ns", "throughput_period_ns"],
+        "required_changes": [
+            "Preserve at least one substantial measured resource saving.",
+            (
+                "Restore controlled parallelism in one performance-critical loop using "
+                "one focused pipeline, partial-unroll, or matching local-memory transformation."
+            ),
+            "Reduce latency and throughput period toward the baseline while preserving functional behaviour.",
+        ],
+        "forbidden_changes": [
+            "Do not revert completely to the baseline architecture.",
+            "Do not perform a large unrelated rewrite.",
+            "Do not completely partition top-level interface arrays.",
+            "Do not repeat an already evaluated source.",
+        ],
+    }
+
+
 def _latest_duplicate_escape(
     output_dir: Path,
     summary: dict[str, Any],
@@ -170,13 +227,13 @@ def _latest_duplicate_escape(
 
 
 def _strategy_text(strategy: dict[str, Any]) -> str:
-    if strategy.get("name") == "recover_frequency":
+    if strategy.get("name") in {"recover_frequency", "recover_latency_tradeoff"}:
         reductions = strategy.get("resource_reductions_percent") or {}
         preserved = "\n".join(
             f"- {key}: {value:.3f}%" for key, value in reductions.items()
         ) or "- Preserve the measured resource-saving structure."
         return (
-            "Selected strategy: recover_frequency.\n"
+            f"Selected strategy: {strategy['name']}.\n"
             f"Reason: {strategy['reason']}\n"
             "Preserve:\n"
             + preserved
@@ -431,37 +488,58 @@ def prepare_tradeoff_prompt(config_path: Path, source_index: int, next_index: in
     synthesis = load_json(output_dir / f"candidate_{source_index:03d}_synthesis.json")
     summary = load_json(output_dir / "experiment_summary.json")
     baseline_metrics = summary.get("baseline_metrics") or {}
-    source_metrics = synthesis.get("metrics") or {}
+    record = next(
+        (item for item in summary.get("candidates", []) if item.get("candidate_index") == source_index),
+        {},
+    )
+    source_metrics = record.get("metrics") or synthesis.get("metrics") or {}
     top = config["top_function"]
 
     completed = _completed_partial_unroll_factors(output_dir, summary)
-    strategy = select_tradeoff_strategy(_tool_log(synthesis), completed)
+    strategy = _recover_latency_tradeoff_strategy(record)
     if strategy:
-        factor = strategy["parameters"]["factor"]
         strategy_text = _strategy_text(strategy)
         objective = (
-            f"Implement partial loop unrolling with factor {factor} to retain useful "
-            f"parallelism while reducing memory pressure and LUT usage relative to "
-            f"candidate {source_index:03d}."
+            f"Preserve at least one substantial measured resource saving from candidate "
+            f"{source_index:03d} while reducing latency and throughput period toward the "
+            "baseline. Restore controlled parallelism in one performance-critical loop "
+            "using one focused transformation."
         )
         _write_strategy(
             output_dir,
             source_index=source_index,
             next_index=next_index,
             strategy=strategy,
-            trigger=(
-                "partial_unroll_ladder"
-                if completed
-                else "memory_port_limited_complete_unroll"
-            ),
+            trigger="slow_resource_saving_pareto_candidate",
         )
     else:
-        strategy_text = "Selected strategy: lower-cost structural alternative or lower parallelism."
-        objective = (
-            f"Create a genuinely different implementation that preserves a meaningful "
-            f"performance improvement while reducing resource usage relative to candidate "
-            f"{source_index:03d}."
-        )
+        strategy = select_tradeoff_strategy(_tool_log(synthesis), completed)
+        if strategy:
+            factor = strategy["parameters"]["factor"]
+            strategy_text = _strategy_text(strategy)
+            objective = (
+                f"Implement partial loop unrolling with factor {factor} to retain useful "
+                f"parallelism while reducing memory pressure and LUT usage relative to "
+                f"candidate {source_index:03d}."
+            )
+            _write_strategy(
+                output_dir,
+                source_index=source_index,
+                next_index=next_index,
+                strategy=strategy,
+                trigger=(
+                    "partial_unroll_ladder"
+                    if completed
+                    else "memory_port_limited_complete_unroll"
+                ),
+            )
+        else:
+            strategy_text = "Selected strategy: lower-cost structural alternative or lower parallelism."
+            objective = (
+                f"Create a genuinely different implementation that preserves a meaningful "
+                f"performance improvement while reducing resource usage relative to candidate "
+                f"{source_index:03d}."
+            )
 
     prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
 
