@@ -292,6 +292,48 @@ def classify_candidate(
     record["resource_limit_compliance"] = compliance
     record["meets_resource_limits"] = compliance["passed"]
 
+    # Preserve baseline-relative evidence as soon as valid synthesis metrics exist.
+    # Hard constraints and final verification still control verdicts and eligibility.
+    record["deltas_percent"] = {
+        key: percent_change(metrics.get(key), baseline.get(key)) for key in METRIC_KEYS
+    }
+    latency_key, candidate_latency, baseline_latency = comparison_metric(
+        metrics,
+        baseline,
+        actual_key="latency_ns",
+        cycle_key="latency_best_cycles",
+    )
+    interval_key, candidate_interval, baseline_interval = comparison_metric(
+        metrics,
+        baseline,
+        actual_key="throughput_period_ns",
+        cycle_key="interval_min_cycles",
+    )
+    latency_delta = percent_change(candidate_latency, baseline_latency)
+    interval_delta = percent_change(candidate_interval, baseline_interval)
+    record["performance_comparison"] = {
+        "latency_metric": latency_key,
+        "latency_candidate": candidate_latency,
+        "latency_baseline": baseline_latency,
+        "latency_delta_percent": latency_delta,
+        "throughput_metric": interval_key,
+        "throughput_candidate": candidate_interval,
+        "throughput_baseline": baseline_interval,
+        "throughput_delta_percent": interval_delta,
+    }
+    resource_deltas = [
+        record["deltas_percent"].get(key)
+        for key in (
+            "resources_lut_used",
+            "resources_ff_used",
+            "resources_dsp_used",
+            "resources_bram_used",
+        )
+    ]
+    numeric_resources = [
+        value for value in resource_deltas if isinstance(value, (int, float))
+    ]
+
     frequency = metrics.get("frequency_mhz")
     maximum_period = metrics.get("maximum_clock_period_ns")
     if frequency is None:
@@ -356,39 +398,6 @@ def classify_candidate(
         )
         return record
 
-    record["deltas_percent"] = {
-        key: percent_change(metrics.get(key), baseline.get(key)) for key in METRIC_KEYS
-    }
-    latency_key, candidate_latency, baseline_latency = comparison_metric(
-        metrics,
-        baseline,
-        actual_key="latency_ns",
-        cycle_key="latency_best_cycles",
-    )
-    interval_key, candidate_interval, baseline_interval = comparison_metric(
-        metrics,
-        baseline,
-        actual_key="throughput_period_ns",
-        cycle_key="interval_min_cycles",
-    )
-    latency_delta = percent_change(candidate_latency, baseline_latency)
-    interval_delta = percent_change(candidate_interval, baseline_interval)
-    record["performance_comparison"] = {
-        "latency_metric": latency_key,
-        "latency_candidate": candidate_latency,
-        "latency_baseline": baseline_latency,
-        "latency_delta_percent": latency_delta,
-        "throughput_metric": interval_key,
-        "throughput_candidate": candidate_interval,
-        "throughput_baseline": baseline_interval,
-        "throughput_delta_percent": interval_delta,
-    }
-
-    resource_deltas = [
-        record["deltas_percent"].get(key)
-        for key in ("resources_lut_used", "resources_ff_used", "resources_dsp_used", "resources_bram_used")
-    ]
-    numeric_resources = [value for value in resource_deltas if isinstance(value, (int, float))]
     improves_latency = isinstance(latency_delta, (int, float)) and latency_delta < 0
     improves_interval = isinstance(interval_delta, (int, float)) and interval_delta < 0
     improves_resource = any(value < 0 for value in numeric_resources)
