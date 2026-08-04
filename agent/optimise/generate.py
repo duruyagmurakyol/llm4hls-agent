@@ -35,8 +35,8 @@ def _attach_latency_recovery_factor(
     output_dir: Path,
     strategy_path: Path,
     strategy: dict[str, Any],
-) -> dict[str, Any]:
-    """Persist the next untested factor for bounded latency recovery."""
+) -> dict[str, Any] | None:
+    """Persist the next untested factor, or retire an exhausted strategy."""
     if strategy.get("name") != "recover_latency_tradeoff":
         return strategy
 
@@ -58,7 +58,18 @@ def _attach_latency_recovery_factor(
 
     factor = select_latency_recovery_factor(completed)
     if factor is None:
-        return strategy
+        exhausted_path = strategy_path.with_name(
+            strategy_path.name.replace("_strategy.json", "_strategy_exhausted.json")
+        )
+        exhausted = dict(strategy)
+        exhausted["status"] = "exhausted"
+        exhausted["completed_factors"] = completed
+        exhausted_path.write_text(
+            json.dumps(exhausted, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        strategy_path.unlink()
+        return None
 
     updated = dict(strategy)
     updated_parameters = dict(parameters)
@@ -84,6 +95,122 @@ def _latency_recovery_prompt_suffix(strategy: dict[str, Any] | None) -> str:
         f"- Use exactly unroll factor {factor}; do not completely unroll the loop.\n"
         "- Keep these directives inside the selected loop body, not at function scope."
     )
+
+
+def _latency_recovery_exhausted_suffix(exhausted: bool) -> str:
+    if not exhausted:
+        return ""
+    return (
+        "\n\nBounded latency-recovery search is exhausted:\n"
+        "- Factors 2, 4, and 8 have already been evaluated.\n"
+        "- Ignore the recover_latency_tradeoff strategy text above for this iteration.\n"
+        "- Produce a genuinely different structural alternative without a mandated "
+        "unroll factor."
+    )
+
+
+def _candidate_index_from_strategy(path: Path, strategy: dict[str, Any]) -> int | None:
+    configured = strategy.get("next_candidate_index")
+    if isinstance(configured, int):
+        return configured
+    match = re.fullmatch(r"candidate_(\d{3})_strategy\.json", path.name)
+    return int(match.group(1)) if match else None
+
+
+def _latency_recovery_template(
+    output_dir: Path,
+    strategy_path: Path,
+    strategy: dict[str, Any],
+) -> tuple[int, Path, int] | None:
+    """Find the first model-generated recovery source for this Pareto parent."""
+    if strategy.get("name") != "recover_latency_tradeoff":
+        return None
+    factor = int((strategy.get("parameters") or {}).get("factor", 0))
+    if factor <= 2:
+        return None
+
+    source_index = strategy.get("source_candidate_index")
+    for path in sorted(output_dir.glob("candidate_*_strategy.json")):
+        if path == strategy_path:
+            continue
+        previous = load_json(path)
+        if previous.get("name") != "recover_latency_tradeoff":
+            continue
+        if previous.get("source_candidate_index") != source_index:
+            continue
+        template_factor = int((previous.get("parameters") or {}).get("factor", 0))
+        if template_factor != 2:
+            continue
+        template_index = _candidate_index_from_strategy(path, previous)
+        if template_index is None:
+            continue
+        template_path = output_dir / f"candidate_{template_index:03d}.cpp"
+        if template_path.is_file():
+            return template_index, template_path, template_factor
+    return None
+
+
+def _replace_unroll_factor(source: str, old_factor: int, new_factor: int) -> str:
+    pattern = re.compile(
+        rf"(#\s*pragma\s+HLS\s+UNROLL\b[^\n]*\bfactor\s*=\s*){old_factor}\b",
+        re.IGNORECASE,
+    )
+    updated, count = pattern.subn(rf"\g<1>{new_factor}", source)
+    if count == 0:
+        raise ValueError(
+            f"Latency-recovery template has no UNROLL factor={old_factor} directive"
+        )
+    return updated
+
+
+def _generate_controlled_latency_variant(
+    output_dir: Path,
+    candidate_index: int,
+    strategy_path: Path,
+    strategy: dict[str, Any] | None,
+) -> Path | None:
+    """Clone the factor-2 template and change only the unroll factor."""
+    if not strategy:
+        return None
+    template = _latency_recovery_template(output_dir, strategy_path, strategy)
+    if template is None:
+        return None
+
+    template_index, template_path, template_factor = template
+    factor = int((strategy.get("parameters") or {}).get("factor", 0))
+    candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
+    candidate_source = _replace_unroll_factor(
+        template_path.read_text(encoding="utf-8"),
+        template_factor,
+        factor,
+    )
+    candidate_path.write_text(candidate_source, encoding="utf-8")
+
+    metadata_path = output_dir / f"candidate_{candidate_index:03d}_deterministic_generation.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "generation_mode": "controlled_parameter_variant",
+                "model_call": False,
+                "template_candidate_index": template_index,
+                "template_factor": template_factor,
+                "factor": factor,
+                "source_candidate_index": strategy.get("source_candidate_index"),
+                "strategy_file": str(strategy_path.relative_to(REPO_ROOT)),
+                "candidate_file": str(candidate_path.relative_to(REPO_ROOT)),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print("\nControlled latency-recovery candidate generated")
+    print(f"Template: {template_path.relative_to(REPO_ROOT)}")
+    print(f"Factor: {template_factor} -> {factor}")
+    print(f"Source: {candidate_path.relative_to(REPO_ROOT)}")
+    print("No model call was made.")
+    return candidate_path
 
 
 def extract_cpp(text: str, required_top: str) -> str:
@@ -114,6 +241,7 @@ def generate_candidate(
     output_dir = REPO_ROOT / config["output_dir"]
     prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
     strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+    exhausted_path = output_dir / f"candidate_{candidate_index:03d}_strategy_exhausted.json"
     if not prompt_path.is_file():
         raise FileNotFoundError(f"Prompt not found: {prompt_path}")
 
@@ -125,9 +253,20 @@ def generate_candidate(
             strategy,
         )
 
+    controlled = _generate_controlled_latency_variant(
+        output_dir,
+        candidate_index,
+        strategy_path,
+        strategy,
+    )
+    if controlled is not None:
+        return controlled
+
+    exhausted = exhausted_path.is_file()
     user_prompt = (
         prompt_path.read_text(encoding="utf-8")
         + _latency_recovery_prompt_suffix(strategy)
+        + _latency_recovery_exhausted_suffix(exhausted)
     )
 
     model_name = str(model_config["name"])
@@ -194,6 +333,11 @@ def generate_candidate(
             if strategy_path.is_file()
             else None
         ),
+        "strategy_exhausted_file": (
+            str(exhausted_path.relative_to(REPO_ROOT))
+            if exhausted_path.is_file()
+            else None
+        ),
         "strategy_directives_applied": directives_applied,
     }, indent=2) + "\n", encoding="utf-8")
     candidate_path.write_text(candidate_source, encoding="utf-8")
@@ -208,6 +352,8 @@ def generate_candidate(
         print("Selected strategy directives were applied deterministically.")
     elif _latency_recovery_prompt_suffix(strategy):
         print("Selected latency-recovery factor was supplied to the model.")
+    elif exhausted:
+        print("Bounded latency-recovery factors were exhausted; generic fallback used.")
     print("No Vitis synthesis was run and the baseline source was not modified.")
     return candidate_path
 
