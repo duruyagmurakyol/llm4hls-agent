@@ -145,7 +145,23 @@ def _latency_recovery_template(
         if template_index is None:
             continue
         template_path = output_dir / f"candidate_{template_index:03d}.cpp"
-        if template_path.is_file():
+        model_metadata_path = (
+            output_dir / f"candidate_{template_index:03d}_model_metadata.json"
+        )
+        static_path = (
+            output_dir / f"candidate_{template_index:03d}_static_validation.json"
+        )
+        csim_path = (
+            output_dir / f"candidate_{template_index:03d}_csim_validation.json"
+        )
+        if (
+            template_path.is_file()
+            and model_metadata_path.is_file()
+            and static_path.is_file()
+            and load_json(static_path).get("passed") is True
+            and csim_path.is_file()
+            and load_json(csim_path).get("passed") is True
+        ):
             return template_index, template_path, template_factor
     return None
 
