@@ -42,15 +42,40 @@ def select_tradeoff_strategy(
         ),
         "required_changes": [
             f"Keep the loop and apply partial unrolling with factor {factor}.",
-            "If pipelining is used, apply it to the target loop rather than the entire function.",
+            (
+                "Place the loop directives inside the target loop body, immediately "
+                f"after its opening brace: #pragma HLS PIPELINE II=1 followed by "
+                f"#pragma HLS UNROLL factor={factor}."
+            ),
             "Preserve the existing interface contract.",
         ],
         "forbidden_changes": [
+            "Do not place PIPELINE or UNROLL before the target loop.",
             "Do not completely unroll the loop.",
             "Do not pipeline the entire top function.",
             "Do not completely partition top-level interface arrays.",
         ],
     }
+
+
+def _matching_brace(source: str, opening: int) -> int | None:
+    depth = 0
+    for index in range(opening, len(source)):
+        depth += source[index] == "{"
+        depth -= source[index] == "}"
+        if depth == 0:
+            return index
+    return None
+
+
+def _loop_bodies(source: str) -> list[str]:
+    bodies: list[str] = []
+    for match in re.finditer(r"\bfor\s*\([^)]*\)\s*\{", source):
+        opening = source.find("{", match.start())
+        closing = _matching_brace(source, opening)
+        if closing is not None:
+            bodies.append(source[opening + 1 : closing])
+    return bodies
 
 
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
@@ -65,39 +90,61 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         }
 
     factor = int(strategy.get("parameters", {}).get("factor", 0))
-    pragmas = re.findall(r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)", source, re.I)
-    observed_factors = [
-        int(match.group(1))
-        for arguments in pragmas
-        if (match := re.search(r"\bfactor\s*=\s*(\d+)", arguments, re.I))
-    ]
+    all_unroll_pragmas = re.findall(
+        r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)",
+        source,
+        re.I,
+    )
     complete_unroll = any(
         not re.search(r"\bfactor\s*=\s*\d+", arguments, re.I)
-        for arguments in pragmas
+        for arguments in all_unroll_pragmas
     )
+
+    loop_factors: list[int] = []
+    loop_pipeline = False
+    for body in _loop_bodies(source):
+        loop_pipeline = loop_pipeline or bool(
+            re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", body, re.I)
+        )
+        for arguments in re.findall(
+            r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)",
+            body,
+            re.I,
+        ):
+            match = re.search(r"\bfactor\s*=\s*(\d+)", arguments, re.I)
+            if match:
+                loop_factors.append(int(match.group(1)))
 
     first_loop = re.search(r"\bfor\s*\(", source)
     function_prefix = source[: first_loop.start()] if first_loop else source
-    function_pipeline = bool(
+    outer_pipeline = bool(
         re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", function_prefix, re.I)
+    )
+    outer_unroll = bool(
+        re.search(r"#\s*pragma\s+HLS\s+UNROLL\b", function_prefix, re.I)
     )
 
     return {
         "required": True,
         "passed": (
             factor > 0
-            and factor in observed_factors
+            and factor in loop_factors
             and not complete_unroll
-            and not function_pipeline
+            and not outer_pipeline
+            and not outer_unroll
         ),
         "strategy": name,
         "expected": {
             "factor": factor,
-            "function_pipeline": False,
+            "directives_inside_loop": True,
+            "outer_pipeline": False,
+            "outer_unroll": False,
         },
         "observed": {
-            "unroll_factors": observed_factors,
+            "loop_unroll_factors": loop_factors,
             "complete_unroll": complete_unroll,
-            "function_pipeline": function_pipeline,
+            "loop_pipeline": loop_pipeline,
+            "outer_pipeline": outer_pipeline,
+            "outer_unroll": outer_unroll,
         },
     }
