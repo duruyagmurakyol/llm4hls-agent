@@ -7,7 +7,12 @@ from agent.optimise.diagnose import (
     _recover_latency_tradeoff_strategy,
     prepare_tradeoff_prompt,
 )
-from agent.optimise.refinement_strategy import check_strategy_compliance
+from agent.optimise.generate import _attach_latency_recovery_factor
+from agent.optimise.refinement_strategy import (
+    apply_strategy_directives,
+    check_strategy_compliance,
+    select_latency_recovery_factor,
+)
 
 
 def _pareto_record(
@@ -156,6 +161,61 @@ def test_latency_recovery_trigger_requires_both_thresholds() -> None:
         resources_ff_used=-20.0,
     )
     assert _recover_latency_tradeoff_strategy(no_large_resource_saving) is None
+
+
+def test_latency_recovery_factor_ladder_is_bounded() -> None:
+    assert select_latency_recovery_factor([]) == 2
+    assert select_latency_recovery_factor([2]) == 4
+    assert select_latency_recovery_factor([2, 4]) == 8
+    assert select_latency_recovery_factor([2, 4, 8]) is None
+
+
+def test_generation_persists_next_untried_latency_recovery_factor(
+    tmp_path: Path,
+) -> None:
+    def attach(index: int) -> dict:
+        path = tmp_path / f"candidate_{index:03d}_strategy.json"
+        strategy = {
+            "name": "recover_latency_tradeoff",
+            "parameters": {"latency_regression_percent": 148.2},
+        }
+        path.write_text(json.dumps(strategy), encoding="utf-8")
+        return _attach_latency_recovery_factor(tmp_path, path, strategy)
+
+    assert attach(2)["parameters"]["factor"] == 2
+    assert attach(3)["parameters"]["factor"] == 4
+    assert attach(4)["parameters"]["factor"] == 8
+    exhausted = attach(5)
+    assert "factor" not in exhausted["parameters"]
+
+    persisted = json.loads(
+        (tmp_path / "candidate_004_strategy.json").read_text(encoding="utf-8")
+    )
+    assert persisted["parameters"]["factor"] == 8
+
+
+def test_latency_recovery_factor_is_applied_and_checked() -> None:
+    source = (
+        "void kernel(int a[8]) {\n"
+        "  for (int i = 0; i < 8; ++i) {\n"
+        "    a[i] += 1;\n"
+        "  }\n"
+        "}\n"
+    )
+    strategy = {
+        "name": "recover_latency_tradeoff",
+        "parameters": {"factor": 4},
+    }
+
+    rewritten = apply_strategy_directives(source, strategy)
+    result = check_strategy_compliance(rewritten, strategy)
+
+    assert "#pragma HLS PIPELINE II=1" in rewritten
+    assert "#pragma HLS UNROLL factor=4" in rewritten
+    assert result["required"] is True
+    assert result["passed"] is True
+    assert result["strategy"] == "recover_latency_tradeoff"
+    assert result["expected"]["factor"] == 4
 
 
 def test_latency_recovery_strategy_requires_post_synthesis_evidence() -> None:
