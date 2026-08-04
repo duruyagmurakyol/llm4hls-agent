@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.pareto_frontier import annotate_pareto_frontier
 from agent.optimise.selection import (
     configured_ranking,
     deterministic_selection_key,
@@ -127,6 +128,7 @@ def preserve_candidate_state(
     selection = dict(config.get("selection") or {})
     output_dir = _resolve(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    summary = annotate_pareto_frontier(output_dir, summary)
     archive_dir = output_dir / "candidate_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
