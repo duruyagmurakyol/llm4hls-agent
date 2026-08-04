@@ -60,6 +60,65 @@ def _tool_log(report: dict[str, Any]) -> str:
         return ""
 
 
+def _completed_partial_unroll_factors(
+    output_dir: Path,
+    summary: dict[str, Any],
+) -> list[int]:
+    factors: list[int] = []
+    for record in summary.get("candidates", []):
+        if record.get("fully_verified") is not True:
+            continue
+        index = record.get("candidate_index")
+        if not isinstance(index, int):
+            continue
+        strategy = load_optional(output_dir / f"candidate_{index:03d}_strategy.json")
+        if not strategy or strategy.get("name") != "partial_unroll":
+            continue
+        factor = strategy.get("parameters", {}).get("factor")
+        if isinstance(factor, int) and factor not in factors:
+            factors.append(factor)
+    return factors
+
+
+def _strategy_text(strategy: dict[str, Any]) -> str:
+    factor = strategy["parameters"]["factor"]
+    return (
+        f"Selected strategy: partial loop unrolling with factor {factor}.\n"
+        f"Reason: {strategy['reason']}\n"
+        "Required changes:\n"
+        + "\n".join(f"- {item}" for item in strategy["required_changes"])
+        + "\nForbidden changes:\n"
+        + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
+    )
+
+
+def _write_strategy(
+    output_dir: Path,
+    *,
+    source_index: int,
+    next_index: int,
+    strategy: dict[str, Any],
+    trigger: str,
+    retry_of: int | None = None,
+) -> None:
+    payload = {
+        "name": strategy["name"],
+        "parameters": strategy["parameters"],
+        "reason": strategy["reason"],
+        "required_changes": strategy["required_changes"],
+        "forbidden_changes": strategy["forbidden_changes"],
+        "source_candidate_index": source_index,
+        "next_candidate_index": next_index,
+        "trigger": trigger,
+    }
+    if retry_of is not None:
+        payload["retry_of_candidate_index"] = retry_of
+    (output_dir / f"candidate_{next_index:03d}_strategy.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index: int) -> Path:
     if next_index <= previous_index:
         raise ValueError("next_index must be greater than previous_index")
@@ -115,6 +174,36 @@ def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index
         measured = f"Candidate evaluation is incomplete. Current verdict: {verdict}."
         direction = "produce a conservative, synthesizable structural alternative"
 
+    previous_strategy = load_optional(
+        output_dir / f"candidate_{previous_index:03d}_strategy.json"
+    )
+    strategy: dict[str, Any] | None = None
+    strategy_trigger: str | None = None
+    retry_of: int | None = None
+    if previous_strategy:
+        if record.get("fully_verified") is True:
+            completed = _completed_partial_unroll_factors(output_dir, summary)
+            strategy = select_tradeoff_strategy("", completed)
+            strategy_trigger = "partial_unroll_ladder" if strategy else None
+        else:
+            strategy = previous_strategy
+            strategy_trigger = "retry_unfinished_strategy"
+            retry_of = previous_index
+
+    strategy_section = ""
+    if strategy:
+        factor = strategy["parameters"]["factor"]
+        direction += f"; implement and preserve partial loop unrolling with factor {factor}"
+        strategy_section = "\n\n" + _strategy_text(strategy)
+        _write_strategy(
+            output_dir,
+            source_index=previous_index,
+            next_index=next_index,
+            strategy=strategy,
+            trigger=strategy_trigger or "strategy_refinement",
+            retry_of=retry_of,
+        )
+
     target = load_json(target_path)
     cause = load_json(cause_path)
     top = config["top_function"]
@@ -131,7 +220,7 @@ Selected target:
 - Function/report: {target.get('target_name')}
 - Loop label: {target.get('loop_label')}
 - Primary cause: {(cause.get('primary_hypothesis') or {}).get('category')}
-- Interpretation: {(cause.get('primary_hypothesis') or {}).get('interpretation')}
+- Interpretation: {(cause.get('primary_hypothesis') or {}).get('interpretation')}{strategy_section}
 
 Required direction:
 - {direction}.
@@ -162,6 +251,7 @@ Original baseline source:
         "next_candidate_index": next_index,
         "verdict": verdict,
         "required_direction": direction,
+        "selected_strategy": strategy,
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
     }, indent=2) + "\n", encoding="utf-8")
     print("\nPPA refinement prompt")
@@ -184,35 +274,26 @@ def prepare_tradeoff_prompt(config_path: Path, source_index: int, next_index: in
     source_metrics = synthesis.get("metrics") or {}
     top = config["top_function"]
 
-    strategy = select_tradeoff_strategy(_tool_log(synthesis))
+    completed = _completed_partial_unroll_factors(output_dir, summary)
+    strategy = select_tradeoff_strategy(_tool_log(synthesis), completed)
     if strategy:
         factor = strategy["parameters"]["factor"]
-        strategy_text = (
-            f"Selected strategy: partial loop unrolling with factor {factor}.\n"
-            f"Reason: {strategy['reason']}\n"
-            "Required changes:\n"
-            + "\n".join(f"- {item}" for item in strategy["required_changes"])
-            + "\nForbidden changes:\n"
-            + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
-        )
+        strategy_text = _strategy_text(strategy)
         objective = (
             f"Implement partial loop unrolling with factor {factor} to retain useful "
             f"parallelism while reducing memory pressure and LUT usage relative to "
             f"candidate {source_index:03d}."
         )
-        strategy_path = output_dir / f"candidate_{next_index:03d}_strategy.json"
-        strategy_path.write_text(
-            json.dumps(
-                {
-                    **strategy,
-                    "source_candidate_index": source_index,
-                    "next_candidate_index": next_index,
-                    "trigger": "memory_port_limited_complete_unroll",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+        _write_strategy(
+            output_dir,
+            source_index=source_index,
+            next_index=next_index,
+            strategy=strategy,
+            trigger=(
+                "partial_unroll_ladder"
+                if completed
+                else "memory_port_limited_complete_unroll"
+            ),
         )
     else:
         strategy_text = "Selected strategy: lower-cost structural alternative or lower parallelism."
@@ -263,6 +344,7 @@ Original baseline source:
         "verdict": "refine_pareto_tradeoff",
         "baseline_metrics": baseline_metrics,
         "source_metrics": source_metrics,
+        "completed_partial_unroll_factors": completed,
         "required_direction": objective,
         "selected_strategy": strategy,
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
