@@ -69,7 +69,7 @@ def _attach_latency_recovery_factor(
             encoding="utf-8",
         )
         strategy_path.unlink()
-        return None
+        return exhausted
 
     updated = dict(strategy)
     updated_parameters = dict(parameters)
@@ -253,6 +253,10 @@ def generate_candidate(
             strategy,
         )
 
+    exhausted = bool(strategy and strategy.get("status") == "exhausted")
+    if exhausted:
+        strategy = None
+
     controlled = _generate_controlled_latency_variant(
         output_dir,
         candidate_index,
@@ -262,7 +266,6 @@ def generate_candidate(
     if controlled is not None:
         return controlled
 
-    exhausted = exhausted_path.is_file()
     user_prompt = (
         prompt_path.read_text(encoding="utf-8")
         + _latency_recovery_prompt_suffix(strategy)
