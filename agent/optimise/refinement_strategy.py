@@ -140,7 +140,11 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
     """Check source-enforceable strategies before running Vitis."""
     name = strategy.get("name")
     factor = int(strategy.get("parameters", {}).get("factor", 0))
-    if name in {"recover_frequency", "recover_resource_limits"} or (
+    if name in {
+        "recover_frequency",
+        "recover_resource_limits",
+        "recover_resource_frequency_balance",
+    } or (
         name == "recover_latency_tradeoff" and factor <= 0
     ):
         return {
