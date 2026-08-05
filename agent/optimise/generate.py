@@ -13,6 +13,9 @@ from agent.optimise.refinement_strategy import (
     apply_strategy_directives,
     select_latency_recovery_factor,
 )
+from agent.optimise.strategy_canonicalisation import (
+    canonicalise_latency_recovery_directives,
+)
 from agent.providers.siliconflow import complete
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -332,9 +335,14 @@ def generate_candidate(
     raw_path.write_text(response.content.rstrip() + "\n", encoding="utf-8")
     candidate_source = extract_cpp(response.content, required_top)
     directives_applied = False
+    canonicalised_directives = 0
     if strategy and strategy.get("name") == "partial_unroll":
         candidate_source = apply_strategy_directives(candidate_source, strategy)
         directives_applied = True
+    elif strategy and strategy.get("name") == "recover_latency_tradeoff":
+        candidate_source, canonicalised_directives = (
+            canonicalise_latency_recovery_directives(candidate_source, strategy)
+        )
 
     metadata_path.write_text(json.dumps({
         "provider": "siliconflow",
@@ -358,6 +366,8 @@ def generate_candidate(
             else None
         ),
         "strategy_directives_applied": directives_applied,
+        "strategy_directives_canonicalised": canonicalised_directives > 0,
+        "strategy_directive_canonicalisations": canonicalised_directives,
     }, indent=2) + "\n", encoding="utf-8")
     candidate_path.write_text(candidate_source, encoding="utf-8")
 
@@ -369,6 +379,11 @@ def generate_candidate(
     print(f"Latency: {response.latency_seconds:.2f} seconds")
     if directives_applied:
         print("Selected strategy directives were applied deterministically.")
+    elif canonicalised_directives:
+        print(
+            "Moved nearest-ancestor PIPELINE directives onto "
+            f"{canonicalised_directives} requested unrolled loop(s)."
+        )
     elif _latency_recovery_prompt_suffix(strategy):
         print("Selected latency-recovery factor was supplied to the model.")
     elif exhausted:
