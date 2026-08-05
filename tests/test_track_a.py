@@ -79,6 +79,12 @@ clock_ns = 5.0
         if path.is_file()
     )
 
+    host_command = task.data["repair"]["host_validation"]["command"]
+    assert host_command[:2] == ["bash", "-lc"]
+    assert "command -v vitis-run" in host_command[2]
+    assert '$vitis_root/include' in host_command[2]
+    assert "projection.cpp projection_tb.cpp" in host_command[2]
+
     config.validate_task(task.data)
     config.validate_task_paths(task.data)
 
