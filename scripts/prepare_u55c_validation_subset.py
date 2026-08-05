@@ -65,19 +65,20 @@ def _write_target_cfg(
     source_cfg: Path,
     output_cfg: Path,
     manifest: dict[str, Any],
+    repo_root: Path,
 ) -> None:
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
     if not parser.read(source_cfg, encoding="utf-8") or "hls" not in parser:
         raise ValueError(f"Could not read [hls] configuration from {source_cfg}")
 
     hls = parser["hls"]
     artifacts = manifest["artifacts"]
-    source = REPO_ROOT / str(artifacts["source"])
+    source = repo_root / str(artifacts["source"])
     testbenches = artifacts.get("testbench") or []
     if not source.is_file() or not testbenches:
         raise ValueError(f"Invalid source or testbench in {manifest['task_id']}")
-    testbench = REPO_ROOT / str(testbenches[0])
+    testbench = repo_root / str(testbenches[0])
     if not testbench.is_file():
         raise FileNotFoundError(f"Testbench not found: {testbench}")
 
@@ -123,6 +124,7 @@ def _u55c_manifest(
         source_cfg=source_cfg,
         output_cfg=target_cfg,
         manifest=manifest,
+        repo_root=repo_root,
     )
 
     manifest["task_id"] = task_id
