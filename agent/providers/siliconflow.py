@@ -13,12 +13,15 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from agent.prompt_compaction import compact_user_prompt
+
 
 DEFAULT_BASE_URL = "https://api.siliconflow.com/v1"
 NON_THINKING_MODELS = {
     "Qwen/Qwen3.5-122B-A10B",
     "Qwen/Qwen3.6-27B",
 }
+_FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,7 @@ class ModelResponse:
     total_tokens: int | None
     latency_seconds: float
     raw_response: dict[str, Any]
+    prompt_compaction: dict[str, Any] | None = None
 
 
 def _api_key() -> str:
@@ -46,6 +50,13 @@ def _endpoint() -> str:
     return f"{base_url}/chat/completions"
 
 
+def _prompt_compaction_enabled(value: bool | None) -> bool:
+    if value is not None:
+        return value
+    configured = os.environ.get("LLM4HLS_COMPACT_PROMPTS", "1")
+    return configured.strip().casefold() not in _FALSE_VALUES
+
+
 def complete(
     *,
     model: str,
@@ -58,6 +69,7 @@ def complete(
     max_attempts: int = 3,
     thinking_budget: int | None = None,
     enable_thinking: bool | None = None,
+    compact_prompt: bool | None = None,
 ) -> ModelResponse:
     """Call SiliconFlow and retry transient network/read failures."""
 
@@ -65,6 +77,19 @@ def complete(
         raise ValueError("max_attempts must be greater than zero")
     if thinking_budget is not None and thinking_budget < 0:
         raise ValueError("thinking_budget must be non-negative")
+
+    prompt_compaction: dict[str, Any] | None = None
+    if _prompt_compaction_enabled(compact_prompt):
+        user_prompt, prompt_compaction = compact_user_prompt(user_prompt)
+        saved = int(prompt_compaction["characters_saved"])
+        if saved > 0:
+            print(
+                "Prompt compaction: "
+                f"{prompt_compaction['original_characters']} -> "
+                f"{prompt_compaction['compacted_characters']} characters "
+                f"({prompt_compaction['reduction_percent']:.1f}% reduction)",
+                flush=True,
+            )
 
     effective_enable_thinking = enable_thinking
     if effective_enable_thinking is None and model in NON_THINKING_MODELS:
@@ -143,6 +168,9 @@ def complete(
             )
         raise RuntimeError(f"SiliconFlow returned empty content: {raw}")
 
+    if prompt_compaction is not None:
+        raw["_client_prompt_compaction"] = prompt_compaction
+
     usage = raw.get("usage") or {}
     return ModelResponse(
         content=content,
@@ -151,4 +179,5 @@ def complete(
         total_tokens=usage.get("total_tokens"),
         latency_seconds=latency,
         raw_response=raw,
+        prompt_compaction=prompt_compaction,
     )
