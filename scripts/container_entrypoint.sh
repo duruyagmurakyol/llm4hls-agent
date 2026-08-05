@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VITIS_ROOT="${VITIS_ROOT:-/opt/Xilinx/2025.2}"
+# AMD setup scripts embed the absolute installation path. The default therefore
+# matches the host installation path used by docker/compose.yaml.
+VITIS_ROOT="${VITIS_ROOT:-/home/xilinx/Xilinx/2025.2}"
 
 for settings in \
   "$VITIS_ROOT/Vitis/settings64.sh" \
