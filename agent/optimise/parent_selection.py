@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from agent.optimise.refinement_strategy import LATENCY_RECOVERY_FACTORS
-from agent.optimise.resource_recovery import resource_limit_recovery_trigger
+from agent.optimise.resource_recovery import (
+    RESOURCE_FREQUENCY_BALANCE_REASON,
+    resource_frequency_balance_trigger,
+    resource_limit_recovery_trigger,
+)
 from agent.optimise.selection import deterministic_selection_key
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -204,6 +208,19 @@ def _is_feasible_verified_parent(record: dict[str, Any]) -> bool:
     )
 
 
+def _pending_resource_frequency_balance_parent(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str] | None:
+    """Return to the original feasible parent after recovery breaks timing."""
+    trigger = resource_frequency_balance_trigger(records)
+    if trigger is None:
+        return None
+    parent = trigger.get("parent")
+    if not isinstance(parent, dict):
+        return None
+    return parent, RESOURCE_FREQUENCY_BALANCE_REASON
+
+
 def _pending_resource_limit_recovery_parent(
     records: list[dict[str, Any]],
     selection: dict[str, Any] | None,
@@ -268,6 +285,10 @@ def select_refinement_parent(
 ) -> tuple[dict[str, Any], str] | None:
     """Return a pending recovery parent, then the strongest normal parent."""
     record_list = list(records)
+
+    balanced_recovery = _pending_resource_frequency_balance_parent(record_list)
+    if balanced_recovery is not None:
+        return balanced_recovery
 
     resource_recovery = _pending_resource_limit_recovery_parent(
         record_list,
