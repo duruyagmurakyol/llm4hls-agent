@@ -401,20 +401,45 @@ def run_optimisation(
 
     _initialise(config_source, config, output_dir, budget)
     summary = evaluate_experiment(config_source)
-    maximum_candidates = int(config["budget"]["max_candidates"])
+    legacy_budget = config.get("budget") or {}
+    modern_budgets = config.get("budgets") or {}
+
+    maximum_candidates = int(
+        legacy_budget.get("max_candidates")
+        or modern_budgets.get("max_iterations")
+        or modern_budgets.get("max_model_calls")
+        or 10
+    )
     step_limit = max_steps if max_steps is not None else maximum_candidates
 
     for _ in range(step_limit):
         summary = evaluate_experiment(config_source)
-        local_budget = summary["budget"]
-        if local_budget["synthesis_calls_remaining"] <= 0:
-            if budget is not None:
-                budget.set_stop_reason("synthesis_budget_exhausted")
-            return _finish(True, "terminated_budget", "synthesis_budget_exhausted", summary, trajectory)
-        if local_budget["cosim_calls_remaining"] <= 0:
-            if budget is not None:
-                budget.set_stop_reason("cosim_budget_exhausted")
-            return _finish(True, "terminated_budget", "cosim_budget_exhausted", summary, trajectory)
+        local_budget = summary.get("budget")
+
+        # Legacy PPA summaries contain their own budget counters. Unified tasks
+        # use the authoritative BudgetState passed in by the controller instead.
+        if isinstance(local_budget, dict):
+            if local_budget.get("synthesis_calls_remaining", 1) <= 0:
+                if budget is not None:
+                    budget.set_stop_reason("synthesis_budget_exhausted")
+                return _finish(
+                    True,
+                    "terminated_budget",
+                    "synthesis_budget_exhausted",
+                    summary,
+                    trajectory,
+                )
+
+            if local_budget.get("cosim_calls_remaining", 1) <= 0:
+                if budget is not None:
+                    budget.set_stop_reason("cosim_budget_exhausted")
+                return _finish(
+                    True,
+                    "terminated_budget",
+                    "cosim_budget_exhausted",
+                    summary,
+                    trajectory,
+                )
 
         indices = _candidate_indices(output_dir)
         if not indices:
