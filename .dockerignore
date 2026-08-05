@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+*.pyc
+*.pyo
+*.log
+runs
+results
+build
+dist
+.Xil
+.vitis_hls
+solution*
+*_project
+benchmarks/hls_eval_imported
