@@ -80,14 +80,28 @@ def _matching_brace(source: str, opening: int) -> int | None:
     return None
 
 
-def _loop_bodies(source: str) -> list[str]:
-    bodies: list[str] = []
+def _loop_spans(source: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
     for match in re.finditer(r"\bfor\s*\([^)]*\)\s*\{", source):
         opening = source.find("{", match.start())
         closing = _matching_brace(source, opening)
         if closing is not None:
-            bodies.append(source[opening + 1 : closing])
-    return bodies
+            spans.append((opening, closing))
+    return spans
+
+
+def _innermost_loop(
+    spans: list[tuple[int, int]],
+    position: int,
+) -> int | None:
+    containing = [
+        (index, opening)
+        for index, (opening, closing) in enumerate(spans)
+        if opening < position < closing
+    ]
+    if not containing:
+        return None
+    return max(containing, key=lambda item: item[1])[0]
 
 
 def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
@@ -141,45 +155,68 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
             "reason": "unsupported_strategy",
         }
 
-    all_unroll_pragmas = re.findall(
-        r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)",
-        source,
-        re.I,
-    )
-    complete_unroll = any(
-        not re.search(r"\bfactor\s*=\s*\d+", arguments, re.I)
-        for arguments in all_unroll_pragmas
-    )
+    spans = _loop_spans(source)
+    loop_directives = [
+        {
+            "pipeline": False,
+            "unroll_factors": [],
+            "complete_unroll": False,
+        }
+        for _ in spans
+    ]
+    outer_pipeline = False
+    outer_unroll = False
+    all_unroll_factors: list[int] = []
+    complete_unroll = False
 
-    loop_factors: list[int] = []
-    loop_pipeline = False
-    for body in _loop_bodies(source):
-        loop_pipeline = loop_pipeline or bool(
-            re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", body, re.I)
-        )
-        for arguments in re.findall(
-            r"#\s*pragma\s+HLS\s+UNROLL\b([^\n]*)",
-            body,
-            re.I,
-        ):
-            match = re.search(r"\bfactor\s*=\s*(\d+)", arguments, re.I)
-            if match:
-                loop_factors.append(int(match.group(1)))
-
-    first_loop = re.search(r"\bfor\s*\(", source)
-    function_prefix = source[: first_loop.start()] if first_loop else source
-    outer_pipeline = bool(
-        re.search(r"#\s*pragma\s+HLS\s+PIPELINE\b", function_prefix, re.I)
+    pragma_pattern = re.compile(
+        r"#\s*pragma\s+HLS\s+(PIPELINE|UNROLL)\b([^\n]*)",
+        re.IGNORECASE,
     )
-    outer_unroll = bool(
-        re.search(r"#\s*pragma\s+HLS\s+UNROLL\b", function_prefix, re.I)
+    for pragma in pragma_pattern.finditer(source):
+        kind = pragma.group(1).upper()
+        arguments = pragma.group(2)
+        loop_index = _innermost_loop(spans, pragma.start())
+
+        if kind == "PIPELINE":
+            if loop_index is None:
+                outer_pipeline = True
+            else:
+                loop_directives[loop_index]["pipeline"] = True
+            continue
+
+        factor_match = re.search(r"\bfactor\s*=\s*(\d+)", arguments, re.I)
+        pragma_factor = int(factor_match.group(1)) if factor_match else None
+        if pragma_factor is None:
+            complete_unroll = True
+        else:
+            all_unroll_factors.append(pragma_factor)
+
+        if loop_index is None:
+            outer_unroll = True
+        else:
+            if pragma_factor is None:
+                loop_directives[loop_index]["complete_unroll"] = True
+            else:
+                loop_directives[loop_index]["unroll_factors"].append(
+                    pragma_factor
+                )
+
+    matching_loop = any(
+        directives["pipeline"] is True
+        and factor in directives["unroll_factors"]
+        for directives in loop_directives
+    )
+    loop_pipeline = any(
+        directives["pipeline"] is True
+        for directives in loop_directives
     )
 
     return {
         "required": True,
         "passed": (
             factor > 0
-            and factor in loop_factors
+            and matching_loop
             and not complete_unroll
             and not outer_pipeline
             and not outer_unroll
@@ -187,14 +224,16 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         "strategy": name,
         "expected": {
             "factor": factor,
-            "directives_inside_loop": True,
+            "pipeline_and_unroll_on_same_loop": True,
             "outer_pipeline": False,
             "outer_unroll": False,
         },
         "observed": {
-            "loop_unroll_factors": loop_factors,
+            "loop_unroll_factors": all_unroll_factors,
             "complete_unroll": complete_unroll,
             "loop_pipeline": loop_pipeline,
+            "matching_pipeline_unroll_loop": matching_loop,
+            "loop_directives": loop_directives,
             "outer_pipeline": outer_pipeline,
             "outer_unroll": outer_unroll,
         },
