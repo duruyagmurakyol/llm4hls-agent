@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.optimise.refinement_strategy import LATENCY_RECOVERY_FACTORS
+from agent.optimise.resource_recovery import resource_limit_recovery_trigger
 from agent.optimise.selection import deterministic_selection_key
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -192,13 +193,57 @@ def _pending_latency_recovery_parent(
     return record, "pending_latency_recovery_strategy"
 
 
+def _is_feasible_verified_parent(record: dict[str, Any]) -> bool:
+    compliance = record.get("resource_limit_compliance")
+    return bool(
+        record.get("fully_verified") is True
+        and record.get("meets_frequency_requirement") is True
+        and isinstance(compliance, dict)
+        and compliance.get("passed") is True
+        and record.get("verdict") != "reject_resource_limits"
+    )
+
+
+def _pending_resource_limit_recovery_parent(
+    records: list[dict[str, Any]],
+    selection: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str] | None:
+    """Return to the best feasible design after an over-budget attempt."""
+    if resource_limit_recovery_trigger(records) is None:
+        return None
+
+    feasible = [record for record in records if _is_feasible_verified_parent(record)]
+    if not feasible:
+        return None
+
+    pareto = [
+        record
+        for record in feasible
+        if record.get("verdict") in {
+            "accept_dominates_baseline",
+            "keep_pareto_candidate",
+        }
+    ]
+    candidates = pareto or feasible
+    record = min(
+        candidates,
+        key=lambda item: deterministic_selection_key(item, selection),
+    )
+    reason = (
+        "resource_limit_recovery_from_feasible_pareto"
+        if pareto
+        else "resource_limit_recovery_from_feasible_verified"
+    )
+    return record, reason
+
+
 def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     index = record.get("candidate_index")
     if not isinstance(index, int):
         return None
 
     verdict = record.get("verdict")
-    if verdict == "reject_duplicate":
+    if verdict in {"reject_duplicate", "reject_resource_limits"}:
         return None
 
     fully_verified = record.get("fully_verified") is True
@@ -221,8 +266,15 @@ def select_refinement_parent(
     records: Iterable[dict[str, Any]],
     selection: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str] | None:
-    """Return a pending bounded strategy parent, then the strongest normal parent."""
+    """Return a pending recovery parent, then the strongest normal parent."""
     record_list = list(records)
+
+    resource_recovery = _pending_resource_limit_recovery_parent(
+        record_list,
+        selection,
+    )
+    if resource_recovery is not None:
+        return resource_recovery
 
     pending = _pending_latency_recovery_parent(record_list, selection)
     if pending is not None:
