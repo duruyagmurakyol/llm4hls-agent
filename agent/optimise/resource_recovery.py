@@ -1,4 +1,4 @@
-"""Resource-limit and timing-balance recovery for PPA optimisation."""
+"""Resource-limit, timing-balance, and static-policy recovery for PPA optimisation."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ RESOURCE_RECOVERY_REASONS = {
 RESOURCE_FREQUENCY_BALANCE_REASON = (
     "resource_frequency_balance_from_feasible_parent"
 )
+BALANCED_STRATEGY_NAME = "recover_resource_frequency_balance"
+INTERFACE_PARTITION_CHECK = "no_complete_partition_on_interface_arrays"
 
 
 def _load_config(config_source: ConfigSource) -> dict[str, Any]:
@@ -67,24 +69,27 @@ def _candidate_output_dir(record: dict[str, Any]) -> Path | None:
     return path.parent
 
 
-def _candidate_strategy(record: dict[str, Any]) -> dict[str, Any]:
+def _candidate_report(
+    record: dict[str, Any],
+    suffix: str,
+) -> dict[str, Any]:
     index = record.get("candidate_index")
     output_dir = _candidate_output_dir(record)
     if not isinstance(index, int) or output_dir is None:
         return {}
-    return _load_optional_json(
-        output_dir / f"candidate_{index:03d}_strategy.json"
-    )
+    return _load_optional_json(output_dir / f"candidate_{index:03d}_{suffix}.json")
+
+
+def _candidate_strategy(record: dict[str, Any]) -> dict[str, Any]:
+    return _candidate_report(record, "strategy")
 
 
 def _candidate_duplicate_report(record: dict[str, Any]) -> dict[str, Any]:
-    index = record.get("candidate_index")
-    output_dir = _candidate_output_dir(record)
-    if not isinstance(index, int) or output_dir is None:
-        return {}
-    return _load_optional_json(
-        output_dir / f"candidate_{index:03d}_duplicate_check.json"
-    )
+    return _candidate_report(record, "duplicate_check")
+
+
+def _candidate_static_report(record: dict[str, Any]) -> dict[str, Any]:
+    return _candidate_report(record, "static_validation")
 
 
 def _duplicate_of(record: dict[str, Any]) -> int | None:
@@ -101,8 +106,7 @@ def _is_duplicate(record: dict[str, Any]) -> bool:
         return True
     report = _candidate_duplicate_report(record)
     return report.get("passed") is False and isinstance(
-        report.get("duplicate_of"),
-        int,
+        report.get("duplicate_of"), int
     )
 
 
@@ -118,10 +122,9 @@ def _resolve_latest_non_duplicate(
         if not isinstance(duplicate_of, int) or duplicate_of in visited:
             return None
         visited.add(duplicate_of)
-        linked = indexed.get(duplicate_of)
-        if linked is None:
+        current = indexed.get(duplicate_of)
+        if current is None:
             return None
-        current = linked
     return current
 
 
@@ -142,14 +145,12 @@ def _validated_balance_evidence(
     resource_rejected_index: Any,
     frequency_rejected_index: Any,
 ) -> dict[str, Any] | None:
-    if not all(
-        isinstance(value, int)
-        for value in (
-            parent_index,
-            resource_rejected_index,
-            frequency_rejected_index,
-        )
-    ):
+    indices = (
+        parent_index,
+        resource_rejected_index,
+        frequency_rejected_index,
+    )
+    if not all(isinstance(value, int) for value in indices):
         return None
 
     parent = indexed.get(parent_index)
@@ -178,6 +179,44 @@ def _validated_balance_evidence(
     }
 
 
+def _balance_evidence_from_strategy(
+    indexed: dict[int, dict[str, Any]],
+    strategy: dict[str, Any],
+) -> dict[str, Any] | None:
+    parameters = strategy.get("parameters") or {}
+    return _validated_balance_evidence(
+        indexed,
+        parent_index=strategy.get("source_candidate_index"),
+        resource_rejected_index=parameters.get(
+            "resource_rejected_candidate_index"
+        ),
+        frequency_rejected_index=parameters.get(
+            "frequency_rejected_candidate_index"
+        ),
+    )
+
+
+def _static_policy_failure(record: dict[str, Any]) -> dict[str, Any] | None:
+    if record.get("verdict") != "reject_static":
+        return None
+    report = _candidate_static_report(record)
+    checks = report.get("checks")
+    failed_checks = [
+        name
+        for name, passed in checks.items()
+        if isinstance(checks, dict) and passed is False
+    ] if isinstance(checks, dict) else []
+    issues = report.get("complete_partition_issues")
+    issues = [item for item in issues if isinstance(item, dict)] if isinstance(issues, list) else []
+    if INTERFACE_PARTITION_CHECK not in failed_checks and not issues:
+        return None
+    return {
+        "candidate_index": record.get("candidate_index"),
+        "failed_checks": failed_checks or [INTERFACE_PARTITION_CHECK],
+        "complete_partition_issues": issues,
+    }
+
+
 def resource_limit_recovery_trigger(
     records: Iterable[dict[str, Any]],
 ) -> dict[str, Any] | None:
@@ -195,7 +234,7 @@ def resource_limit_recovery_trigger(
 def resource_frequency_balance_trigger(
     records: Iterable[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Return both failed boundaries, preserving them across duplicate retries."""
+    """Preserve balanced-search boundaries across duplicate and policy failures."""
     indexed = _indexed_records(records)
     if not indexed:
         return None
@@ -203,35 +242,30 @@ def resource_frequency_balance_trigger(
     latest = indexed[max(indexed)]
     latest_strategy = _candidate_strategy(latest)
 
-    # A balanced-recovery model call may return the feasible parent unchanged.
-    # Preserve the original resource and frequency boundaries rather than losing
-    # the recovery lineage when the evaluator has not yet labelled the duplicate.
-    if (
-        _is_duplicate(latest)
-        and latest_strategy.get("name")
-        == "recover_resource_frequency_balance"
-    ):
-        parameters = latest_strategy.get("parameters") or {}
-        evidence = _validated_balance_evidence(
-            indexed,
-            parent_index=latest_strategy.get("source_candidate_index"),
-            resource_rejected_index=parameters.get(
-                "resource_rejected_candidate_index"
-            ),
-            frequency_rejected_index=parameters.get(
-                "frequency_rejected_candidate_index"
-            ),
-        )
+    if latest_strategy.get("name") == BALANCED_STRATEGY_NAME:
+        evidence = _balance_evidence_from_strategy(indexed, latest_strategy)
         if evidence is None:
             return None
-        return {
-            **evidence,
-            "source_strategy": latest_strategy,
-            "duplicate_escape": {
-                "candidate_index": latest.get("candidate_index"),
-                "duplicate_of_candidate_index": _duplicate_of(latest),
-            },
-        }
+
+        if _is_duplicate(latest):
+            return {
+                **evidence,
+                "source_strategy": latest_strategy,
+                "duplicate_escape": {
+                    "candidate_index": latest.get("candidate_index"),
+                    "duplicate_of_candidate_index": _duplicate_of(latest),
+                },
+                "static_policy_escape": None,
+            }
+
+        static_policy_escape = _static_policy_failure(latest)
+        if static_policy_escape is not None:
+            return {
+                **evidence,
+                "source_strategy": latest_strategy,
+                "duplicate_escape": None,
+                "static_policy_escape": static_policy_escape,
+            }
 
     frequency_rejected = _resolve_latest_non_duplicate(indexed)
     if (
@@ -243,7 +277,6 @@ def resource_frequency_balance_trigger(
     strategy = _candidate_strategy(frequency_rejected)
     if strategy.get("name") != "recover_resource_limits":
         return None
-
     parameters = strategy.get("parameters") or {}
     evidence = _validated_balance_evidence(
         indexed,
@@ -257,6 +290,7 @@ def resource_frequency_balance_trigger(
         **evidence,
         "source_strategy": strategy,
         "duplicate_escape": None,
+        "static_policy_escape": None,
     }
 
 
@@ -363,6 +397,28 @@ def _common_inputs(
     )
 
 
+def _write_prompt_outputs(
+    *,
+    output_dir: Path,
+    next_index: int,
+    prompt: str,
+    strategy: dict[str, Any],
+    feedback_suffix: str,
+    feedback: dict[str, Any],
+) -> Path:
+    prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
+    strategy_path = output_dir / f"candidate_{next_index:03d}_strategy.json"
+    feedback_path = output_dir / f"candidate_{next_index:03d}_{feedback_suffix}.json"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    strategy_path.write_text(json.dumps(strategy, indent=2) + "\n", encoding="utf-8")
+    feedback.update(
+        prompt_file=str(prompt_path.relative_to(REPO_ROOT)),
+        strategy_file=str(strategy_path.relative_to(REPO_ROOT)),
+    )
+    feedback_path.write_text(json.dumps(feedback, indent=2) + "\n", encoding="utf-8")
+    return prompt_path
+
+
 def prepare_resource_recovery_prompt(
     config_source: ConfigSource,
     parent_index: int,
@@ -371,9 +427,7 @@ def prepare_resource_recovery_prompt(
 ) -> Path:
     """Refine a feasible parent using exact evidence from an over-budget design."""
     if next_index <= max(parent_index, rejected_index):
-        raise ValueError(
-            "next_index must be newer than the parent and rejected candidate"
-        )
+        raise ValueError("next_index must be newer than the parent and rejected candidate")
 
     (
         config,
@@ -387,25 +441,15 @@ def prepare_resource_recovery_prompt(
     parent = records.get(parent_index)
     rejected = records.get(rejected_index)
     if parent is None or rejected is None:
-        raise ValueError(
-            "Resource-recovery parent or trigger is missing from the summary"
-        )
+        raise ValueError("Resource-recovery parent or trigger is missing from the summary")
     if rejected.get("verdict") != "reject_resource_limits":
-        raise ValueError(
-            "Resource-recovery trigger must have reject_resource_limits verdict"
-        )
+        raise ValueError("Resource-recovery trigger must have reject_resource_limits verdict")
 
     violations = _normalised_violations(rejected)
     if not violations:
-        raise ValueError(
-            "Resource-recovery trigger has no concrete resource violations"
-        )
-
+        raise ValueError("Resource-recovery trigger has no concrete resource violations")
     violation_lines = "\n".join(
-        (
-            f"- {item['metric']}: actual {item['actual']}, "
-            f"limit {item['limit']}, excess {item['excess']}"
-        )
+        f"- {item['metric']}: actual {item['actual']}, limit {item['limit']}, excess {item['excess']}"
         for item in violations
     )
     required_changes = [
@@ -439,9 +483,7 @@ def prepare_resource_recovery_prompt(
 
     configured_constraints = config.get("prompt_constraints") or []
     constraint_lines = "\n".join(
-        f"- {item}"
-        for item in configured_constraints
-        if isinstance(item, str)
+        f"- {item}" for item in configured_constraints if isinstance(item, str)
     ) or "- Preserve all task-manifest contracts."
     top = config["top_function"]
     prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
@@ -488,56 +530,52 @@ Feasible parent source to modify:
 Original baseline source:
 {baseline_path.read_text(encoding='utf-8')}
 """
-
-    prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
-    feedback_path = (
-        output_dir
-        / f"candidate_{next_index:03d}_resource_recovery_feedback.json"
+    return _write_prompt_outputs(
+        output_dir=output_dir,
+        next_index=next_index,
+        prompt=prompt,
+        strategy=strategy,
+        feedback_suffix="resource_recovery_feedback",
+        feedback={
+            "parent_candidate_index": parent_index,
+            "rejected_candidate_index": rejected_index,
+            "next_candidate_index": next_index,
+            "verdict": "recover_resource_limits",
+            "violations": violations,
+            "required_changes": required_changes,
+            "forbidden_changes": forbidden_changes,
+        },
     )
-    strategy_path = output_dir / f"candidate_{next_index:03d}_strategy.json"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    strategy_path.write_text(
-        json.dumps(strategy, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    feedback_path.write_text(
-        json.dumps(
-            {
-                "parent_candidate_index": parent_index,
-                "rejected_candidate_index": rejected_index,
-                "next_candidate_index": next_index,
-                "verdict": "recover_resource_limits",
-                "violations": violations,
-                "required_changes": required_changes,
-                "forbidden_changes": forbidden_changes,
-                "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
-                "strategy_file": str(strategy_path.relative_to(REPO_ROOT)),
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return prompt_path
 
 
-def _latest_balanced_duplicate(
+def _latest_balanced_attempt(
     records: dict[int, dict[str, Any]],
     next_index: int,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     previous = [index for index in records if index < next_index]
     if not previous:
-        return None
+        return None, None
     latest = records[max(previous)]
-    if not _is_duplicate(latest):
-        return None
     strategy = _candidate_strategy(latest)
-    if strategy.get("name") != "recover_resource_frequency_balance":
-        return None
-    return {
-        "candidate_index": latest.get("candidate_index"),
-        "duplicate_of_candidate_index": _duplicate_of(latest),
-    }
+    if strategy.get("name") != BALANCED_STRATEGY_NAME:
+        return None, None
+    duplicate_escape = None
+    if _is_duplicate(latest):
+        duplicate_escape = {
+            "candidate_index": latest.get("candidate_index"),
+            "duplicate_of_candidate_index": _duplicate_of(latest),
+        }
+    return duplicate_escape, _static_policy_failure(latest)
+
+
+def _static_issue_lines(static_policy_escape: dict[str, Any]) -> str:
+    issues = static_policy_escape.get("complete_partition_issues") or []
+    if not issues:
+        return "- Complete partitioning was detected on a top-level interface array."
+    return "\n".join(
+        f"- {item.get('variable')}: {item.get('pragma')} ({item.get('reason')})"
+        for item in issues
+    )
 
 
 def prepare_resource_frequency_balance_prompt(
@@ -547,12 +585,8 @@ def prepare_resource_frequency_balance_prompt(
     frequency_rejected_index: int,
     next_index: int,
 ) -> Path:
-    """Search between an over-parallel and an under-timed failed design."""
-    if next_index <= max(
-        parent_index,
-        resource_rejected_index,
-        frequency_rejected_index,
-    ):
+    """Search between failed resource/timing boundaries without repeating policy errors."""
+    if next_index <= max(parent_index, resource_rejected_index, frequency_rejected_index):
         raise ValueError("next_index must be newer than all recovery evidence")
 
     (
@@ -570,13 +604,9 @@ def prepare_resource_frequency_balance_prompt(
     if parent is None or resource_rejected is None or frequency_rejected is None:
         raise ValueError("Balanced-recovery evidence is missing from the summary")
     if resource_rejected.get("verdict") != "reject_resource_limits":
-        raise ValueError(
-            "Resource boundary must have reject_resource_limits verdict"
-        )
+        raise ValueError("Resource boundary must have reject_resource_limits verdict")
     if frequency_rejected.get("verdict") != "reject_frequency_threshold":
-        raise ValueError(
-            "Timing boundary must have reject_frequency_threshold verdict"
-        )
+        raise ValueError("Timing boundary must have reject_frequency_threshold verdict")
 
     violations = _normalised_violations(resource_rejected)
     if not violations:
@@ -586,17 +616,14 @@ def prepare_resource_frequency_balance_prompt(
     maximum_clock_period_ns = float(
         config.get(
             "target_clock_period_ns",
-            1000.0 / minimum_frequency_mhz
-            if minimum_frequency_mhz > 0
-            else 0.0,
+            1000.0 / minimum_frequency_mhz if minimum_frequency_mhz > 0 else 0.0,
         )
     )
     timing_metrics = frequency_rejected.get("metrics") or {}
     actual_frequency_mhz = timing_metrics.get("frequency_mhz")
     actual_clock_period_ns = timing_metrics.get("clock_period_ns")
     if not isinstance(actual_clock_period_ns, (int, float)) and isinstance(
-        actual_frequency_mhz,
-        (int, float),
+        actual_frequency_mhz, (int, float)
     ) and actual_frequency_mhz > 0:
         actual_clock_period_ns = 1000.0 / float(actual_frequency_mhz)
     frequency_shortfall_mhz = (
@@ -611,15 +638,12 @@ def prepare_resource_frequency_balance_prompt(
     )
 
     resource_violation_lines = "\n".join(
-        (
-            f"- {item['metric']}: actual {item['actual']}, "
-            f"limit {item['limit']}, excess {item['excess']}"
-        )
+        f"- {item['metric']}: actual {item['actual']}, limit {item['limit']}, excess {item['excess']}"
         for item in violations
     )
     resource_limits = dict(config.get("resource_limits") or {})
     parent_latency_ns = (parent.get("metrics") or {}).get("latency_ns")
-    duplicate_escape = _latest_balanced_duplicate(records, next_index)
+    duplicate_escape, static_policy_escape = _latest_balanced_attempt(records, next_index)
 
     required_changes = [
         "Continue from the fully verified parent; do not refine either failed boundary directly.",
@@ -628,10 +652,7 @@ def prepare_resource_frequency_balance_prompt(
             f"{maximum_clock_period_ns} ns as hard constraints, not secondary goals."
         ),
         "Keep every configured resource metric within its target-device limit.",
-        (
-            f"Seek latency below the feasible parent's {parent_latency_ns} ns using a "
-            "middle-ground architecture."
-        ),
+        f"Seek latency below the feasible parent's {parent_latency_ns} ns using a middle-ground architecture.",
         "Prefer moderate partial unrolling, local loop pipelining, or a bounded local-memory transformation in one critical region.",
         "Preserve register cuts and a short critical path; do not trade timing away merely to achieve II=1.",
     ]
@@ -643,27 +664,54 @@ def prepare_resource_frequency_balance_prompt(
         "Do not completely partition top-level interface arrays.",
         "Do not sacrifice functional correctness, interface compatibility, or bounds safety.",
     ]
-    duplicate_section = ""
+
+    retry_section = ""
+    trigger = "resource_recovery_frequency_failure"
     if duplicate_escape:
         duplicate_index = duplicate_escape["candidate_index"]
         duplicate_of = duplicate_escape["duplicate_of_candidate_index"]
         required_changes.append(
-            (
-                f"Candidate {duplicate_index:03d} duplicated candidate "
-                f"{duplicate_of:03d}; this retry must introduce at least one "
-                "hardware-relevant structural change in the selected target region."
-            )
+            f"Candidate {duplicate_index:03d} duplicated candidate {duplicate_of:03d}; this retry must introduce at least one hardware-relevant structural change in the selected target region."
         )
         forbidden_changes.append(
             "Do not return the feasible parent verbatim or with only comments, whitespace, identifier renaming, or algebraically neutral edits."
         )
-        duplicate_section = f"""
+        retry_section = f"""
 
 Previous balanced-recovery attempt:
 - Candidate {duplicate_index:03d} duplicated candidate {duplicate_of:03d} and was rejected before CSim and synthesis.
 - Change at least one hardware-relevant mechanism: a bounded UNROLL factor, local PIPELINE placement, or bounded local-memory/banking structure in the selected target region.
 - A comment-only, formatting-only, renaming-only, or no-op arithmetic edit is not acceptable.
 """
+        trigger = "resource_frequency_balance_duplicate_escape"
+
+    if static_policy_escape:
+        static_index = static_policy_escape["candidate_index"]
+        required_changes.extend(
+            [
+                f"Candidate {static_index:03d} was rejected by the static interface-partition guard; keep the balanced search lineage but do not refine that rejected source.",
+                "If extra memory ports are needed, copy only a bounded row, column, or tile into a local array and partition only that local array.",
+                "For interface arrays, use no partition pragma or a bounded block/cyclic factor where permitted; never use complete partitioning.",
+                "Introduce a real hardware-relevant change without returning the feasible parent unchanged.",
+            ]
+        )
+        forbidden_changes.extend(
+            [
+                "Do not apply ARRAY_PARTITION complete to A, B, C, or any other top-level interface array.",
+                "Do not repeat any pragma listed in the static-policy failure evidence below.",
+            ]
+        )
+        retry_section = f"""
+
+Previous balanced-recovery static-policy failure:
+- Candidate {static_index:03d} was rejected before CSim and synthesis because it completely partitioned top-level interface arrays.
+- Failed checks: {', '.join(static_policy_escape.get('failed_checks') or [])}
+Exact forbidden pragmas:
+{_static_issue_lines(static_policy_escape)}
+- Use bounded local buffers when banking is needed, and partition only those local buffers.
+- Do not return candidate {parent_index:03d} unchanged.
+"""
+        trigger = "resource_frequency_balance_static_policy_escape"
 
     strategy_parameters: dict[str, Any] = {
         "resource_rejected_candidate_index": resource_rejected_index,
@@ -677,15 +725,24 @@ Previous balanced-recovery attempt:
     }
     if duplicate_escape:
         strategy_parameters.update(
-            duplicate_retry_of_candidate_index=duplicate_escape[
-                "candidate_index"
-            ],
+            duplicate_retry_of_candidate_index=duplicate_escape["candidate_index"],
             duplicate_of_candidate_index=duplicate_escape[
                 "duplicate_of_candidate_index"
             ],
         )
+    if static_policy_escape:
+        strategy_parameters.update(
+            static_policy_retry_of_candidate_index=static_policy_escape[
+                "candidate_index"
+            ],
+            static_policy_failed_checks=static_policy_escape["failed_checks"],
+            static_policy_issues=static_policy_escape[
+                "complete_partition_issues"
+            ],
+        )
+
     strategy = {
-        "name": "recover_resource_frequency_balance",
+        "name": BALANCED_STRATEGY_NAME,
         "parameters": strategy_parameters,
         "reason": (
             "The first failed boundary used excessive parallelism and exceeded device "
@@ -695,18 +752,12 @@ Previous balanced-recovery attempt:
         "forbidden_changes": forbidden_changes,
         "source_candidate_index": parent_index,
         "next_candidate_index": next_index,
-        "trigger": (
-            "resource_frequency_balance_duplicate_escape"
-            if duplicate_escape
-            else "resource_recovery_frequency_failure"
-        ),
+        "trigger": trigger,
     }
 
     configured_constraints = config.get("prompt_constraints") or []
     constraint_lines = "\n".join(
-        f"- {item}"
-        for item in configured_constraints
-        if isinstance(item, str)
+        f"- {item}" for item in configured_constraints if isinstance(item, str)
     ) or "- Preserve all task-manifest contracts."
     top = config["top_function"]
     prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
@@ -729,7 +780,7 @@ Exact resource violations:
 - Estimated clock period: {actual_clock_period_ns} ns
 - Maximum clock period: {maximum_clock_period_ns} ns
 - Clock-period excess: {clock_period_excess_ns} ns
-- Achieved latency: {timing_metrics.get('latency_ns')} ns{duplicate_section}
+- Achieved latency: {timing_metrics.get('latency_ns')} ns{retry_section}
 
 Hard target-device resource limits:
 {_resource_limit_lines(resource_limits)}
@@ -771,41 +822,27 @@ Feasible parent source to modify:
 Original baseline source:
 {baseline_path.read_text(encoding='utf-8')}
 """
-
-    prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
-    feedback_path = (
-        output_dir
-        / f"candidate_{next_index:03d}_resource_frequency_balance_feedback.json"
+    return _write_prompt_outputs(
+        output_dir=output_dir,
+        next_index=next_index,
+        prompt=prompt,
+        strategy=strategy,
+        feedback_suffix="resource_frequency_balance_feedback",
+        feedback={
+            "parent_candidate_index": parent_index,
+            "resource_rejected_candidate_index": resource_rejected_index,
+            "frequency_rejected_candidate_index": frequency_rejected_index,
+            "next_candidate_index": next_index,
+            "verdict": BALANCED_STRATEGY_NAME,
+            "minimum_frequency_mhz": minimum_frequency_mhz,
+            "maximum_clock_period_ns": maximum_clock_period_ns,
+            "frequency_shortfall_mhz": frequency_shortfall_mhz,
+            "clock_period_excess_ns": clock_period_excess_ns,
+            "resource_limits": resource_limits,
+            "resource_violations": violations,
+            "duplicate_escape": duplicate_escape,
+            "static_policy_escape": static_policy_escape,
+            "required_changes": required_changes,
+            "forbidden_changes": forbidden_changes,
+        },
     )
-    strategy_path = output_dir / f"candidate_{next_index:03d}_strategy.json"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    strategy_path.write_text(
-        json.dumps(strategy, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    feedback_path.write_text(
-        json.dumps(
-            {
-                "parent_candidate_index": parent_index,
-                "resource_rejected_candidate_index": resource_rejected_index,
-                "frequency_rejected_candidate_index": frequency_rejected_index,
-                "next_candidate_index": next_index,
-                "verdict": "recover_resource_frequency_balance",
-                "minimum_frequency_mhz": minimum_frequency_mhz,
-                "maximum_clock_period_ns": maximum_clock_period_ns,
-                "frequency_shortfall_mhz": frequency_shortfall_mhz,
-                "clock_period_excess_ns": clock_period_excess_ns,
-                "resource_limits": resource_limits,
-                "resource_violations": violations,
-                "duplicate_escape": duplicate_escape,
-                "required_changes": required_changes,
-                "forbidden_changes": forbidden_changes,
-                "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
-                "strategy_file": str(strategy_path.relative_to(REPO_ROOT)),
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return prompt_path
