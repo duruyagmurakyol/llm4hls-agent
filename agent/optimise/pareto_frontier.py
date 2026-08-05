@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.optimise.strategy_realisation import apply_strategy_realisation
+from agent.optimise.synthesis_equivalence import apply_synthesis_equivalence
 
 OBJECTIVES = (
     "latency_ns",
@@ -52,6 +53,7 @@ def annotate_pareto_frontier(
 ) -> dict[str, Any]:
     """Annotate candidates and write a standalone current-frontier artefact."""
     summary = apply_strategy_realisation(output_dir, summary)
+    summary = apply_synthesis_equivalence(summary)
     frontier = [
         item
         for item in summary.get("pareto_archive", [])
