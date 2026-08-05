@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libfreetype6 \
       libglib2.0-0t64 \
       libice6 \
+      libpixman-1-0 \
       libsm6 \
       libx11-6 \
       libxau6 \
