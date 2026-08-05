@@ -184,27 +184,46 @@ def _tcl_parts(
     open_solution = _first(lines, r"^open_solution(?:\s+-reset)?\b", "open_solution")
     set_part = _first(lines, r"^set_part\b", "set_part")
     create_clock = _first(lines, r"^create_clock\b", "create_clock")
-    design = next(
-        (
-            line.strip()
-            for line in lines
-            if re.match(r"^add_files\b", line.strip())
-            and "-tb" not in line
-            and re.search(r"\.(?:c|cc|cpp|cxx)(?:\s|$)", line.strip())
-        ),
-        None,
-    )
+    design = None
+
+    for line in lines:
+        command = line.strip()
+
+        if not re.match(r"^add_files\b", command):
+            continue
+
+        try:
+            is_testbench, _, source_path = _parse_add_files(command)
+        except ValueError:
+            continue
+
+        if (
+            not is_testbench
+            and re.search(r"\.(?:c|cc|cpp|cxx)$", source_path, re.IGNORECASE)
+        ):
+            design = command
+            break
     if design is None:
         raise ValueError("Could not find baseline design-source add_files command.")
-    auxiliaries = [
-        line.strip()
-        for line in lines
-        if re.match(r"^add_files\b", line.strip())
-        and (
-            (include_testbench and "-tb" in line)
-            or ("-tb" not in line and re.search(r"\.(?:h|hpp)(?:\s|$)", line.strip()))
-        )
-    ]
+    auxiliaries: list[str] = []
+
+    for line in lines:
+        command = line.strip()
+
+        if not re.match(r"^add_files\b", command):
+            continue
+
+        try:
+            is_testbench, _, source_path = _parse_add_files(command)
+        except ValueError:
+            continue
+
+        suffix = Path(source_path).suffix.lower()
+
+        if include_testbench and is_testbench:
+            auxiliaries.append(command)
+        elif not is_testbench and suffix in {".h", ".hpp"}:
+            auxiliaries.append(command)
     if include_testbench and not any("-tb" in line for line in auxiliaries):
         raise ValueError("Could not find baseline testbench add_files command.")
     return (
