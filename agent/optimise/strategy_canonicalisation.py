@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from agent.optimise.source_text import mask_cpp_comments
+
 _PRAGMA_PATTERN = re.compile(
     r"#\s*pragma\s+HLS\s+(PIPELINE|UNROLL)\b([^\n]*)",
     re.IGNORECASE,
@@ -71,12 +73,13 @@ def canonicalise_latency_recovery_directives(
     if isinstance(factor, bool) or not isinstance(factor, int) or factor <= 0:
         return source, 0
 
-    spans = _loop_spans(source)
+    analysed_source = mask_cpp_comments(source)
+    spans = _loop_spans(analysed_source)
     if not spans:
         return source, 0
 
     pragmas: list[dict[str, Any]] = []
-    for match in _PRAGMA_PATTERN.finditer(source):
+    for match in _PRAGMA_PATTERN.finditer(analysed_source):
         factor_match = re.search(
             r"\bfactor\s*=\s*(\d+)",
             match.group(2),
@@ -149,7 +152,9 @@ def canonicalise_latency_recovery_directives(
             unroll_match.end(),
         )
         indent = source[unroll_start : unroll_match.start()]
-        pipeline_text = pipeline_match.group(0).strip()
+        pipeline_text = source[
+            pipeline_match.start() : pipeline_match.end()
+        ].strip()
 
         edits.append((pipeline_start, pipeline_end, ""))
         edits.append(
