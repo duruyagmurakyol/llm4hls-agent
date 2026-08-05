@@ -30,6 +30,7 @@ _SUPPORTED_TASK_TYPES = {
     "synth_fix",
     "structural",
 }
+_SUPPORTED_PROVIDERS = {"siliconflow", "openrouter"}
 
 
 def is_track_a_task(root: Path) -> bool:
@@ -94,9 +95,25 @@ def _positive_float(value: object, *, field: str, default: float) -> float:
 
 
 def _model_config() -> dict[str, Any]:
+    selected_provider = os.environ.get(
+        "LLM4HLS_PROVIDER",
+        "siliconflow",
+    ).strip().casefold()
+    if selected_provider not in _SUPPORTED_PROVIDERS:
+        raise ValueError(
+            "LLM4HLS_PROVIDER must be one of: "
+            + ", ".join(sorted(_SUPPORTED_PROVIDERS))
+        )
+
+    # The existing optimisation configuration validator historically names the
+    # transport "siliconflow". Keep that compatibility field until all legacy
+    # manifests are migrated, while the transport itself reads this explicit
+    # runtime selector.
+    os.environ["LLM4HLS_PROVIDER"] = selected_provider
     max_total = os.environ.get("LLM4HLS_MAX_TOTAL_TOKENS")
     return {
-        "provider": os.environ.get("LLM4HLS_PROVIDER", "siliconflow"),
+        "provider": "siliconflow",
+        "transport_provider": selected_provider,
         "name": os.environ.get("LLM4HLS_MODEL", DEFAULT_MODEL),
         "temperature": float(os.environ.get("LLM4HLS_TEMPERATURE", "0")),
         "max_tokens": int(os.environ.get("LLM4HLS_MAX_OUTPUT_TOKENS", "4096")),
@@ -325,6 +342,7 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
             "credit_budget": credit_budget,
             "requires_cosim": requires_cosim,
             "initial_condition": str(spec.get("initial_condition", "")),
+            "llm_provider": model["transport_provider"],
             "hidden_and_reference_excluded": True,
         },
     }
@@ -344,6 +362,7 @@ def onboard_track_a_task(root: Path) -> TaskManifest:
     print(f"Public testbench: {task.data['artifacts']['testbench'][0]}")
     print(f"Part: {task.data['target']['part']}")
     print(f"Clock: {task.data['target']['clock_period_ns']:g} ns")
+    print(f"LLM provider: {meta['llm_provider']}")
     print(f"Reference credit hint: {meta['credit_budget']}")
     print("Hidden tests/reference solutions copied: no")
     print(f"Staged public package: {task.data['task_root']}")
