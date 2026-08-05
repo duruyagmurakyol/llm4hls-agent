@@ -53,3 +53,6 @@ experiments/track_a_runs/
 experiments/
 logs/
 results/
+
+# Downloaded/generated HLS-Eval benchmark material
+benchmarks/hls_eval_imported/

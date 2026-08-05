@@ -1,0 +1,102 @@
+{
+  "task_id": "hls_eval_gesummv_accumulator_overwrite_repair",
+  "task_kind": "functional_failure",
+  "artifacts": {
+    "source": "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite/src/gesummv.cpp",
+    "testbench": [
+      "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite/testbench/gesummv_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite/src/gesummv.h"
+    ],
+    "specification": "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite/kernel_description.md",
+    "build_files": [
+      "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite/task.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_gesummv",
+    "language": "cpp",
+    "numerical_tolerance": 1e-08,
+    "protected_contract": [
+      "Preserve the exact kernel_gesummv function signature.",
+      "Modify only src/gesummv.cpp.",
+      "Accumulate all 30 products into tmp[i] and y[i].",
+      "Compute final y[i] as alpha*tmp[i] + beta*y[i]."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 3,
+    "max_csim_calls": 4,
+    "max_cosim_calls": 2,
+    "max_synthesis_calls": 2,
+    "max_model_calls": 3,
+    "max_total_tokens": 12288
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval_imported/gesummv/faults/accumulator_overwrite",
+    "editable_files": [
+      "src/gesummv.cpp"
+    ],
+    "protected_files": [
+      "src/gesummv.h",
+      "testbench/gesummv_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/gesummv.h",
+      "testbench/gesummv_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/gesummv.cpp",
+        "testbench/gesummv_tb.cpp",
+        "-o",
+        "host_test"
+      ],
+      "run_command": [
+        "./host_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "adapter": {
+    "kind": "direct_api_repair"
+  },
+  "output_dir": "runs/hls_eval_imported/hls_eval_gesummv_accumulator_overwrite_repair",
+  "provenance": {
+    "upstream_repository": "sharc-lab/hls-eval",
+    "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b",
+    "upstream_directory": "hls_eval_data/polybench/gesummv",
+    "testbench_note": "The upstream print-only harness is retained under golden; the repair case uses a self-checking derivative."
+  }
+}

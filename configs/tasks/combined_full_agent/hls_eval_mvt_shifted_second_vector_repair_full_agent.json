@@ -1,0 +1,118 @@
+{
+  "task_id": "hls_eval_mvt_shifted_second_vector_repair_full_agent",
+  "task_kind": "unknown",
+  "artifacts": {
+    "source": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/src/mvt.cpp",
+    "testbench": [
+      "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/testbench/mvt_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/src/mvt.h"
+    ],
+    "specification": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/kernel_description.md",
+    "build_files": [
+      "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/task.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_mvt",
+    "language": "cpp",
+    "numerical_tolerance": 1e-08,
+    "protected_contract": [
+      "Preserve the exact kernel_mvt function signature.",
+      "Modify only src/mvt.cpp.",
+      "Update x1 using A[i][j] and y_1[j].",
+      "Update x2 using A[j][i] and the matching y_2[j] element."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {
+      "lut": 70560,
+      "ff": 141120,
+      "dsp": 360,
+      "bram_18k": 432
+    }
+  },
+  "budgets": {
+    "max_iterations": 8,
+    "max_csim_calls": 10,
+    "max_cosim_calls": 10,
+    "max_synthesis_calls": 10,
+    "max_model_calls": 8,
+    "max_total_tokens": 32768
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector",
+    "editable_files": [
+      "src/mvt.cpp"
+    ],
+    "protected_files": [
+      "src/mvt.h",
+      "testbench/mvt_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/mvt.h",
+      "testbench/mvt_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/mvt.cpp",
+        "testbench/mvt_tb.cpp",
+        "-o",
+        "host_test"
+      ],
+      "run_command": [
+        "./host_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "adapter": {
+    "kind": "auto"
+  },
+  "output_dir": "runs/combined_full_agent/hls_eval_mvt_shifted_second_vector_repair_full_agent",
+  "provenance": {
+    "upstream_repository": "sharc-lab/hls-eval",
+    "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b",
+    "upstream_directory": "hls_eval_data/polybench/mvt",
+    "testbench_note": "The upstream print-only harness is retained under golden; the repair case uses a self-checking derivative."
+  },
+  "source_task_manifest": "configs/tasks/hls_eval_imported/mvt_shifted_second_vector.json",
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Optimise only after kernel_mvt has become a fully verified repaired baseline.",
+      "Preserve the exact top-level interface and all testbench-observed behaviour.",
+      "Treat 100 MHz and the configured FPGA resource limits as hard constraints.",
+      "Use hardware-relevant HLS transformations rather than comments, renaming, or no-op rewrites.",
+      "Do not completely partition top-level interface arrays."
+    ]
+  }
+}

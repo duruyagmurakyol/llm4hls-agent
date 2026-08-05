@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "sharc-lab/hls-eval",
+    "commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b"
+  },
+  "benchmarks": [
+    "gemver",
+    "gesummv",
+    "mvt",
+    "syrk"
+  ],
+  "cases": [
+    "configs/tasks/hls_eval_imported/gemver_transpose_access.json",
+    "configs/tasks/hls_eval_imported/gesummv_accumulator_overwrite.json",
+    "configs/tasks/hls_eval_imported/mvt_shifted_second_vector.json",
+    "configs/tasks/hls_eval_imported/syrk_missing_diagonal_scaling.json"
+  ],
+  "model": "Qwen/Qwen3.5-122B-A10B",
+  "repetitions_recommended": 3
+}

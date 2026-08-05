@@ -1,0 +1,103 @@
+{
+  "task_id": "hls_eval_syrk_missing_diagonal_scaling_repair",
+  "task_kind": "functional_failure",
+  "artifacts": {
+    "source": "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling/src/syrk.cpp",
+    "testbench": [
+      "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling/testbench/syrk_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling/src/syrk.h"
+    ],
+    "specification": "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling/kernel_description.md",
+    "build_files": [
+      "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling/task.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_syrk",
+    "language": "cpp",
+    "numerical_tolerance": 1e-08,
+    "protected_contract": [
+      "Preserve the exact kernel_syrk function signature.",
+      "Modify only src/syrk.cpp.",
+      "Scale every lower-triangular element including C[i][i] by beta.",
+      "Accumulate all 20 alpha*A[i][k]*A[j][k] terms for j <= i.",
+      "Leave the upper triangle unchanged."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 3,
+    "max_csim_calls": 4,
+    "max_cosim_calls": 2,
+    "max_synthesis_calls": 2,
+    "max_model_calls": 3,
+    "max_total_tokens": 12288
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval_imported/syrk/faults/missing_diagonal_scaling",
+    "editable_files": [
+      "src/syrk.cpp"
+    ],
+    "protected_files": [
+      "src/syrk.h",
+      "testbench/syrk_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/syrk.h",
+      "testbench/syrk_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/syrk.cpp",
+        "testbench/syrk_tb.cpp",
+        "-o",
+        "host_test"
+      ],
+      "run_command": [
+        "./host_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "adapter": {
+    "kind": "direct_api_repair"
+  },
+  "output_dir": "runs/hls_eval_imported/hls_eval_syrk_missing_diagonal_scaling_repair",
+  "provenance": {
+    "upstream_repository": "sharc-lab/hls-eval",
+    "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b",
+    "upstream_directory": "hls_eval_data/polybench/syrk",
+    "testbench_note": "The upstream print-only harness is retained under golden; the repair case uses a self-checking derivative."
+  }
+}
