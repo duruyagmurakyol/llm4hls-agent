@@ -41,6 +41,64 @@ def _candidate_output_dir(record: dict[str, Any]) -> Path | None:
     return path.parent
 
 
+def _candidate_strategy(record: dict[str, Any]) -> dict[str, Any]:
+    index = record.get("candidate_index")
+    output_dir = _candidate_output_dir(record)
+    if not isinstance(index, int) or output_dir is None:
+        return {}
+    return _load_optional_json(
+        output_dir / f"candidate_{index:03d}_strategy.json"
+    )
+
+
+def _latency_recovery_source(record: dict[str, Any]) -> int | None:
+    strategy = _candidate_strategy(record)
+    if strategy.get("name") != "recover_latency_tradeoff":
+        return None
+    source = strategy.get("source_candidate_index")
+    return source if isinstance(source, int) else None
+
+
+def _is_latency_recovery_descendant(record: dict[str, Any]) -> bool:
+    index = record.get("candidate_index")
+    source = _latency_recovery_source(record)
+    return isinstance(index, int) and isinstance(source, int) and source != index
+
+
+def _failed_latency_recovery_sources(
+    records: list[dict[str, Any]],
+) -> set[int]:
+    failed: set[int] = set()
+    for record in records:
+        source = _latency_recovery_source(record)
+        index = record.get("candidate_index")
+        output_dir = _candidate_output_dir(record)
+        if (
+            not isinstance(source, int)
+            or not isinstance(index, int)
+            or output_dir is None
+        ):
+            continue
+
+        if record.get("verdict") == "reject_strategy_not_realised":
+            failed.add(source)
+            continue
+
+        if record.get("verdict") != "reject_static":
+            continue
+        static = _load_optional_json(
+            output_dir / f"candidate_{index:03d}_static_validation.json"
+        )
+        compliance = static.get("strategy_compliance")
+        if (
+            isinstance(compliance, dict)
+            and compliance.get("required") is True
+            and compliance.get("passed") is False
+        ):
+            failed.add(source)
+    return failed
+
+
 def _is_latency_recovery_opportunity(record: dict[str, Any]) -> bool:
     if not (
         record.get("fully_verified") is True
@@ -107,13 +165,18 @@ def _pending_latency_recovery_parent(
 ) -> tuple[dict[str, Any], str] | None:
     pending: list[dict[str, Any]] = []
     required_factors = set(LATENCY_RECOVERY_FACTORS)
+    failed_sources = _failed_latency_recovery_sources(records)
 
     for record in records:
         if not _is_latency_recovery_opportunity(record):
             continue
+        if _is_latency_recovery_descendant(record):
+            continue
         index = record.get("candidate_index")
         output_dir = _candidate_output_dir(record)
         if not isinstance(index, int) or output_dir is None:
+            continue
+        if index in failed_sources:
             continue
         completed = _completed_latency_recovery_factors(output_dir, index)
         if not required_factors.issubset(completed):
