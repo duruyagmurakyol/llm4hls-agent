@@ -19,6 +19,16 @@ METRIC_KEYS = (
     "resources_bram_used",
     "frequency_mhz",
 )
+BUDGET_FIELDS = {
+    "input_tokens": "input_tokens",
+    "output_tokens": "output_tokens",
+    "total_tokens": "total_tokens",
+    "budget_iterations_used": "iterations",
+    "budget_model_calls_used": "model_calls",
+    "budget_csim_calls_used": "csim_calls",
+    "budget_synthesis_calls_used": "synthesis_calls",
+    "budget_cosim_calls_used": "cosim_calls",
+}
 
 
 def _load_object(path: Path, *, required: bool = True) -> dict[str, Any]:
@@ -68,6 +78,42 @@ def _task_output_dir(row: dict[str, Any], suite_root: Path, repo_root: Path) -> 
     raise ValueError("Suite row has neither unified_result nor task_id")
 
 
+def _normalise_identity(raw: dict[str, Any]) -> tuple[Any, Any]:
+    """Recover the actual benchmark and fault from the stable parent task ID."""
+    task_id = raw.get("task_id")
+    base = str(task_id).split("__", 1)[0] if task_id else ""
+    suffix = "_repair_full_agent"
+    if base.endswith(suffix):
+        base = base[: -len(suffix)]
+
+    if base.startswith("dot_product_"):
+        return "dot_product", base.removeprefix("dot_product_")
+    if base.startswith("gemm_"):
+        return "gemm", base.removeprefix("gemm_")
+    if base.startswith("hls_eval_"):
+        remainder = base.removeprefix("hls_eval_")
+        benchmark, separator, case = remainder.partition("_")
+        if separator:
+            return benchmark, case
+
+    return raw.get("benchmark"), raw.get("case")
+
+
+def _budget_row_values(raw: dict[str, Any], budget: dict[str, Any]) -> dict[str, Any]:
+    """Prefer the task-wide BudgetState summary over stale suite-row fields."""
+    consumed = budget.get("consumed")
+    consumed = consumed if isinstance(consumed, dict) else {}
+    values: dict[str, Any] = {}
+    for row_key, consumed_key in BUDGET_FIELDS.items():
+        authoritative = consumed.get(consumed_key)
+        values[row_key] = (
+            authoritative
+            if _number(authoritative) is not None
+            else raw.get(row_key)
+        )
+    return values
+
+
 def extract_run_rows(suite_root: Path, *, repo_root: Path = REPO_ROOT) -> list[dict[str, Any]]:
     suite_root = suite_root.expanduser().resolve()
     repo_root = repo_root.expanduser().resolve()
@@ -81,6 +127,8 @@ def extract_run_rows(suite_root: Path, *, repo_root: Path = REPO_ROOT) -> list[d
         if not isinstance(raw, dict):
             continue
         output_dir = _task_output_dir(raw, suite_root, repo_root)
+        unified = _load_object(output_dir / "unified_agent_result.json", required=False)
+        budget = _load_object(output_dir / "budget_summary.json", required=False)
         experiment = _load_object(output_dir / "experiment_summary.json", required=False)
         selected = experiment.get("selected_design")
         selected = selected if isinstance(selected, dict) else {}
@@ -90,25 +138,23 @@ def extract_run_rows(suite_root: Path, *, repo_root: Path = REPO_ROOT) -> list[d
         selected_metrics = selected_metrics if isinstance(selected_metrics, dict) else {}
         candidates = experiment.get("candidates")
         candidates = candidates if isinstance(candidates, list) else []
+        benchmark, case = _normalise_identity(raw)
+        budget_values = _budget_row_values(raw, budget)
 
         row: dict[str, Any] = {
-            "benchmark": raw.get("benchmark"),
-            "case": raw.get("case"),
+            "benchmark": benchmark,
+            "case": case,
             "repetition": raw.get("repetition"),
             "task_id": raw.get("task_id"),
-            "success": raw.get("success"),
-            "status": raw.get("status"),
-            "termination_reason": raw.get("termination_reason"),
+            "success": unified.get("success", raw.get("success")),
+            "status": unified.get("status", raw.get("status")),
+            "termination_reason": unified.get(
+                "termination_reason", raw.get("termination_reason")
+            ),
             "timed_out": raw.get("timed_out"),
             "elapsed_seconds": raw.get("elapsed_seconds"),
-            "input_tokens": raw.get("input_tokens"),
-            "output_tokens": raw.get("output_tokens"),
-            "total_tokens": raw.get("total_tokens"),
-            "budget_iterations_used": raw.get("budget_iterations_used"),
-            "budget_model_calls_used": raw.get("budget_model_calls_used"),
-            "budget_csim_calls_used": raw.get("budget_csim_calls_used"),
-            "budget_synthesis_calls_used": raw.get("budget_synthesis_calls_used"),
-            "budget_cosim_calls_used": raw.get("budget_cosim_calls_used"),
+            **budget_values,
+            "budget_stop_reason": budget.get("stop_reason"),
             "candidate_count": len(candidates),
             "fully_verified_candidate_count": sum(
                 isinstance(candidate, dict) and candidate.get("fully_verified") is True
@@ -120,6 +166,7 @@ def extract_run_rows(suite_root: Path, *, repo_root: Path = REPO_ROOT) -> list[d
             "selected_fully_verified": selected.get("fully_verified"),
             "selected_frequency_compliant": selected.get("meets_frequency_requirement"),
             "selected_resource_compliant": selected.get("meets_resource_limits"),
+            "budget_summary": str(output_dir / "budget_summary.json"),
             "experiment_summary": str(output_dir / "experiment_summary.json"),
         }
         for key in METRIC_KEYS:
@@ -163,6 +210,8 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "budget_csim_calls_used",
         "budget_synthesis_calls_used",
         "budget_cosim_calls_used",
+        "candidate_count",
+        "fully_verified_candidate_count",
     ):
         values = _numeric(row.get(key) for row in rows)
         result[f"total_{key}"] = round(sum(values), 6) if values else 0
@@ -192,7 +241,7 @@ def build_final_report(suite_root: Path, *, repo_root: Path = REPO_ROOT) -> dict
     suite_root = suite_root.expanduser().resolve()
     rows = extract_run_rows(suite_root, repo_root=repo_root)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite_root": str(suite_root),
         "overall": _aggregate(rows),
         "by_benchmark": _group(rows, ("benchmark",)),
@@ -235,10 +284,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"| Success rate | {_format(overall['success_rate_percent'])}% |",
         f"| Optimised candidate selected | {_format(overall['optimised_candidate_selected'])} |",
         f"| Baseline retained | {_format(overall['baseline_retained'])} |",
+        f"| Candidates evaluated | {_format(overall['total_candidate_count'])} |",
+        f"| Fully verified candidates | {_format(overall['total_fully_verified_candidate_count'])} |",
         f"| Input tokens | {_format(overall['total_input_tokens'])} |",
         f"| Output tokens | {_format(overall['total_output_tokens'])} |",
         f"| Total tokens | {_format(overall['total_total_tokens'])} |",
         f"| Model calls | {_format(overall['total_budget_model_calls_used'])} |",
+        f"| CSim calls | {_format(overall['total_budget_csim_calls_used'])} |",
+        f"| Synthesis calls | {_format(overall['total_budget_synthesis_calls_used'])} |",
+        f"| Co-simulation calls | {_format(overall['total_budget_cosim_calls_used'])} |",
         f"| Runtime | {_format(overall['total_elapsed_hours'])} h |",
         "",
         "## By benchmark",
