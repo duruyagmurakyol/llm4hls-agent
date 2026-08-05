@@ -18,6 +18,11 @@ from agent.optimise.duplicate import check_candidate_duplicate
 from agent.optimise.evaluate import evaluate_experiment as _evaluate_experiment
 from agent.optimise.generate import generate_candidate
 from agent.optimise.parent_selection import select_refinement_parent
+from agent.optimise.resource_recovery import (
+    is_resource_recovery_reason,
+    prepare_resource_recovery_prompt,
+    resource_limit_recovery_trigger,
+)
 from agent.tools.cosim import run_candidate_cosim
 from agent.tools.synthesis import ensure_baseline_synthesis, run_candidate_csim, run_candidate_synthesis
 from agent.tools.validation import validate_ppa_candidate
@@ -229,7 +234,21 @@ def _prepare_next_prompt(
     previous: dict[str, Any],
     previous_index: int,
     next_index: int,
+    summary: dict[str, Any],
+    parent_reason: str,
 ) -> None:
+    if is_resource_recovery_reason(parent_reason):
+        rejected = resource_limit_recovery_trigger(summary.get("candidates", []))
+        if rejected is None:
+            raise RuntimeError("Resource-recovery parent selected without a rejection trigger")
+        prepare_resource_recovery_prompt(
+            config_source,
+            previous_index,
+            int(rejected["candidate_index"]),
+            next_index,
+        )
+        return
+
     if previous.get("verdict") in {"keep_pareto_candidate", "accept_dominates_baseline"}:
         prepare_tradeoff_prompt(config_source, previous_index, next_index)
     else:
@@ -437,7 +456,10 @@ def run_optimisation(
             ]
             if not completed:
                 return _finish(False, "failed", "no_completed_candidate_for_feedback", summary, trajectory)
-            parent_selection = select_refinement_parent(completed)
+            parent_selection = select_refinement_parent(
+                completed,
+                config.get("selection"),
+            )
             if parent_selection is None:
                 return _finish(False, "failed", "no_viable_refinement_parent", summary, trajectory)
             previous, parent_reason = parent_selection
@@ -451,7 +473,14 @@ def run_optimisation(
                     "next_candidate": index,
                 }
             )
-            _prepare_next_prompt(config_source, previous, previous_index, index)
+            _prepare_next_prompt(
+                config_source,
+                previous,
+                previous_index,
+                index,
+                summary,
+                parent_reason,
+            )
 
         model_calls = len(list(output_dir.glob("candidate_*_model_metadata.json")))
         if model_calls >= maximum_candidates:
