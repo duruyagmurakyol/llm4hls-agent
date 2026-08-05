@@ -1,0 +1,14 @@
+services:
+  llm4hls-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    working_dir: /workspace/llm4hls-agent
+    environment:
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_KEY: ${SILICONFLOW_KEY:-}
+      VITIS_ROOT: /opt/Xilinx/2025.2
+    volumes:
+      - ..:/workspace/llm4hls-agent
+      - /home/xilinx/Xilinx/2025.2:/opt/Xilinx/2025.2:ro
+    command: ["python3", "scripts/run_agent.py", "--help"]
