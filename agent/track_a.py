@@ -171,6 +171,20 @@ def _write_cfg(
     )
 
 
+def _host_compile_command(kernel: str, public_tb: str) -> list[str]:
+    """Build the cheap public host test with the active Vitis header tree."""
+
+    command = (
+        "set -e; "
+        "vitis_run=$(command -v vitis-run); "
+        "vitis_root=$(cd \"$(dirname \"$vitis_run\")/..\" && pwd); "
+        "g++ -std=c++17 -I. -I\"$vitis_root/include\" "
+        f"{shlex.quote(kernel)} {shlex.quote(public_tb)} "
+        "-o .agent_host_test"
+    )
+    return ["bash", "-lc", command]
+
+
 def resolve_track_a_task(root: Path) -> TaskManifest:
     """Stage a public Track-A package and return the existing auto manifest."""
 
@@ -253,16 +267,7 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
         "task.cfg",
     ]
     context = [*header_names, public_tb_name, "description.md"]
-    host_command = [
-        "g++",
-        "-std=c++17",
-        "-I",
-        ".",
-        kernel_name,
-        public_tb_name,
-        "-o",
-        ".agent_host_test",
-    ]
+    host_command = _host_compile_command(kernel_name, public_tb_name)
     independent_command = [
         "bash",
         "-lc",
