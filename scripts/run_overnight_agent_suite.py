@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts import run_overnight_repair_suite as suite
+import run_overnight_repair_suite as suite
 
 _original_validate_task_inputs = suite.validate_task_inputs
 
