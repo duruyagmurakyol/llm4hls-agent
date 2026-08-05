@@ -19,8 +19,11 @@ from agent.optimise.evaluate import evaluate_experiment as _evaluate_experiment
 from agent.optimise.generate import generate_candidate
 from agent.optimise.parent_selection import select_refinement_parent
 from agent.optimise.resource_recovery import (
+    is_resource_frequency_balance_reason,
     is_resource_recovery_reason,
+    prepare_resource_frequency_balance_prompt,
     prepare_resource_recovery_prompt,
+    resource_frequency_balance_trigger,
     resource_limit_recovery_trigger,
 )
 from agent.tools.cosim import run_candidate_cosim
@@ -237,6 +240,25 @@ def _prepare_next_prompt(
     summary: dict[str, Any],
     parent_reason: str,
 ) -> None:
+    if is_resource_frequency_balance_reason(parent_reason):
+        trigger = resource_frequency_balance_trigger(
+            summary.get("candidates", [])
+        )
+        if trigger is None:
+            raise RuntimeError(
+                "Balanced-recovery parent selected without both failed boundaries"
+            )
+        resource_rejected = trigger["resource_rejected"]
+        frequency_rejected = trigger["frequency_rejected"]
+        prepare_resource_frequency_balance_prompt(
+            config_source,
+            previous_index,
+            int(resource_rejected["candidate_index"]),
+            int(frequency_rejected["candidate_index"]),
+            next_index,
+        )
+        return
+
     if is_resource_recovery_reason(parent_reason):
         rejected = resource_limit_recovery_trigger(summary.get("candidates", []))
         if rejected is None:
