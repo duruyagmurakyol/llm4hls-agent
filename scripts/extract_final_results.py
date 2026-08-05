@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agent.reporting import build_final_report, write_final_report
+from agent.terminal_reporting import render_suite_terminal
 
 
 def main() -> None:
@@ -25,18 +26,12 @@ def main() -> None:
 
     paths = write_final_report(args.suite_root, output_dir=args.output_dir)
     report = build_final_report(args.suite_root)
-    overall = report["overall"]
-    print(
-        "Extracted {runs} runs: {successes} successful, {optimised} optimised selections, "
-        "{retained} baselines retained.".format(
-            runs=overall["runs"],
-            successes=overall["successful_runs"],
-            optimised=overall["optimised_candidate_selected"],
-            retained=overall["baseline_retained"],
-        )
-    )
+
+    print(render_suite_terminal(report))
+    print("\nOutput files")
+    print("============")
     for label, path in paths.items():
-        print(f"{label}: {path}")
+        print(f"{label + ':':<12}{path}")
 
 
 if __name__ == "__main__":
