@@ -166,7 +166,8 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
     ]
     outer_pipeline = False
     outer_unroll = False
-    all_unroll_factors: list[int] = []
+    loop_unroll_factors: list[int] = []
+    outer_unroll_factors: list[int] = []
     complete_unroll = False
 
     pragma_pattern = re.compile(
@@ -187,20 +188,19 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
 
         factor_match = re.search(r"\bfactor\s*=\s*(\d+)", arguments, re.I)
         pragma_factor = int(factor_match.group(1)) if factor_match else None
-        if pragma_factor is None:
-            complete_unroll = True
-        else:
-            all_unroll_factors.append(pragma_factor)
 
         if loop_index is None:
             outer_unroll = True
+            if pragma_factor is not None:
+                outer_unroll_factors.append(pragma_factor)
+            continue
+
+        if pragma_factor is None:
+            complete_unroll = True
+            loop_directives[loop_index]["complete_unroll"] = True
         else:
-            if pragma_factor is None:
-                loop_directives[loop_index]["complete_unroll"] = True
-            else:
-                loop_directives[loop_index]["unroll_factors"].append(
-                    pragma_factor
-                )
+            loop_unroll_factors.append(pragma_factor)
+            loop_directives[loop_index]["unroll_factors"].append(pragma_factor)
 
     matching_loop = any(
         directives["pipeline"] is True
@@ -211,12 +211,18 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         directives["pipeline"] is True
         for directives in loop_directives
     )
+    factor_inside_loop = factor in loop_unroll_factors
+    requires_matching_pipeline = name == "recover_latency_tradeoff"
 
     return {
         "required": True,
         "passed": (
             factor > 0
-            and matching_loop
+            and (
+                matching_loop
+                if requires_matching_pipeline
+                else factor_inside_loop
+            )
             and not complete_unroll
             and not outer_pipeline
             and not outer_unroll
@@ -224,12 +230,14 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         "strategy": name,
         "expected": {
             "factor": factor,
-            "pipeline_and_unroll_on_same_loop": True,
+            "factor_inside_loop": True,
+            "pipeline_and_unroll_on_same_loop": requires_matching_pipeline,
             "outer_pipeline": False,
             "outer_unroll": False,
         },
         "observed": {
-            "loop_unroll_factors": all_unroll_factors,
+            "loop_unroll_factors": loop_unroll_factors,
+            "outer_unroll_factors": outer_unroll_factors,
             "complete_unroll": complete_unroll,
             "loop_pipeline": loop_pipeline,
             "matching_pipeline_unroll_loop": matching_loop,
