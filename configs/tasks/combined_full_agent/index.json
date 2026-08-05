@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "suite_kind": "repair_then_optimise",
+  "source_indexes": [
+    "configs/tasks/repair_suite/index.json",
+    "configs/tasks/hls_eval_imported/index.json"
+  ],
+  "cases": [
+    "configs/tasks/combined_full_agent/gemm_functional_wrong_sign_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/gemm_indexing_shift_b_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/gemm_loop_bound_missing_k_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/gemm_staged_compile_then_indexing_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/dot_product_accumulator_overwrite_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/dot_product_indexing_shift_b_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/dot_product_loop_bound_missing_last_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/dot_product_staged_compile_then_indexing_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/hls_eval_gemver_transpose_access_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/hls_eval_gesummv_accumulator_overwrite_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/hls_eval_mvt_shifted_second_vector_repair_full_agent.json",
+    "configs/tasks/combined_full_agent/hls_eval_syrk_missing_diagonal_scaling_repair_full_agent.json"
+  ],
+  "task_ids": [
+    "gemm_functional_wrong_sign_repair_full_agent",
+    "gemm_indexing_shift_b_repair_full_agent",
+    "gemm_loop_bound_missing_k_repair_full_agent",
+    "gemm_staged_compile_then_indexing_repair_full_agent",
+    "dot_product_accumulator_overwrite_repair_full_agent",
+    "dot_product_indexing_shift_b_repair_full_agent",
+    "dot_product_loop_bound_missing_last_repair_full_agent",
+    "dot_product_staged_compile_then_indexing_repair_full_agent",
+    "hls_eval_gemver_transpose_access_repair_full_agent",
+    "hls_eval_gesummv_accumulator_overwrite_repair_full_agent",
+    "hls_eval_mvt_shifted_second_vector_repair_full_agent",
+    "hls_eval_syrk_missing_diagonal_scaling_repair_full_agent"
+  ],
+  "case_count": 12,
+  "recommended_repetitions": 3,
+  "workflow": [
+    "initial_csim",
+    "repair_if_required",
+    "post_repair_synthesis",
+    "post_repair_cosim",
+    "promote_verified_baseline",
+    "ppa_optimisation",
+    "select_best_fully_verified_design"
+  ],
+  "shared_budget": {
+    "max_iterations": 8,
+    "max_model_calls": 8,
+    "max_csim_calls": 10,
+    "max_synthesis_calls": 10,
+    "max_cosim_calls": 10,
+    "max_total_tokens": 32768
+  }
+}

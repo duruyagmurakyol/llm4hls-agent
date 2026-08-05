@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "suite_kind": "structural_diversity",
+  "purpose": "Evaluate repair and optimisation on a non-matrix producer-consumer HLS dataflow design.",
+  "cases": [
+    "configs/tasks/structural_diversity/stream_pipeline_bias_repair_full_agent.json"
+  ],
+  "task_ids": [
+    "stream_pipeline_bias_repair_full_agent"
+  ],
+  "case_count": 1,
+  "recommended_repetitions": 3,
+  "target": {
+    "board": "AMD Alveo U55C",
+    "part": "xcu55c-fsvh2892-2L-e",
+    "tool_version": "2025.2",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0
+  }
+}

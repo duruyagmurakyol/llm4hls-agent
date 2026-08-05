@@ -47,3 +47,12 @@ results/experiments/
 experiments/atax/autonomous_ppa/
 experiments/track_a/
 experiments/track_a_runs/
+.venv
+
+# Generated autonomous-agent evidence
+experiments/
+logs/
+results/
+
+# Downloaded/generated HLS-Eval benchmark material
+benchmarks/hls_eval_imported/

@@ -1,0 +1,110 @@
+{
+  "task_id": "dot_product_loop_bound_missing_last_repair_full_agent",
+  "task_kind": "unknown",
+  "artifacts": {
+    "source": "benchmarks/repair_suite/dot_product/loop_bound_missing_last/src/dot_product.cpp",
+    "testbench": [
+      "benchmarks/repair_suite/dot_product/loop_bound_missing_last/testbench/dot_product_test.cpp"
+    ],
+    "headers": [
+      "benchmarks/repair_suite/dot_product/loop_bound_missing_last/src/dot_product.h"
+    ],
+    "specification": null,
+    "build_files": [
+      "benchmarks/repair_suite/dot_product/loop_bound_missing_last/task.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "dot_product",
+    "language": "cpp",
+    "numerical_tolerance": null,
+    "protected_contract": [
+      "Preserve the exact dot_product function signature.",
+      "Modify only src/dot_product.cpp.",
+      "Compute the full eight-element dot product exactly once per element.",
+      "Write the accumulated result through the result reference."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xczu3eg-sfvc784-2-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {
+      "lut": 70560,
+      "ff": 141120,
+      "dsp": 360,
+      "bram_18k": 432
+    }
+  },
+  "budgets": {
+    "max_iterations": 8,
+    "max_csim_calls": 10,
+    "max_cosim_calls": 10,
+    "max_synthesis_calls": 10,
+    "max_model_calls": 8,
+    "max_total_tokens": 32768
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/repair_suite/dot_product/loop_bound_missing_last",
+    "editable_files": [
+      "src/dot_product.cpp"
+    ],
+    "protected_files": [
+      "src/dot_product.h",
+      "testbench/dot_product_test.cpp",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/dot_product.h",
+      "testbench/dot_product_test.cpp",
+      "task.cfg"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/dot_product.cpp",
+        "testbench/dot_product_test.cpp",
+        "-o",
+        "host_test"
+      ],
+      "run_command": [
+        "./host_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "adapter": {
+    "kind": "auto"
+  },
+  "output_dir": "runs/combined_full_agent/dot_product_loop_bound_missing_last_repair_full_agent",
+  "source_task_manifest": "configs/tasks/repair_suite/dot_product_loop_bound_missing_last.json",
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Optimise only after dot_product has become a fully verified repaired baseline.",
+      "Preserve the exact top-level interface and all testbench-observed behaviour.",
+      "Treat 100 MHz and the configured FPGA resource limits as hard constraints.",
+      "Use hardware-relevant HLS transformations rather than comments, renaming, or no-op rewrites.",
+      "Do not completely partition top-level interface arrays."
+    ]
+  }
+}

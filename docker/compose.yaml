@@ -1,0 +1,17 @@
+services:
+  llm4hls-agent:
+    image: llm4hls-agent:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    working_dir: /workspace/llm4hls-agent
+    environment:
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_KEY: ${SILICONFLOW_KEY:-}
+      VITIS_ROOT: /home/xilinx/Xilinx/2025.2
+    volumes:
+      - ..:/workspace/llm4hls-agent
+      # AMD setup scripts contain absolute paths from the host installation.
+      # Preserve that path inside the container instead of relocating it to /opt.
+      - /home/xilinx/Xilinx/2025.2:/home/xilinx/Xilinx/2025.2:ro
+    command: ["python3", "scripts/run_agent.py", "--help"]

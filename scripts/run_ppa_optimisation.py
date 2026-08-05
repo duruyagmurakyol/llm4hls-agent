@@ -109,14 +109,44 @@ def map_target_to_source(config: dict[str, Any], repo_root: Path, diagnosis_path
     loop_label = configured_label if isinstance(configured_label, str) and configured_label else infer_loop_label(selected_name)
     source_path = repo_root / config["baseline"]["source"]
     lines = source_path.read_text(encoding="utf-8").splitlines()
-    start, end = find_labelled_loop(lines, loop_label)
+    try:
+        start, end = find_labelled_loop(lines, loop_label)
+    except ValueError:
+        loop_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if re.search(r"\b(for|while)\s*\(", line)
+            ),
+            None,
+        )
+        if loop_index is None:
+            raise ValueError(
+                f"Could not map diagnosis target '{selected_name}' to a source loop"
+            )
+
+        depth = 0
+        started = False
+        end = loop_index
+
+        for index in range(loop_index, len(lines)):
+            depth += lines[index].count("{")
+            started = started or "{" in lines[index]
+            depth -= lines[index].count("}")
+            end = index
+
+            if started and depth == 0:
+                break
+
+        start = loop_index
+        loop_label = None
     excerpt = "\n".join(f"{i + 1:4d}: {lines[i]}" for i in range(max(0, start - 3), min(len(lines), end + 4)))
     output_path = repo_root / config["output_dir"] / "baseline_source_target.json"
     output_path.write_text(json.dumps({
         "target_name": selected_name,
         "loop_label": loop_label,
         "source_file": str(source_path.relative_to(repo_root)),
-        "label_line": start + 1,
+        "label_line": start + 1 if loop_label else None,
         "region_start_line": start + 1,
         "region_end_line": end + 1,
         "diagnosis": selected,

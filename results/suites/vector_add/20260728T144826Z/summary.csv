@@ -1,5 +1,0 @@
-experiment_id,config,runner_return_code,pre_host_validation_passed,agent_return_code,tokens_used,modified_files,protected_files_unchanged,editable_scope_respected,post_host_validation_passed,independent_validation_passed,repair_diff_present,result_path,passed
-vector_add_autonomous_functional,configs/vector_add/autonomous_functional.json,0,False,0,7282,src/vector_add.cpp,True,True,True,True,True,results/experiments/vector_add_autonomous_functional/20260728T144826Z/result.json,True
-vector_add_autonomous_indexing,configs/vector_add/autonomous_indexing.json,0,False,0,16503,src/vector_add.cpp,True,True,True,True,True,results/experiments/vector_add_autonomous_indexing/20260728T144907Z/result.json,True
-vector_add_autonomous_interface,configs/vector_add/autonomous_interface.json,0,False,0,16638,src/vector_add.cpp,True,True,True,True,True,results/experiments/vector_add_autonomous_interface/20260728T144951Z/result.json,True
-vector_add_autonomous_syntax,configs/vector_add/autonomous_syntax.json,0,False,0,16724,src/vector_add.cpp,True,True,True,True,True,results/experiments/vector_add_autonomous_syntax/20260728T145034Z/result.json,True

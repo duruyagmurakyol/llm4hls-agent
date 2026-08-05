@@ -29,6 +29,7 @@
     "tool_version": "2025.2",
     "part": "xczu3eg-sfvc784-2-e",
     "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
     "resource_limits": {}
   },
   "budgets": {
@@ -46,19 +47,23 @@
     "max_tokens": 4096,
     "enable_thinking": false
   },
+  "optimisation": {
+    "target_loop_label": "dot_loop",
+    "validation": {
+      "constant_loop_tail_bounds": true,
+      "required_loop_labels": [
+        "dot_loop"
+      ],
+      "preserve_diagnosed_loop_label": true
+    },
+    "prompt_constraints": [
+      "Keep all accesses within A[38][42], x[42], y[42], and tmp[38].",
+      "Preserve all 42 dot-product elements exactly once, including any explicit remainder handling.",
+      "Do not modify init_y, update_y, or unrelated loops unless the diagnosis explicitly selects them."
+    ]
+  },
   "adapter": {
-    "kind": "legacy_ppa",
-    "config": "configs/atax_ppa.json",
-    "initialise_command": [
-      "scripts/run_ppa_optimisation.py",
-      "configs/atax_ppa.json"
-    ],
-    "iteration_command": [
-      "scripts/run_ppa_agent_iteration.py",
-      "configs/atax_ppa.json",
-      "--allow-synthesis"
-    ],
-    "summary": "experiments/atax/autonomous_ppa/experiment_summary.json"
+    "kind": "autonomous_ppa"
   },
   "output_dir": "experiments/track_a/hls_eval_atax_001"
 }
