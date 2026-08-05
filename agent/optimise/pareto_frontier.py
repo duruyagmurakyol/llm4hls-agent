@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.strategy_realisation import apply_strategy_realisation
+
 OBJECTIVES = (
     "latency_ns",
     "throughput_period_ns",
@@ -49,6 +51,7 @@ def annotate_pareto_frontier(
     summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Annotate candidates and write a standalone current-frontier artefact."""
+    summary = apply_strategy_realisation(output_dir, summary)
     frontier = [
         item
         for item in summary.get("pareto_archive", [])
