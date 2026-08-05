@@ -19,6 +19,10 @@ from agent.terminal_reporting import (  # noqa: E402
     build_run_summary,
     render_run_terminal,
 )
+from agent.track_a import (  # noqa: E402
+    is_track_a_task,
+    onboard_track_a_task,
+)
 
 
 def main() -> None:
@@ -28,7 +32,10 @@ def main() -> None:
     parser.add_argument(
         "task",
         type=Path,
-        help="Unified task manifest or benchmark directory containing an HLS build configuration",
+        help=(
+            "Unified task manifest, official Track-A task package, or benchmark "
+            "directory containing an HLS build configuration"
+        ),
     )
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--max-agent-steps", type=int, default=None)
@@ -43,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--onboard-only",
         action="store_true",
-        help="Discover and print a benchmark directory without running the agent",
+        help="Discover and print a benchmark or Track-A task directory without running the agent",
     )
     args = parser.parse_args()
 
@@ -51,10 +58,14 @@ def main() -> None:
     try:
         target = args.task.resolve()
         if target.is_dir():
-            task_input = onboard_benchmark(target)
+            task_input = (
+                onboard_track_a_task(target)
+                if is_track_a_task(target)
+                else onboard_benchmark(target)
+            )
         else:
             if args.onboard_only:
-                raise ValueError("--onboard-only requires a benchmark directory.")
+                raise ValueError("--onboard-only requires a task or benchmark directory.")
             task_input = target
 
         if args.onboard_only:
