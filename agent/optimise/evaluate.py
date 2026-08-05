@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.duplicate import normalise_source
 from agent.optimise.metrics import (
     comparison_metric,
     derive_hardware_metrics,
@@ -108,9 +109,9 @@ def candidate_indices(output_dir: Path) -> list[int]:
 
 
 def normalised_source_hash(path: Path) -> str:
+    """Use the same comment/whitespace-insensitive identity as the early duplicate gate."""
     text = path.read_text(encoding="utf-8")
-    normalised = "\n".join(line.rstrip() for line in text.splitlines()).strip() + "\n"
-    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalise_source(text).encode("utf-8")).hexdigest()
 
 
 def duplicate_map(output_dir: Path, indices: list[int]) -> dict[int, int]:
@@ -526,125 +527,108 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
         )
         for index in indices
     ]
-    eligible = [record for record in records if record.get("verdict") in PARETO_ELIGIBLE_VERDICTS]
-    baseline_record = {
-        "candidate_index": 0,
-        "candidate_file": config["baseline"]["source"],
-        "static_validation": True,
-        "csim": True,
-        "synthesis": True,
-        "cosim": True if _baseline_fully_verified(config) else None,
-        "fully_verified": _baseline_fully_verified(config),
-        "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
-        "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
-        "resource_limit_compliance": baseline_compliance,
-        "meets_resource_limits": baseline_compliance["passed"],
-        "cost": {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
-            "tool_calls": 0,
-            "tool_seconds": 0.0,
-        },
-        "verdict": "baseline",
-    }
-    baseline_eligible = bool(
-        baseline_record["fully_verified"] is True
-        and baseline_record["meets_frequency_requirement"] is True
-        and baseline_record["meets_resource_limits"] is True
-    )
-    pool = [*([baseline_record] if baseline_eligible else []), *eligible]
     pareto = [
-        item
-        for item in pool
-        if not any(other is not item and record_dominates(other, item) for other in pool)
+        record
+        for record in records
+        if record["verdict"] in PARETO_ELIGIBLE_VERDICTS
     ]
-    synthesis_calls_used = sum(1 for record in records if record.get("synthesis_run"))
-    cosim_calls_used = sum(1 for record in records if record.get("cosim_run"))
-    maximum_synthesis = int(config["budget"]["max_synthesis_calls"])
-    maximum_cosim = int(config["budget"].get("max_cosim_calls", config["budget"]["max_candidates"]))
+    for record in pareto:
+        dominator = next(
+            (
+                other
+                for other in pareto
+                if other["candidate_index"] != record["candidate_index"]
+                and record_dominates(other, record)
+            ),
+            None,
+        )
+        if dominator:
+            record.update(
+                verdict="reject_dominated",
+                reason=f"Candidate is dominated by candidate_{dominator['candidate_index']:03d}.",
+                dominated_by=dominator["candidate_index"],
+            )
+
+    final_pareto = [record for record in pareto if record["verdict"] in PARETO_ELIGIBLE_VERDICTS]
     summary = {
-        "experiment_name": config["experiment_name"],
-        "benchmark": config["benchmark"],
-        "minimum_frequency_mhz": minimum_frequency,
-        "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
-        "resource_limits": baseline_compliance["limits"],
-        "selection": dict(config.get("selection") or {}),
+        "schema_version": 7,
+        "experiment_name": config.get("experiment_name"),
+        "benchmark": config.get("benchmark"),
+        "selection": config.get("selection", {}),
         "frequency_requirement": {
             "minimum_frequency_mhz": minimum_frequency,
             "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
             "baseline_frequency_mhz": baseline.get("frequency_mhz"),
             "baseline_meets_requirement": baseline.get("meets_minimum_frequency"),
         },
-        "baseline_fully_verified": baseline_record["fully_verified"],
-        "baseline_resource_compliance": baseline_compliance,
+        "resource_limits": {
+            "configured": baseline_compliance["configured"],
+            "limits": baseline_compliance["limits"],
+            "baseline_compliance": baseline_compliance,
+        },
         "baseline_metrics": {key: baseline.get(key) for key in METRIC_KEYS},
-        "baseline_record": baseline_record,
-        "budget": {
-            "max_candidates": config["budget"]["max_candidates"],
-            "max_synthesis_calls": maximum_synthesis,
-            "synthesis_calls_used": synthesis_calls_used,
-            "synthesis_calls_remaining": max(0, maximum_synthesis - synthesis_calls_used),
-            "max_cosim_calls": maximum_cosim,
-            "cosim_calls_used": cosim_calls_used,
-            "cosim_calls_remaining": max(0, maximum_cosim - cosim_calls_used),
+        "baseline_record": {
+            "candidate_index": 0,
+            "candidate_file": config["baseline"]["source"],
+            "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
+            "static_validation": True,
+            "csim": True,
+            "synthesis": True,
+            "cosim": True,
+            "fully_verified": _baseline_fully_verified(config),
+            "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
+            "resource_limit_compliance": baseline_compliance,
+            "meets_resource_limits": baseline_compliance["passed"],
+            "verdict": "baseline",
+            "cost": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "tool_calls": 0,
+                "tool_seconds": 0.0,
+            },
         },
         "candidates": records,
         "pareto_archive": [
             {
-                "candidate_index": item["candidate_index"],
-                "candidate_file": item["candidate_file"],
-                "static_validation": item.get("static_validation"),
-                "csim": item.get("csim"),
-                "synthesis": item.get("synthesis"),
-                "cosim": item.get("cosim"),
-                "fully_verified": item.get("fully_verified"),
-                "metrics": item["metrics"],
-                "meets_frequency_requirement": item.get("meets_frequency_requirement"),
-                "resource_limit_compliance": item.get("resource_limit_compliance"),
-                "meets_resource_limits": item.get("meets_resource_limits"),
-                "cost": item.get("cost", {}),
-                "verdict": item["verdict"],
-            }
-            for item in pareto
+                "candidate_index": 0,
+                "candidate_file": config["baseline"]["source"],
+                "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
+                "fully_verified": _baseline_fully_verified(config),
+                "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
+                "resource_limit_compliance": baseline_compliance,
+                "meets_resource_limits": baseline_compliance["passed"],
+                "verdict": "baseline",
+                "cost": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "tool_calls": 0,
+                    "tool_seconds": 0.0,
+                },
+            },
+            *final_pareto,
         ],
     }
-    (output_dir / "experiment_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (output_dir / "experiment_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+    )
     return summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate PPA candidates and build a Pareto archive.")
+    parser = argparse.ArgumentParser(description="Evaluate HLS PPA candidates.")
     parser.add_argument("config", type=Path)
     args = parser.parse_args()
     summary = evaluate_experiment(args.config)
-    print("\nPPA experiment evaluation")
-    print(f"Benchmark: {summary['benchmark']}")
-    print(f"Candidates found: {len(summary['candidates'])}")
-    print(
-        "Frequency requirement: "
-        f"{summary['minimum_frequency_mhz']:g} MHz "
-        f"(period <= {summary['maximum_clock_period_ns']:.3f} ns)"
-    )
-    budget = summary["budget"]
-    print(f"Synthesis calls used: {budget['synthesis_calls_used']}/{budget['max_synthesis_calls']}")
-    print(f"Co-simulation calls used: {budget['cosim_calls_used']}/{budget['max_cosim_calls']}")
-    print("\nCandidate verdicts")
-    for record in summary["candidates"]:
-        print(f"  {record['candidate_index']:03d}: {record['verdict']} — {record['reason']}")
-    print("\nPareto archive")
-    for item in summary["pareto_archive"]:
-        label = "baseline" if item["candidate_index"] == 0 else f"candidate_{item['candidate_index']:03d}"
-        metrics = item["metrics"]
+    print("\nPPA candidate evaluation")
+    print(f"Experiment: {summary.get('experiment_name')}")
+    print(f"Candidates: {len(summary['candidates'])}")
+    print(f"Pareto archive size: {len(summary['pareto_archive'])}")
+    for candidate in summary["candidates"]:
         print(
-            f"  {label}: latency={metrics.get('latency_ns')} ns, "
-            f"throughput_period={metrics.get('throughput_period_ns')} ns, "
-            f"frequency={metrics.get('frequency_mhz')} MHz, "
-            f"LUT={metrics.get('resources_lut_used')}, "
-            f"FF={metrics.get('resources_ff_used')}, "
-            f"DSP={metrics.get('resources_dsp_used')}"
+            f"Candidate {candidate['candidate_index']:03d}: {candidate['verdict']} — {candidate['reason']}"
         )
-    print("No model call or Vitis tool was run by this evaluator.")
 
 
 if __name__ == "__main__":
