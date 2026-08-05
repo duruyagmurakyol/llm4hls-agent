@@ -204,7 +204,8 @@ def _is_feasible_verified_parent(record: dict[str, Any]) -> bool:
         and record.get("meets_frequency_requirement") is True
         and isinstance(compliance, dict)
         and compliance.get("passed") is True
-        and record.get("verdict") != "reject_resource_limits"
+        and record.get("verdict")
+        not in {"reject_resource_limits", "reject_synthesis_equivalent"}
     )
 
 
@@ -260,7 +261,11 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
         return None
 
     verdict = record.get("verdict")
-    if verdict in {"reject_duplicate", "reject_resource_limits"}:
+    if verdict in {
+        "reject_duplicate",
+        "reject_resource_limits",
+        "reject_synthesis_equivalent",
+    }:
         return None
 
     fully_verified = record.get("fully_verified") is True
