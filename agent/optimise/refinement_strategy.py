@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
+from agent.optimise.source_text import mask_cpp_comments
+
 PARTIAL_UNROLL_FACTORS = (8, 4, 2)
 LATENCY_RECOVERY_FACTORS = (2, 4, 8)
 
@@ -155,7 +157,8 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
             "reason": "unsupported_strategy",
         }
 
-    spans = _loop_spans(source)
+    analysed_source = mask_cpp_comments(source)
+    spans = _loop_spans(analysed_source)
     loop_directives = [
         {
             "pipeline": False,
@@ -174,7 +177,7 @@ def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str
         r"#\s*pragma\s+HLS\s+(PIPELINE|UNROLL)\b([^\n]*)",
         re.IGNORECASE,
     )
-    for pragma in pragma_pattern.finditer(source):
+    for pragma in pragma_pattern.finditer(analysed_source):
         kind = pragma.group(1).upper()
         arguments = pragma.group(2)
         loop_index = _innermost_loop(spans, pragma.start())
