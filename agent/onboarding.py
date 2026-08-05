@@ -65,8 +65,45 @@ def _single(values: list[Any], description: str) -> Any:
     return unique[0]
 
 
+def _add_file_references(path: Path, text: str) -> tuple[list[Path], list[Path]]:
+    """Return design and testbench files declared by one candidate TCL."""
+
+    design_files: list[Path] = []
+    testbenches: list[Path] = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        tokens = _tokens(line)
+        if not tokens or tokens[0] != "add_files":
+            continue
+
+        is_tb = "-tb" in tokens
+        positional: list[str] = []
+        skip_next = False
+        for token in tokens[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"-cflags", "-csimflags", "-tbflags"}:
+                skip_next = True
+                continue
+            if token.startswith("-"):
+                continue
+            positional.append(token)
+
+        for token in positional:
+            resolved = _resolve_tcl_path(token, path)
+            if resolved.suffix.lower() not in SOURCE_SUFFIXES:
+                continue
+            (testbenches if is_tb else design_files).append(resolved)
+
+    return design_files, testbenches
+
+
 def _tcl_score(path: Path, text: str) -> tuple[int, list[str]]:
     """Score likely baseline synthesis scripts and explain the decision."""
+
     reasons: list[str] = []
     score = 0
     required = ("set_top", "set_part", "create_clock", "csynth_design")
@@ -101,6 +138,21 @@ def _tcl_score(path: Path, text: str) -> tuple[int, list[str]]:
     if "experiments" in lower_parts or "tmp" in lower_parts:
         score -= 5
         reasons.append("penalty:generated_dir")
+
+    # A tracked TCL may point at a locally generated candidate that is absent in
+    # a clean checkout. Such a script must never outrank a reproducible baseline.
+    design_files, testbenches = _add_file_references(path, text)
+    if not design_files:
+        score -= 100
+        reasons.append("penalty:no_design_source")
+    if not testbenches:
+        score -= 100
+        reasons.append("penalty:no_testbench_source")
+    for referenced in [*design_files, *testbenches]:
+        if not referenced.is_file():
+            score -= 100
+            reasons.append(f"penalty:missing_file:{referenced}")
+
     return score, reasons
 
 
@@ -120,11 +172,13 @@ def _choose_tcl(root: Path) -> Path:
     if best_score < 30 or len(best) != 1:
         detail = "; ".join(
             f"{path} score={score} ({', '.join(reasons)})"
-            for score, path, reasons in sorted(scored, key=lambda item: (-item[0], str(item[1])))
+            for score, path, reasons in sorted(
+                scored,
+                key=lambda item: (-item[0], str(item[1])),
+            )
         )
         raise ValueError(f"Could not uniquely choose an HLS synthesis TCL file: {detail}")
     return best[0][0]
-
 
 
 def _discover_from_task_cfg(root: Path, cfg_path: Path) -> DiscoveredBenchmark:
@@ -189,6 +243,7 @@ def _discover_from_task_cfg(root: Path, cfg_path: Path) -> DiscoveredBenchmark:
         ),
     )
 
+
 def discover_benchmark(root: Path) -> DiscoveredBenchmark:
     root = root.resolve()
     if not root.is_dir():
@@ -229,13 +284,21 @@ def discover_benchmark(root: Path) -> DiscoveredBenchmark:
             if match:
                 clocks.append(float(match.group(1)))
         elif command in {"open_project", "open_component"}:
-            positional = [_clean(token) for token in tokens[1:] if not token.startswith("-")]
+            positional = [
+                _clean(token)
+                for token in tokens[1:]
+                if not token.startswith("-")
+            ]
             if positional:
                 project = Path(positional[-1])
-                projects.append(project if project.is_absolute() else (tcl.parent / project).resolve())
+                projects.append(
+                    project
+                    if project.is_absolute()
+                    else (tcl.parent / project).resolve()
+                )
         elif command == "add_files":
             is_tb = "-tb" in tokens
-            positional = []
+            positional: list[str] = []
             skip_next = False
             for token in tokens[1:]:
                 if skip_next:
@@ -255,7 +318,14 @@ def discover_benchmark(root: Path) -> DiscoveredBenchmark:
                 elif suffix in SOURCE_SUFFIXES:
                     (testbenches if is_tb else design_files).append(path)
 
-    source = _single([path for path in design_files if path.suffix.lower() in SOURCE_SUFFIXES], "design source")
+    source = _single(
+        [
+            path
+            for path in design_files
+            if path.suffix.lower() in SOURCE_SUFFIXES
+        ],
+        "design source",
+    )
     if not source.is_file():
         raise ValueError(f"Discovered design source does not exist: {source}")
     if not testbenches:
@@ -270,7 +340,9 @@ def discover_benchmark(root: Path) -> DiscoveredBenchmark:
         tcl=tcl,
         source=source,
         testbenches=tuple(dict.fromkeys(testbenches)),
-        headers=tuple(dict.fromkeys(path for path in headers if path.is_file())),
+        headers=tuple(
+            dict.fromkeys(path for path in headers if path.is_file())
+        ),
         top_function=_single(tops, "top function"),
         part=_single(parts, "FPGA part"),
         clock_period_ns=_single(clocks, "clock period"),
@@ -313,14 +385,19 @@ def onboard_benchmark(root: Path) -> Path:
         },
         "budget": {"max_candidates": 5, "max_synthesis_calls": 4},
     }
-    optimisation_path.write_text(json.dumps(optimisation, indent=2) + "\n", encoding="utf-8")
+    optimisation_path.write_text(
+        json.dumps(optimisation, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     task = {
         "task_id": f"auto_{benchmark.name}_001",
         "task_kind": "correct_unoptimised",
         "artifacts": {
             "source": _repo_relative(benchmark.source),
-            "testbench": [_repo_relative(path) for path in benchmark.testbenches],
+            "testbench": [
+                _repo_relative(path) for path in benchmark.testbenches
+            ],
             "headers": [_repo_relative(path) for path in benchmark.headers],
             "build_files": [_repo_relative(benchmark.tcl)],
         },
@@ -355,7 +432,10 @@ def onboard_benchmark(root: Path) -> Path:
         },
         "output_dir": f"experiments/track_a/auto_{benchmark.name}_001",
     }
-    task_path.write_text(json.dumps(task, indent=2) + "\n", encoding="utf-8")
+    task_path.write_text(
+        json.dumps(task, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     print("Automatic benchmark onboarding")
     print(f"Benchmark: {benchmark.name}")
