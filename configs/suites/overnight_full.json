@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "suite_id": "overnight_full",
+  "description": "Sequential full-agent evaluation over every locally adapted benchmark and the supplied Track-A reference tasks.",
+  "defaults": {
+    "timeout_seconds": 14400,
+    "continue_on_error": true,
+    "preflight": true,
+    "resume": false,
+    "max_agent_steps": null
+  },
+  "source_registry": [
+    {
+      "id": "fpt26_reference_harness",
+      "kind": "supplied_reference_package",
+      "local_root": "external/fpt26-harness/tasks",
+      "paper_or_site": "FPT 2026 Track-A supplied reference harness",
+      "revision": "user-supplied archive",
+      "licence": "Redistribution status not stated in the supplied package; retain for internal evaluation unless permission is confirmed."
+    },
+    {
+      "id": "hls_eval",
+      "kind": "paper_and_github",
+      "local_root": "benchmarks/hls_eval",
+      "repository": "sharc-lab/hls-eval",
+      "revision": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b",
+      "paper": "arXiv:2504.12268",
+      "licence": "Upstream dataset aggregates several benchmark families; audit each retained task before redistribution."
+    },
+    {
+      "id": "local_project_benchmarks",
+      "kind": "project_owned_or_previously_adapted",
+      "local_root": "benchmarks",
+      "revision": "current repository commit",
+      "licence": "Record per-benchmark provenance before submission."
+    },
+    {
+      "id": "machsuite_upstream",
+      "kind": "upstream_reference",
+      "repository": "breagen/MachSuite",
+      "revision": "6236e593012cb86b0d2f08d9fb9ba0411ff989b4",
+      "licence": "BSD-compatible according to the upstream repository.",
+      "status": "Represented through adapted HLS-Eval tasks; raw upstream tasks are not executed directly by this suite."
+    },
+    {
+      "id": "bench4hls_candidate",
+      "kind": "future_import_candidate",
+      "repository": "zfsadik/Bench4HLS",
+      "paper": "arXiv:2601.19941",
+      "licence": "Unknown; do not redistribute until audited.",
+      "status": "Catalogued for later adapter work, not part of tonight's runnable suite."
+    }
+  ],
+  "collections": [
+    {
+      "id": "track_a_reference_tasks",
+      "type": "track_a_packages",
+      "root": "external/fpt26-harness/tasks",
+      "enabled": true,
+      "source": "fpt26_reference_harness",
+      "tags": ["track-a", "repair", "optimisation", "cosim"]
+    },
+    {
+      "id": "all_adapted_local_benchmarks",
+      "type": "auto_benchmarks",
+      "root": "benchmarks",
+      "enabled": true,
+      "source": "local_project_benchmarks",
+      "tags": ["local", "auto-onboarded", "hls-eval"]
+    }
+  ],
+  "exclude_paths": [
+    "**/hidden/**",
+    "**/reference/**",
+    "**/candidate_archive/**",
+    "**/experiments/**",
+    "**/results/**"
+  ]
+}
