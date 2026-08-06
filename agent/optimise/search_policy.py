@@ -14,8 +14,8 @@ The schedule is capped at five candidates. Additional task budget remains
 available to the surrounding Track-A controller, but this policy will not invent
 unstructured retries merely because more candidate slots exist.
 
-Importing this module also installs the idempotent structured-search novelty
-ledger guards. Those guards are inert for legacy configurations.
+Importing this module also installs the idempotent structured-search transition
+and novelty-ledger guards. Those guards are inert for legacy configurations.
 """
 
 from __future__ import annotations
@@ -110,11 +110,15 @@ def build_structured_search_schedule(
     return schedule
 
 
-# Install once after the pure schedule API is defined. The installer patches the
-# preserved runner references, not this policy module, and bypasses every legacy
-# configuration that does not opt into ``structured_v1`` or Track-A.
+# Install once after the pure schedule API is defined. The transition guard
+# preserves the C1->C2->C3 baseline-rooted schedule after an early rejection;
+# the ledger guards enforce branch and source novelty. Both bypass legacy runs.
+from agent.optimise.structured_transition_runtime import (  # noqa: E402
+    install_structured_transition_runtime,
+)
 from agent.optimise.search_ledger_runtime import (  # noqa: E402
     install_structured_search_ledger_runtime,
 )
 
+install_structured_transition_runtime()
 install_structured_search_ledger_runtime()
