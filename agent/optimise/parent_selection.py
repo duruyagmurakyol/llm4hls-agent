@@ -28,6 +28,8 @@ RESOURCE_RECOVERY_THRESHOLD_PERCENT = 25.0
 BASELINE_RESTART_REASON = "restart_from_verified_baseline"
 BASELINE_RESTART_VERDICTS = {
     "reject_duplicate",
+    "reject_static",
+    "reject_strategy_not_realised",
     "reject_no_change",
     "reject_no_objective_gain",
     "reject_dominated_pre_cosim",
@@ -118,6 +120,7 @@ def _is_latency_recovery_opportunity(record: dict[str, Any]) -> bool:
     if not (
         record.get("fully_verified") is True
         and record.get("verdict") == "keep_pareto_candidate"
+        and record.get("refinement_eligible") is not False
     ):
         return False
 
@@ -259,6 +262,7 @@ def _pending_resource_limit_recovery_parent(
             "accept_dominates_baseline",
             "keep_pareto_candidate",
         }
+        and record.get("refinement_eligible") is not False
     ]
     candidates = pareto or feasible
     record = min(
@@ -276,6 +280,12 @@ def _pending_resource_limit_recovery_parent(
 def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     index = record.get("candidate_index")
     if not isinstance(index, int):
+        return None
+
+    # Stage-3 summaries explicitly separate archive membership from whether a
+    # candidate is useful enough to spend another search iteration on. Legacy
+    # records without this field retain their previous behaviour.
+    if record.get("refinement_eligible") is False:
         return None
 
     verdict = record.get("verdict")
@@ -309,7 +319,7 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
 def _baseline_restart_parent(
     records: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], str] | None:
-    """Restart from the verified baseline after an objectively useless result."""
+    """Restart from baseline after an objectively useless or retired result."""
 
     indexed = [
         record
@@ -320,11 +330,15 @@ def _baseline_restart_parent(
         return None
 
     latest = max(indexed, key=lambda item: int(item["candidate_index"]))
-    if latest.get("verdict") not in BASELINE_RESTART_VERDICTS:
+    archive_only = bool(
+        latest.get("archive_eligible") is True
+        and latest.get("refinement_eligible") is False
+    )
+    if latest.get("verdict") not in BASELINE_RESTART_VERDICTS and not archive_only:
         return None
 
-    # A real Pareto point, dominating candidate, or explicitly useful
-    # constraint-violation remains a better refinement parent than baseline.
+    # A genuinely useful Pareto point, dominating candidate, or explicitly
+    # recoverable constraint violation remains a better parent than baseline.
     for record in records:
         rank = _parent_rank(record)
         if rank is not None and rank[0] >= 4:
