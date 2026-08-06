@@ -216,12 +216,10 @@ def _is_feasible_verified_parent(record: dict[str, Any]) -> bool:
         and compliance.get("passed") is True
         and record.get("verdict")
         not in {
-            "reject_no_change",
             "reject_no_objective_gain",
             "reject_dominated_pre_cosim",
             "reject_no_change_pre_cosim",
             "reject_resource_limits",
-            "reject_synthesis_equivalent",
         }
     )
 
@@ -247,6 +245,9 @@ def _pending_resource_limit_recovery_parent(
     if resource_limit_recovery_trigger(records) is None:
         return None
 
+    # A fully verified no-change or synthesis-equivalent candidate is still a
+    # safe recovery anchor: it is effectively the baseline, but unlike the
+    # rejected over-budget child it has a concrete candidate source file.
     feasible = [record for record in records if _is_feasible_verified_parent(record)]
     if not feasible:
         return None
