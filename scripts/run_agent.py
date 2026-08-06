@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from agent.config import TaskManifest, load_task  # noqa: E402
 from agent.execution_mode import run_execution_mode  # noqa: E402
+from agent.final_cosim import enforce_final_cosim_policy  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 from agent.resume import resume_agent  # noqa: E402
 from agent.stage_aware import (  # noqa: E402
@@ -463,6 +464,24 @@ def main() -> None:
     except RuntimeError as error:
         print(f"Agent execution failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
+
+    if isinstance(task_input, TaskManifest) and not args.status_only:
+        audit = enforce_final_cosim_policy(task_input, result)
+        audit_path = Path(str(task_input.output_dir)).expanduser()
+        if not audit_path.is_absolute():
+            audit_path = REPO_ROOT / audit_path
+        audit_path = audit_path / "final_cosim_audit.json"
+        print(
+            "Final/Pareto co-simulation audit: "
+            f"{audit.get('status')} ({_display_path(audit_path)})",
+            flush=True,
+        )
+        if audit.get("fallback_used") is True:
+            print(
+                "The originally selected design failed final co-simulation; "
+                "a verified Pareto/baseline fallback was selected.",
+                flush=True,
+            )
 
     if isinstance(task_input, TaskManifest):
         try:
