@@ -12,6 +12,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MATRIX_SCRIPT = REPO_ROOT / "scripts" / "run_experiment_matrix.py"
+STALE_STAGE_AWARE_TASKS = {
+    "vector_add_generate",
+    "synth_fix_dynamic_buffer",
+    "residual_stream_deadlock",
+    "structural_blind_stream",
+}
 
 
 def _matrix_module():
@@ -33,6 +39,31 @@ def _load_json(path: Path) -> dict:
     if not isinstance(value, dict):
         raise RuntimeError(f"Expected a JSON object in {path}")
     return value
+
+
+def _invalidate_stale_rows(state: dict) -> int:
+    rows = state.get("results")
+    if not isinstance(rows, list):
+        return 0
+
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (
+            row.get("task_id") in STALE_STAGE_AWARE_TASKS
+            and row.get("success") is True
+        ):
+            row["success"] = None
+            row["status"] = "stale_dispatch"
+            row["termination_reason"] = "rerun_required_after_manifest_dispatch_fix"
+            row["final_design_verified"] = None
+            row["error"] = (
+                "This row used generic repair because its materialised JSON manifest "
+                "was not loaded before stage-aware workflow dispatch."
+            )
+            count += 1
+    return count
 
 
 def main() -> None:
@@ -73,8 +104,21 @@ def main() -> None:
             f"Refreshed {len(runs)} manifests but suite state expects {total_runs}"
         )
 
+    invalidated = _invalidate_stale_rows(state)
+    state["status"] = "recovery_ready"
+    state["finished_at"] = None
+    state["recovery"] = {
+        "manifests_refreshed": True,
+        "stage_aware_rows_invalidated": invalidated,
+        "stale_task_ids": sorted(STALE_STAGE_AWARE_TASKS),
+    }
+    module._write_json_atomic(state_path, state)
+    rows = [row for row in state.get("results", []) if isinstance(row, dict)]
+    module._write_csv(run_dir / "suite_summary.csv", rows)
+
     print(f"Refreshed {len(runs)} manifests under {run_dir / 'manifests'}")
-    print("Existing suite_state.json, suite_summary.csv, logs and outputs were preserved.")
+    print(f"Marked {invalidated} stale successful stage-aware row(s) for rerun.")
+    print("Existing logs, completed outputs and valid result rows were preserved.")
 
 
 if __name__ == "__main__":
