@@ -124,12 +124,7 @@ def _model_config() -> dict[str, Any]:
 
 
 def _budgets(credit_budget: int) -> dict[str, Any]:
-    """Translate the package hint into bounded controller call limits.
-
-    The reference harness's weighted credits are not the competition's only
-    possible evaluator contract, so they are preserved as metadata rather than
-    pretending they are identical to this agent's call counters.
-    """
+    """Keep detailed call limits and the official weighted-credit ceiling."""
 
     iterations = max(2, min(6, credit_budget // 8 or 2))
     max_total = os.environ.get("LLM4HLS_MAX_TOTAL_TOKENS")
@@ -140,6 +135,12 @@ def _budgets(credit_budget: int) -> dict[str, Any]:
         "max_synthesis_calls": max(3, iterations + 1),
         "max_model_calls": iterations,
         "max_total_tokens": int(max_total) if max_total else None,
+        "track_a_credit_budget": credit_budget,
+        "track_a_credit_costs": {
+            "csim": 1,
+            "synthesis": 4,
+            "cosim": 20,
+        },
     }
 
 
@@ -368,7 +369,8 @@ def onboard_track_a_task(root: Path) -> TaskManifest:
     print(f"Part: {task.data['target']['part']}")
     print(f"Clock: {task.data['target']['clock_period_ns']:g} ns")
     print(f"LLM provider: {meta['llm_provider']}")
-    print(f"Reference credit hint: {meta['credit_budget']}")
+    print(f"Official credit budget: {meta['credit_budget']}")
+    print(f"Co-simulation required: {'yes' if meta['requires_cosim'] else 'no'}")
     print("Hidden tests/reference solutions copied: no")
     print(f"Staged public package: {task.data['task_root']}")
     return task
