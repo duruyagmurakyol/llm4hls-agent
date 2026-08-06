@@ -2,9 +2,7 @@
 
 This module defines *what kind* of candidate each search slot should attempt.
 It deliberately does not choose concrete source files, generate prompts, call a
-model, or run validation tools.  Runner integration is a separate stage.
-
-The five-slot policy is:
+model, or run validation tools. The five-slot policy is:
 
 1. Explore critical-path / accumulator restructuring from the verified baseline.
 2. Explore bounded unrolling from the verified baseline.
@@ -12,9 +10,12 @@ The five-slot policy is:
 4. Exploit the best practically refinement-eligible candidate.
 5. Perform one bounded recovery, or fall back to an independent baseline attempt.
 
-The schedule is capped at five candidates.  Additional task budget remains
+The schedule is capped at five candidates. Additional task budget remains
 available to the surrounding Track-A controller, but this policy will not invent
 unstructured retries merely because more candidate slots exist.
+
+Importing this module also installs the idempotent structured-search novelty
+ledger guards. Those guards are inert for legacy configurations.
 """
 
 from __future__ import annotations
@@ -107,3 +108,13 @@ def build_structured_search_schedule(
         )
 
     return schedule
+
+
+# Install once after the pure schedule API is defined. The installer patches the
+# preserved runner references, not this policy module, and bypasses every legacy
+# configuration that does not opt into ``structured_v1`` or Track-A.
+from agent.optimise.search_ledger_runtime import (  # noqa: E402
+    install_structured_search_ledger_runtime,
+)
+
+install_structured_search_ledger_runtime()
