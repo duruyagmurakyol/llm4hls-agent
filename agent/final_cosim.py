@@ -1,13 +1,10 @@
-"""Universal post-search C/RTL co-simulation promotion gate.
+"""Ranked post-search C/RTL co-simulation promotion gate.
 
-The competition harness meters tool calls used by the autonomous search, while
-its grading-side validation is uncharged. This module deliberately runs after
-the search budget has closed. It audits every currently archived Pareto member,
-the selected design, and the verified baseline fallback. A design remains
-selectable only when CSim, synthesis, and C/RTL co-simulation all pass.
-
-This separation preserves a fair, bounded search while preventing a
-synthesis-only design from being reported as the final answer.
+Search uses static validation, CSim and synthesis to construct and rank a Pareto
+set. After search, this module co-simulates only the highest-ranked selected
+design. If it fails, it tries the next ranked Pareto candidate and finally the
+verified baseline, stopping as soon as one design passes. This preserves final
+correctness while avoiding unnecessary co-simulation runs.
 """
 
 from __future__ import annotations
@@ -25,6 +22,7 @@ from agent.tools.cosim import run_cosim
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CosimRunner = Callable[[TaskManifest, Path], dict[str, Any]]
+POLICY_NAME = "ranked_selected_then_fallback"
 
 
 def _resolve(value: str | Path) -> Path:
@@ -199,8 +197,7 @@ def _apply_to_state(
         source = _source(value)
         if source is None:
             return value
-        identity = _identity(value, source)
-        replacement = updated.get(identity)
+        replacement = updated.get(_identity(value, source))
         if replacement is None:
             return value
         merged = dict(value)
@@ -246,15 +243,62 @@ def _eligible(record: dict[str, Any]) -> bool:
 
 def _is_baseline(record: dict[str, Any]) -> bool:
     role = str(record.get("role") or "")
-    index = record.get("candidate_index")
     return bool(
         role in {
             "verified_baseline_fallback",
             "original_baseline",
             "baseline",
         }
-        or index == 0
+        or record.get("candidate_index") == 0
     )
+
+
+def _ranked_validation_order(
+    records: list[dict[str, Any]],
+    pareto_identities: set[str],
+    selected_identity: str | None,
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    by_identity = {
+        str(record.get("candidate_hash")): record
+        for record in records
+        if isinstance(record.get("candidate_hash"), str)
+    }
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(record: dict[str, Any] | None) -> None:
+        if record is None:
+            return
+        identity = str(record.get("candidate_hash") or "")
+        if not identity or identity in seen:
+            return
+        ordered.append(record)
+        seen.add(identity)
+
+    add(by_identity.get(selected_identity or ""))
+
+    pareto = [
+        record
+        for record in records
+        if record.get("candidate_hash") in pareto_identities
+        and record.get("candidate_hash") != selected_identity
+        and record.get("meets_frequency_requirement") is not False
+        and record.get("meets_resource_limits") is not False
+    ]
+    pareto.sort(
+        key=lambda item: deterministic_selection_key(
+            item,
+            _selection_config(state),
+        )
+    )
+    for record in pareto:
+        add(record)
+
+    for record in records:
+        if _is_baseline(record):
+            add(record)
+    return ordered
 
 
 def _archive_selected(output_dir: Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -273,46 +317,6 @@ def _archive_selected(output_dir: Path, record: dict[str, Any]) -> dict[str, Any
     return selected
 
 
-def _select_fallback(
-    records: list[dict[str, Any]],
-    pareto_identities: set[str],
-    selected_identity: str | None,
-    state: dict[str, Any],
-) -> tuple[dict[str, Any] | None, bool]:
-    by_identity = {
-        str(record.get("candidate_hash")): record
-        for record in records
-        if isinstance(record.get("candidate_hash"), str)
-    }
-    selected = by_identity.get(selected_identity or "")
-    if selected is not None and _eligible(selected):
-        return selected, False
-
-    verified_pareto = [
-        record
-        for record in records
-        if record.get("candidate_hash") in pareto_identities and _eligible(record)
-    ]
-    if verified_pareto:
-        return (
-            min(
-                verified_pareto,
-                key=lambda item: deterministic_selection_key(
-                    item,
-                    _selection_config(state),
-                ),
-            ),
-            True,
-        )
-
-    verified_baselines = [
-        record for record in records if _is_baseline(record) and _eligible(record)
-    ]
-    if verified_baselines:
-        return verified_baselines[0], True
-    return None, selected is not None
-
-
 def _select_event(result: AgentResult) -> TrajectoryEvent:
     for event in reversed(result.trajectory):
         if event.stage == "select_best":
@@ -327,13 +331,67 @@ def _select_event(result: AgentResult) -> TrajectoryEvent:
     return event
 
 
+def _cosim_report(
+    task: TaskManifest,
+    record: dict[str, Any],
+    source: Path,
+    identity: str,
+    cosim_runner: CosimRunner,
+) -> tuple[dict[str, Any], bool]:
+    validation = _validation(record)
+    existing_cosim = validation.get("cosim")
+    reused = existing_cosim in {True, False}
+
+    if validation.get("csim") is not True or validation.get("synthesis") is not True:
+        return (
+            {
+                "passed": False,
+                "failure_class": "pre_cosim_validation_incomplete",
+                "timed_out": False,
+                "return_code": None,
+                "candidate_hash": identity,
+                "candidate_file": _display(source),
+            },
+            True,
+        )
+    if reused:
+        return (
+            {
+                "passed": existing_cosim is True,
+                "failure_class": (
+                    "none" if existing_cosim is True else "previous_cosim_failure"
+                ),
+                "timed_out": False,
+                "return_code": 0 if existing_cosim is True else None,
+                "candidate_hash": identity,
+                "candidate_file": _display(source),
+            },
+            True,
+        )
+    try:
+        return cosim_runner(task, source), False
+    except Exception as error:
+        return (
+            {
+                "passed": False,
+                "failure_class": type(error).__name__,
+                "timed_out": False,
+                "return_code": None,
+                "candidate_hash": identity,
+                "candidate_file": _display(source),
+                "evidence": [str(error)],
+            },
+            False,
+        )
+
+
 def enforce_final_cosim_policy(
     task: TaskManifest,
     result: AgentResult,
     *,
     cosim_runner: CosimRunner = run_cosim,
 ) -> dict[str, Any]:
-    """Co-sim every Pareto/final fallback and update selection atomically."""
+    """Validate the selected design, then ranked fallbacks, stopping on success."""
 
     output_dir = _resolve(task.output_dir)
     state_path = output_dir / "candidate_state.json"
@@ -342,8 +400,8 @@ def enforce_final_cosim_policy(
 
     if not state:
         audit = {
-            "schema_version": 1,
-            "policy": "all_pareto_and_selected",
+            "schema_version": 2,
+            "policy": POLICY_NAME,
             "status": "skipped",
             "reason": "no_selectable_state",
             "metered_agent_budget": False,
@@ -353,10 +411,16 @@ def enforce_final_cosim_policy(
         return audit
 
     records, pareto_identities, selected_identity = _collect_records(state, output_dir)
-    if not records:
+    order = _ranked_validation_order(
+        records,
+        pareto_identities,
+        selected_identity,
+        state,
+    )
+    if not order:
         audit = {
-            "schema_version": 1,
-            "policy": "all_pareto_and_selected",
+            "schema_version": 2,
+            "policy": POLICY_NAME,
             "status": "failed",
             "reason": "no_candidate_sources",
             "metered_agent_budget": False,
@@ -370,55 +434,26 @@ def enforce_final_cosim_policy(
 
     updated: dict[str, dict[str, Any]] = {}
     audited: list[dict[str, Any]] = []
-    for record in records:
+    chosen: dict[str, Any] | None = None
+
+    for rank, record in enumerate(order, 1):
         source = _source(record)
         if source is None:
             continue
         identity = _identity(record, source)
-        validation = _validation(record)
-        existing_cosim = validation.get("cosim")
-        reused = existing_cosim in {True, False}
-
-        if validation.get("csim") is not True or validation.get("synthesis") is not True:
-            report = {
-                "passed": False,
-                "failure_class": "pre_cosim_validation_incomplete",
-                "timed_out": False,
-                "return_code": None,
-                "candidate_hash": identity,
-                "candidate_file": _display(source),
-            }
-            reused = True
-        elif reused:
-            report = {
-                "passed": existing_cosim is True,
-                "failure_class": (
-                    "none" if existing_cosim is True else "previous_cosim_failure"
-                ),
-                "timed_out": False,
-                "return_code": 0 if existing_cosim is True else None,
-                "candidate_hash": identity,
-                "candidate_file": _display(source),
-            }
-        else:
-            try:
-                report = cosim_runner(task, source)
-            except Exception as error:  # final safety gate must degrade to fallback
-                report = {
-                    "passed": False,
-                    "failure_class": type(error).__name__,
-                    "timed_out": False,
-                    "return_code": None,
-                    "candidate_hash": identity,
-                    "candidate_file": _display(source),
-                    "evidence": [str(error)],
-                }
-
+        report, reused = _cosim_report(
+            task,
+            record,
+            source,
+            identity,
+            cosim_runner,
+        )
         current = dict(record)
         _update_record(current, report)
         updated[identity] = current
         audited.append(
             {
+                "validation_rank": rank,
                 "candidate_hash": identity,
                 "candidate_index": current.get("candidate_index"),
                 "role": current.get("role"),
@@ -426,28 +461,33 @@ def enforce_final_cosim_policy(
                 "was_selected": identity == selected_identity,
                 "was_pareto": identity in pareto_identities,
                 "reused_existing_cosim": reused,
-                "passed": current.get("fully_verified") is True,
+                "passed": _eligible(current),
                 "failure_class": report.get("failure_class"),
                 "timed_out": report.get("timed_out"),
                 "log_path": report.get("log_path") or report.get("log_file"),
             }
         )
+        if _eligible(current):
+            chosen = current
+            break
 
-    records = [updated.get(str(item.get("candidate_hash")), item) for item in records]
     _apply_to_state(state, updated)
-    chosen, fallback_used = _select_fallback(
-        records,
-        pareto_identities,
-        selected_identity,
-        state,
-    )
-
     verified_pareto = [
-        item
-        for item in state.get("pareto_archive", [])
-        if isinstance(item, dict) and item.get("fully_verified") is True
+        record
+        for identity, record in updated.items()
+        if identity in pareto_identities and _eligible(record)
     ]
+    verified_pareto.sort(
+        key=lambda item: deterministic_selection_key(
+            item,
+            _selection_config(state),
+        )
+    )
     state["pareto_archive"] = verified_pareto
+    fallback_used = bool(
+        chosen is not None
+        and str(chosen.get("candidate_hash")) != (selected_identity or "")
+    )
     select_event = _select_event(result)
 
     if chosen is None:
@@ -455,6 +495,8 @@ def enforce_final_cosim_policy(
         state["selected_design_fully_verified"] = False
         state["selected_design_frequency_compliant"] = False
         state["selected_design_resource_compliant"] = False
+        state["best_ppa_candidate"] = None
+        state["best_correct_candidate"] = None
         result.success = False
         result.status = "final_cosim_failed"
         result.termination_reason = "no_cosim_verified_pareto_or_baseline"
@@ -467,11 +509,9 @@ def enforce_final_cosim_policy(
                 "selected_design_resource_compliant": False,
                 "best_ppa_candidate": None,
                 "best_correct_candidate": None,
-                "pareto_archive": [
-                    item.get("archived_file") for item in verified_pareto
-                ],
+                "pareto_archive": [],
                 "final_cosim_audit": _display(audit_path),
-                "fallback_used": fallback_used,
+                "fallback_used": bool(selected_identity),
             }
         )
         status = "failed"
@@ -489,7 +529,7 @@ def enforce_final_cosim_policy(
         ) is not False
         if chosen_identity in pareto_identities:
             state["best_ppa_candidate"] = selected
-        elif fallback_used:
+        else:
             state["best_ppa_candidate"] = None
         if fallback_used and result.success:
             result.status = "completed_with_cosim_fallback"
@@ -527,7 +567,8 @@ def enforce_final_cosim_policy(
     policy.update(
         {
             "final_cosim_required": True,
-            "pareto_cosim_required": True,
+            "pareto_cosim_required": False,
+            "final_cosim_strategy": POLICY_NAME,
             "fallback_cosim_required": True,
             "post_search_audit_unmetered": True,
         }
@@ -536,8 +577,8 @@ def enforce_final_cosim_policy(
     _write_json(state_path, state)
 
     audit = {
-        "schema_version": 1,
-        "policy": "all_pareto_and_selected",
+        "schema_version": 2,
+        "policy": POLICY_NAME,
         "status": status,
         "metered_agent_budget": False,
         "budget_scope": (
@@ -548,6 +589,9 @@ def enforce_final_cosim_policy(
             str(chosen.get("candidate_hash")) if chosen is not None else None
         ),
         "fallback_used": fallback_used,
+        "validation_order_size": len(order),
+        "candidates_audited": len(audited),
+        "candidates_skipped_after_success": max(len(order) - len(audited), 0),
         "verified_pareto_count": len(verified_pareto),
         "candidates": audited,
     }
@@ -560,7 +604,11 @@ def enforce_final_cosim_policy(
             status="passed" if chosen is not None else "failed",
             details={
                 "audit": _display(audit_path),
+                "policy": POLICY_NAME,
                 "candidates_audited": len(audited),
+                "candidates_skipped_after_success": audit[
+                    "candidates_skipped_after_success"
+                ],
                 "verified_pareto_count": len(verified_pareto),
                 "fallback_used": fallback_used,
                 "selected_after_cosim": audit["selected_after_cosim"],
