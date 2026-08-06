@@ -27,6 +27,8 @@ RESOURCE_RECOVERY_THRESHOLD_PERCENT = 25.0
 
 BASELINE_RESTART_REASON = "restart_from_verified_baseline"
 BASELINE_RESTART_VERDICTS = {
+    "reject_duplicate",
+    "reject_no_change",
     "reject_no_objective_gain",
     "reject_dominated_pre_cosim",
     "reject_no_change_pre_cosim",
@@ -301,7 +303,6 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     if record.get("static_validation") is True:
         return 1, index, "static_valid_candidate"
     return 0, index, "latest_non_duplicate_fallback"
-
 
 
 def _baseline_restart_parent(
