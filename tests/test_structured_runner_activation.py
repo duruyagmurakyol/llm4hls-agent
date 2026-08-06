@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from agent.optimise import runner, runner_legacy, structured_exploration
+from agent.optimise.structured_tail import (
+    STRUCTURED_EXPLOIT_FALLBACK_REASON,
+    STRUCTURED_EXPLOIT_REASON,
+    STRUCTURED_RECOVERY_FALLBACK_REASON,
+)
 
 
 def _config(tmp_path: Path, *, structured: bool = True) -> Path:
@@ -22,6 +27,7 @@ def _config(tmp_path: Path, *, structured: bool = True) -> Path:
         "top_function": "kernel",
         "output_dir": "run",
         "baseline": {"source": "baseline.cpp"},
+        "budget": {"max_candidates": 20},
     }
     if structured:
         payload["search_policy"] = {"mode": "structured_v1"}
@@ -29,21 +35,70 @@ def _config(tmp_path: Path, *, structured: bool = True) -> Path:
     return path
 
 
-def _record(index: int, verdict: str = "reject_static") -> dict:
-    return {
+def _record(
+    index: int,
+    verdict: str = "reject_static",
+    *,
+    refinement_eligible: bool | None = None,
+    latency_ns: float = 100.0,
+) -> dict:
+    record = {
         "candidate_index": index,
         "candidate_file": f"candidate_{index:03d}.cpp",
         "verdict": verdict,
-        "fully_verified": verdict == "accept_dominates_baseline",
+        "fully_verified": verdict in {
+            "accept_dominates_baseline",
+            "keep_pareto_candidate",
+        },
         "static_validation": True,
-        "csim": verdict == "accept_dominates_baseline",
-        "synthesis": verdict == "accept_dominates_baseline",
+        "csim": verdict in {
+            "accept_dominates_baseline",
+            "keep_pareto_candidate",
+        },
+        "synthesis": verdict in {
+            "accept_dominates_baseline",
+            "keep_pareto_candidate",
+        },
+        "meets_frequency_requirement": True,
+        "resource_limit_compliance": {
+            "configured": True,
+            "passed": True,
+            "limits": {"resources_lut_used": 1000},
+        },
+        "metrics": {
+            "latency_ns": latency_ns,
+            "throughput_period_ns": latency_ns,
+            "resources_lut_used": 500,
+            "resources_ff_used": 500,
+            "resources_dsp_used": 1,
+            "resources_bram_used": 0,
+        },
+        "cost": {"total_tokens": 100, "tool_calls": 2, "tool_seconds": 1.0},
     }
+    if refinement_eligible is not None:
+        record["refinement_eligible"] = refinement_eligible
+    return record
 
 
 def _patch_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(runner, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(structured_exploration, "REPO_ROOT", tmp_path)
+
+
+def _materialise_exploration_history(config: Path) -> None:
+    for index, family in enumerate(
+        (
+            "critical_path_restructuring",
+            "bounded_unroll",
+            "memory_parallelism",
+        ),
+        1,
+    ):
+        structured_exploration.prepare_structured_exploration_prompt(
+            config,
+            candidate_index=index,
+            strategy_family=family,
+        )
 
 
 def test_candidate_one_generation_prepares_structured_baseline_prompt(
@@ -89,8 +144,6 @@ def test_candidates_two_and_three_use_baseline_and_distinct_prompts(
     config = _config(tmp_path)
     config_data = json.loads(config.read_text(encoding="utf-8"))
 
-    # Materialise the completed earlier exploration metadata exactly as live
-    # candidate generation would do.
     structured_exploration.prepare_structured_exploration_prompt(
         config,
         candidate_index=1,
@@ -141,7 +194,7 @@ def test_candidates_two_and_three_use_baseline_and_distinct_prompts(
     assert prompt_two != prompt_three
 
 
-def test_dominating_exploration_candidate_does_not_stop_before_slot_four(
+def test_dominating_candidate_does_not_stop_before_fifth_slot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -159,40 +212,110 @@ def test_dominating_exploration_candidate_does_not_stop_before_slot_four(
         first = runner_legacy._record({}, 1)
         third = runner_legacy._record({}, 3)
         fourth = runner_legacy._record({}, 4)
+        fifth = runner_legacy._record({}, 5)
 
     assert first["verdict"] == "keep_pareto_candidate"
     assert third["verdict"] == "keep_pareto_candidate"
+    assert fourth["verdict"] == "keep_pareto_candidate"
     assert first["structured_exploration_continue"] is True
-    assert fourth["verdict"] == "accept_dominates_baseline"
+    assert fourth["structured_exploration_continue"] is True
+    assert fifth["verdict"] == "accept_dominates_baseline"
 
 
-def test_candidate_four_delegates_to_existing_parent_selection(
+def test_candidate_four_selects_best_refinement_eligible_exploration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _patch_roots(monkeypatch, tmp_path)
     config = _config(tmp_path)
     config_data = json.loads(config.read_text(encoding="utf-8"))
-    delegated: list[int] = []
+    _materialise_exploration_history(config)
 
-    def fake_select(records: object, selection: dict | None = None):
-        del selection
-        values = list(records)
-        delegated.append(len(values))
-        return _record(2, "keep_pareto_candidate"), "pareto_candidate"
-
-    monkeypatch.setattr(runner, "select_refinement_parent", fake_select)
+    records = [
+        _record(
+            1,
+            "keep_pareto_candidate",
+            refinement_eligible=True,
+            latency_ns=80.0,
+        ),
+        _record(
+            2,
+            "keep_pareto_candidate",
+            refinement_eligible=True,
+            latency_ns=50.0,
+        ),
+        _record(
+            3,
+            "keep_pareto_candidate",
+            refinement_eligible=False,
+            latency_ns=10.0,
+        ),
+    ]
 
     with runner._legacy_execution_hooks(config, config_data):
-        selected = runner_legacy.select_refinement_parent(
-            [_record(1), _record(2), _record(3)]
-        )
+        selected = runner_legacy.select_refinement_parent(records)
 
-    assert delegated == [3]
     assert selected is not None
     parent, reason = selected
     assert parent["candidate_index"] == 2
-    assert reason == "pareto_candidate"
+    assert reason == STRUCTURED_EXPLOIT_REASON
+
+
+def test_candidate_four_falls_back_to_independent_baseline_family(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_roots(monkeypatch, tmp_path)
+    config = _config(tmp_path)
+    config_data = json.loads(config.read_text(encoding="utf-8"))
+    _materialise_exploration_history(config)
+
+    records = [
+        _record(index, refinement_eligible=False)
+        for index in (1, 2, 3)
+    ]
+
+    with runner._legacy_execution_hooks(config, config_data):
+        selected = runner_legacy.select_refinement_parent(records)
+
+    assert selected is not None
+    parent, reason = selected
+    assert parent["candidate_index"] == 0
+    assert reason == STRUCTURED_EXPLOIT_FALLBACK_REASON
+
+
+def test_candidate_five_uses_baseline_fallback_when_no_recovery_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_roots(monkeypatch, tmp_path)
+    config = _config(tmp_path)
+    config_data = json.loads(config.read_text(encoding="utf-8"))
+    _materialise_exploration_history(config)
+    (tmp_path / "run" / "candidate_004_search_decision.json").write_text(
+        json.dumps({"candidate_index": 4, "phase": "exploit"}),
+        encoding="utf-8",
+    )
+
+    records = [
+        _record(index, refinement_eligible=False)
+        for index in (1, 2, 3, 4)
+    ]
+
+    with runner._legacy_execution_hooks(config, config_data):
+        selected = runner_legacy.select_refinement_parent(records)
+
+    assert selected is not None
+    parent, reason = selected
+    assert parent["candidate_index"] == 0
+    assert reason == STRUCTURED_RECOVERY_FALLBACK_REASON
+
+
+def test_structured_config_caps_candidate_budget_at_five(tmp_path: Path) -> None:
+    config = json.loads(_config(tmp_path).read_text(encoding="utf-8"))
+    capped = runner._structured_config(config)
+    assert capped["budget"]["max_candidates"] == 5
+    assert config["budget"]["max_candidates"] == 20
 
 
 def test_legacy_config_does_not_activate_structured_generation(
