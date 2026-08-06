@@ -1,11 +1,12 @@
 """Runtime enforcement for the structured-search novelty ledger.
 
 The pure ledger lives in :mod:`agent.optimise.search_ledger`. This module adds
-three guarded runtime boundaries without changing the preserved optimisation
+four guarded runtime boundaries without changing the preserved optimisation
 runner:
 
 * inspect the proposed parent/strategy branch before candidate generation;
 * register the exact model-facing prompt immediately before the provider call;
+* canonicalise forbidden structured-candidate directive combinations;
 * record generated source hashes and terminal evaluation verdicts.
 
 Legacy PPA configurations bypass every guard. Installation is idempotent and
@@ -31,6 +32,9 @@ from agent.optimise.search_ledger import (
     record_candidate_source,
     record_search_outcome,
     register_search_attempt,
+)
+from agent.optimise.structured_candidate_safety import (
+    canonicalise_structured_candidate,
 )
 
 STRUCTURED_SEARCH_MODE = "structured_v1"
@@ -290,6 +294,76 @@ def _guarded_complete(*args: Any, **kwargs: Any) -> Any:
     return _ORIGINAL_COMPLETE(*args, **kwargs)
 
 
+def _canonicalise_generated_candidate(
+    config: dict[str, Any],
+    candidate_index: int,
+    candidate_path: Path,
+) -> str:
+    """Canonicalise forbidden advisory-strategy directives before hashing."""
+
+    output_dir = _output_dir(config)
+    strategy = _load_optional(
+        output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+    )
+    baseline_path = _repo_path(str(config["baseline"]["source"]))
+    source = candidate_path.read_text(encoding="utf-8")
+    baseline_source = baseline_path.read_text(encoding="utf-8")
+    canonicalised, report = canonicalise_structured_candidate(
+        source,
+        strategy=strategy,
+        top_function=str(config.get("top_function") or ""),
+        baseline_source=baseline_source,
+        validation=(
+            config.get("validation")
+            if isinstance(config.get("validation"), dict)
+            else {}
+        ),
+        target_loop_label=(
+            str(config["target_loop_label"])
+            if isinstance(config.get("target_loop_label"), str)
+            and config.get("target_loop_label")
+            else None
+        ),
+    )
+    report.update(
+        {
+            "candidate_index": candidate_index,
+            "candidate_file": str(candidate_path),
+            "baseline_file": str(baseline_path),
+        }
+    )
+    report_path = output_dir / (
+        f"candidate_{candidate_index:03d}_structured_canonicalisation.json"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    if report.get("applied") is True:
+        candidate_path.write_text(canonicalised, encoding="utf-8")
+        metadata_path = output_dir / (
+            f"candidate_{candidate_index:03d}_model_metadata.json"
+        )
+        metadata = _load_optional(metadata_path)
+        if metadata:
+            metadata["structured_canonicalisation_applied"] = True
+            metadata["structured_canonicalisation_changes"] = len(
+                report.get("changes") or []
+            )
+            metadata["structured_canonicalisation_file"] = str(report_path)
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        print(
+            "Structured candidate safety canonicalisation: "
+            f"{len(report.get('changes') or [])} change(s) applied",
+            flush=True,
+        )
+    return canonicalised
+
+
 def _guarded_generate(
     config_source: Any,
     candidate_index: int = 1,
@@ -322,10 +396,15 @@ def _guarded_generate(
         prompt = _prompt_text(plan["output_dir"], candidate_index)
         _register_exact_prompt(plan, prompt or "")
 
+    source_text = _canonicalise_generated_candidate(
+        config,
+        candidate_index,
+        candidate_path,
+    )
     record_candidate_source(
         plan["output_dir"],
         candidate_index=candidate_index,
-        source_text=candidate_path.read_text(encoding="utf-8"),
+        source_text=source_text,
     )
     return candidate_path
 
