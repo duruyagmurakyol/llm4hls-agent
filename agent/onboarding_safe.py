@@ -28,6 +28,12 @@ DEFAULT_BUDGETS = {
     "max_total_tokens": None,
 }
 
+DEFAULT_OPTIMISATION = {
+    "prompt_constraints": [],
+    "validation": {},
+    "selection": {"mode": "research_pareto"},
+}
+
 
 def _portable_path(path: Path) -> str:
     """Use repository-relative paths locally and absolute paths for mounted tasks."""
@@ -157,6 +163,11 @@ def resolve_benchmark(root: Path) -> TaskManifest:
                 "enabled": True,
                 "command": _independent_validation_command(build_relative),
             },
+        },
+        "optimisation": {
+            "prompt_constraints": list(DEFAULT_OPTIMISATION["prompt_constraints"]),
+            "validation": dict(DEFAULT_OPTIMISATION["validation"]),
+            "selection": dict(DEFAULT_OPTIMISATION["selection"]),
         },
         "adapter": {"kind": "auto"},
         "output_dir": f"experiments/track_a/{task_id}",
