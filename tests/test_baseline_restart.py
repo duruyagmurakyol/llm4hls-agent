@@ -50,17 +50,28 @@ def record(
     }
 
 
-def test_no_objective_gain_restarts_from_baseline() -> None:
-    selected = select_refinement_parent(
-        [record(1, "reject_no_objective_gain")]
-    )
+def _assert_baseline_restart(verdict: str) -> None:
+    selected = select_refinement_parent([record(1, verdict)])
 
     assert selected is not None
     parent, reason = selected
 
     assert parent["candidate_index"] == 0
     assert parent["trigger_candidate_index"] == 1
+    assert parent["trigger_verdict"] == verdict
     assert reason == BASELINE_RESTART_REASON
+
+
+def test_no_objective_gain_restarts_from_baseline() -> None:
+    _assert_baseline_restart("reject_no_objective_gain")
+
+
+def test_no_change_restarts_from_baseline() -> None:
+    _assert_baseline_restart("reject_no_change")
+
+
+def test_duplicate_restarts_from_baseline() -> None:
+    _assert_baseline_restart("reject_duplicate")
 
 
 def test_latest_no_gain_does_not_override_pareto_parent() -> None:
@@ -68,6 +79,21 @@ def test_latest_no_gain_does_not_override_pareto_parent() -> None:
         [
             record(1, "keep_pareto_candidate"),
             record(2, "reject_no_objective_gain"),
+        ]
+    )
+
+    assert selected is not None
+    parent, reason = selected
+
+    assert parent["candidate_index"] == 1
+    assert reason == "pareto_candidate"
+
+
+def test_latest_duplicate_does_not_override_pareto_parent() -> None:
+    selected = select_refinement_parent(
+        [
+            record(1, "keep_pareto_candidate"),
+            record(2, "reject_duplicate", fully_verified=False),
         ]
     )
 
@@ -224,13 +250,4 @@ def test_restart_prompt_uses_baseline_not_rejected_source(
 
 
 def test_synthesis_equivalent_restarts_from_baseline() -> None:
-    selected = select_refinement_parent(
-        [record(1, "reject_synthesis_equivalent")]
-    )
-
-    assert selected is not None
-    parent, reason = selected
-
-    assert parent["candidate_index"] == 0
-    assert parent["trigger_candidate_index"] == 1
-    assert reason == BASELINE_RESTART_REASON
+    _assert_baseline_restart("reject_synthesis_equivalent")
