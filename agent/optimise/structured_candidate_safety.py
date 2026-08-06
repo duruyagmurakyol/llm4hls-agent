@@ -1,15 +1,9 @@
 """Deterministic safety canonicalisation for structured HLS candidates.
 
-The model remains responsible for the architectural rewrite.  This module only
-normalises a small set of source-level directive mistakes that are already
-forbidden by the structured prompts and static validator:
-
-* DATAFLOW combined with explicit PIPELINE in one top-function region;
-* complete UNROLL in a bounded structured search slot;
-* complete partitioning of top-level interface arrays;
-* omission of a required loop label when one unambiguous target loop remains.
-
-Legacy strategies and repair workflows are deliberately untouched.
+The model remains responsible for the architectural rewrite. This module only
+normalises source-level directive mistakes that are already forbidden by the
+structured prompts and static validator. Legacy strategies and repair workflows
+are deliberately untouched.
 """
 
 from __future__ import annotations
@@ -22,11 +16,6 @@ STRUCTURED_ADVISORY_MODE = "advisory"
 _BOUNDED_UNROLL_FAMILIES = {
     "bounded_unroll",
     "memory_parallelism",
-}
-_REMOVE_COMPLETE_UNROLL_FAMILIES = {
-    "critical_path_restructuring",
-    "loop_schedule_restructuring",
-    "pipeline_dataflow_restructuring",
 }
 
 
@@ -51,6 +40,14 @@ def _function_span(text: str, name: str) -> tuple[int, int] | None:
     opening = text.find("{", signature.start())
     closing = _matching_brace(text, opening)
     return (opening, closing) if closing is not None else None
+
+
+def _function_body(text: str, name: str) -> str:
+    span = _function_span(text, name)
+    if span is None:
+        return ""
+    opening, closing = span
+    return text[opening + 1 : closing]
 
 
 def _top_array_parameters(text: str, name: str) -> set[str]:
@@ -152,7 +149,6 @@ def _canonicalise_complete_unroll(
         else:
             replacement = ""
             action = "remove_complete_unroll"
-
         changes.append(
             {
                 "action": action,
@@ -163,14 +159,6 @@ def _canonicalise_complete_unroll(
         return replacement
 
     return pattern.sub(replace, source), changes
-
-
-def _top_body(source: str, top_function: str) -> str:
-    span = _function_span(source, top_function)
-    if span is None:
-        return ""
-    opening, closing = span
-    return source[opening + 1 : closing]
 
 
 def _remove_pragma_kind(source: str, kind: str) -> tuple[str, int]:
@@ -187,7 +175,7 @@ def _resolve_dataflow_pipeline_conflict(
     top_function: str,
     strategy_name: str,
 ) -> tuple[str, list[dict[str, Any]]]:
-    body = _top_body(source, top_function)
+    body = _function_body(source, top_function)
     has_dataflow = bool(
         re.search(r"#\s*pragma\s+HLS\s+DATAFLOW\b", body, re.IGNORECASE)
     )
@@ -232,19 +220,6 @@ def _baseline_labelled_loop_header(
     return match.group(1) if match else None
 
 
-def _loop_matches_in_top(
-    source: str,
-    top_function: str,
-) -> list[re.Match[str]]:
-    span = _function_span(source, top_function)
-    if span is None:
-        return []
-    opening, closing = span
-    body = source[opening + 1 : closing]
-    pattern = re.compile(r"\bfor\s*\([^)]*\)\s*\{", re.MULTILINE)
-    return list(pattern.finditer(body))
-
-
 def _restore_loop_label(
     source: str,
     *,
@@ -282,10 +257,11 @@ def _restore_loop_label(
         if len(exact) == 1:
             target = exact[0]
 
-    if target is None and len(loop_matches) == 1:
-        target = loop_matches[0]
+    # A C label does not alter algorithmic behaviour. If the model split or
+    # rewrote the original loop so no exact header survives, attach the required
+    # audit label to the first top-function loop deterministically.
     if target is None:
-        return source, []
+        target = loop_matches[0]
 
     absolute_start = opening + 1 + target.start()
     line_start = source.rfind("\n", 0, absolute_start) + 1
@@ -299,6 +275,9 @@ def _restore_loop_label(
         {
             "action": "restore_loop_label",
             "label": label,
+            "fallback_to_first_loop": baseline_header is None
+            or _normalise_loop_header(target.group(0))
+            != _normalise_loop_header(baseline_header),
         }
     ]
 
@@ -384,8 +363,6 @@ def canonicalise_structured_candidate(
         )
         changes.extend(applied)
 
-    # Remove blank lines left by deleted one-line pragmas without otherwise
-    # reformatting the model output.
     updated = re.sub(r"\n{3,}", "\n\n", updated)
     return updated, {
         "applied": bool(changes),
