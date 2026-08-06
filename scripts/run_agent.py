@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from agent.config import TaskManifest  # noqa: E402
-from agent.controller import run_agent  # noqa: E402
+from agent.execution_mode import run_execution_mode  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 from agent.resume import resume_agent  # noqa: E402
 from agent.stage_aware import (  # noqa: E402
@@ -378,6 +378,15 @@ def main() -> None:
     parser.add_argument("--status-only", action="store_true")
     parser.add_argument("--max-agent-steps", type=int, default=None)
     parser.add_argument(
+        "--mode",
+        choices=("auto", "repair", "optimise"),
+        default="auto",
+        help=(
+            "Execution policy: auto preserves normal routing; repair stops after "
+            "a verified repair; optimise rejects an invalid baseline and runs only PPA."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help=(
@@ -411,14 +420,18 @@ def main() -> None:
             return
         if args.resume and args.status_only:
             raise ValueError("--resume cannot be combined with --status-only")
+        if args.resume and args.mode == "repair":
+            raise ValueError("--resume cannot be combined with --mode repair")
 
         if isinstance(task_input, TaskManifest):
             capture_original_scoring_baseline(task_input)
 
         if args.resume:
             result = resume_agent(task_input, max_steps=args.max_agent_steps)
-        elif isinstance(task_input, TaskManifest) and supports_stage_aware_task(
-            task_input
+        elif (
+            isinstance(task_input, TaskManifest)
+            and supports_stage_aware_task(task_input)
+            and args.mode in {"auto", "repair"}
         ):
             if args.status_only:
                 raise ValueError(
@@ -426,8 +439,9 @@ def main() -> None:
                 )
             result = run_stage_aware_task(task_input)
         else:
-            result = run_agent(
+            result = run_execution_mode(
                 task_input,
+                mode=args.mode,
                 status_only=args.status_only,
                 max_steps=args.max_agent_steps,
             )
