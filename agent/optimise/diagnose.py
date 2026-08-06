@@ -313,6 +313,8 @@ def prepare_baseline_restart_prompt(
 
     summary = load_json(summary_path)
     restart_verdicts = {
+        "reject_duplicate",
+        "reject_no_change",
         "reject_no_objective_gain",
         "reject_dominated_pre_cosim",
         "reject_no_change_pre_cosim",
