@@ -65,6 +65,9 @@
       "Treat increased resources as acceptable only when the result creates a meaningful latency-resource trade-off."
     ]
   },
+  "search_policy": {
+    "mode": "structured_v1"
+  },
   "adapter": {
     "kind": "autonomous_ppa"
   },
