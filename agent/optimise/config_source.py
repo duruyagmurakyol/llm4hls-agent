@@ -35,6 +35,44 @@ ConfigSource: TypeAlias = Path | InMemoryConfig
 ConfigInput: TypeAlias = Path | TaskManifest | dict[str, Any]
 
 
+def _load_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _saved_baseline_metrics(output_dir: Path) -> dict[str, Any]:
+    """Recover existing original-baseline metrics without invoking Vitis.
+
+    Track-A runs persist the untouched original kernel separately from the
+    promoted/selected design. Prefer that scoring baseline, then the durable
+    archive, and only then the verified baseline used by older runs.
+    """
+
+    original = _load_json_object(output_dir / "original_scoring_baseline.json")
+    metrics = original.get("metrics")
+    if isinstance(metrics, dict) and metrics:
+        return dict(metrics)
+
+    state = _load_json_object(output_dir / "candidate_state.json")
+    archived = state.get("original_baseline")
+    if isinstance(archived, dict):
+        metrics = archived.get("metrics")
+        if isinstance(metrics, dict) and metrics:
+            return dict(metrics)
+
+    verified = _load_json_object(output_dir / "verified_baseline.json")
+    metrics = verified.get("metrics")
+    if isinstance(metrics, dict) and metrics:
+        return dict(metrics)
+
+    return {}
+
+
 def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     """Translate one authoritative task manifest into the existing PPA shape."""
 
@@ -83,6 +121,19 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         # policy unless a manifest explicitly requests another mode.
         selection.setdefault("mode", "research_pareto")
 
+    output_dir = Path(str(task.output_dir)).expanduser()
+    baseline: dict[str, Any] = {
+        "source": artifacts["source"],
+        "tcl": build_files[0],
+        "project_dir": optimisation.get(
+            "baseline_project_dir",
+            f"/tmp/llm4hls-agent/{task.task_id}_baseline",
+        ),
+    }
+    saved_metrics = _saved_baseline_metrics(output_dir)
+    if saved_metrics:
+        baseline["metrics"] = saved_metrics
+
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
         "benchmark": benchmark,
@@ -92,14 +143,7 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "resource_limits": dict(target.get("resource_limits") or {}),
         "selection": selection,
         "requires_cosim": requires_cosim,
-        "baseline": {
-            "source": artifacts["source"],
-            "tcl": build_files[0],
-            "project_dir": optimisation.get(
-                "baseline_project_dir",
-                f"/tmp/llm4hls-agent/{task.task_id}_baseline",
-            ),
-        },
+        "baseline": baseline,
         "validation": validation,
         "prompt_constraints": prompt_constraints,
         "output_dir": str(task.output_dir),
