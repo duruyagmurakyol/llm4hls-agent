@@ -137,8 +137,23 @@ def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
 
 
 def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
-    """Check source-enforceable strategies before running Vitis."""
+    """Check source-enforceable strategies before running Vitis.
+
+    Strategies marked ``compliance_mode=advisory`` describe a model-guided
+    architectural search family rather than one exact source pattern. They are
+    audited in metadata and by the normal correctness/PPA validation stages,
+    but are not rejected merely because a regex cannot prove the architecture.
+    Unknown strategies without this explicit marker remain rejected.
+    """
     name = strategy.get("name")
+    if strategy.get("compliance_mode") == "advisory":
+        return {
+            "required": False,
+            "passed": True,
+            "strategy": name,
+            "reason": "advisory_strategy_not_source_enforced",
+        }
+
     factor = int(strategy.get("parameters", {}).get("factor", 0))
     if name in {
         "recover_frequency",
