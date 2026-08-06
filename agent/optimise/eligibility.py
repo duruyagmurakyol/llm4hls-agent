@@ -6,8 +6,9 @@ These predicates deliberately keep three different questions independent:
 * refinement_eligible: is it useful enough to spend another model/tool budget on?
 * final_selectable: is it currently safe and eligible for final ranking?
 
-The module is pure and does not perform file I/O.  Evaluation integration is kept
-separate so this policy can be regression-tested before changing the search loop.
+The policy is intentionally pure at candidate level.  Summary annotation is a
+small integration helper used after evaluation so existing metric and verdict
+classification remains unchanged.
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def practical_refinement_signal(record: dict[str, Any]) -> bool:
         return True
 
     # Require every available performance measure to remain within the allowed
-    # regression envelope.  Missing performance evidence is not sufficient.
+    # regression envelope. Missing performance evidence is not sufficient.
     if not performance_deltas or any(
         value > MAX_LATENCY_REGRESSION_FOR_AREA_TRADEOFF_PERCENT
         for value in performance_deltas
@@ -160,4 +161,58 @@ def annotate_candidate_eligibility(record: dict[str, Any]) -> dict[str, Any]:
 
     annotated = dict(record)
     annotated.update(candidate_eligibility(record))
+    return annotated
+
+
+def annotate_experiment_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Annotate baseline, candidates and Pareto records consistently.
+
+    Candidate verdicts, metrics and the Pareto archive are not changed.  This
+    function only adds explicit search/selection eligibility fields.
+    """
+
+    annotated = dict(summary)
+
+    baseline = annotated.get("baseline_record")
+    if isinstance(baseline, dict):
+        annotated["baseline_record"] = annotate_candidate_eligibility(baseline)
+
+    candidates = [
+        annotate_candidate_eligibility(item)
+        if isinstance(item, dict)
+        else item
+        for item in annotated.get("candidates", [])
+    ]
+    annotated["candidates"] = candidates
+
+    candidates_by_index = {
+        int(item["candidate_index"]): item
+        for item in candidates
+        if isinstance(item, dict) and isinstance(item.get("candidate_index"), int)
+    }
+    baseline_record = annotated.get("baseline_record")
+    if isinstance(baseline_record, dict):
+        candidates_by_index[0] = baseline_record
+
+    pareto_archive: list[Any] = []
+    for item in annotated.get("pareto_archive", []):
+        if not isinstance(item, dict):
+            pareto_archive.append(item)
+            continue
+        index = item.get("candidate_index")
+        source = candidates_by_index.get(index) if isinstance(index, int) else None
+        pareto_archive.append(
+            annotate_candidate_eligibility(source or item)
+        )
+    annotated["pareto_archive"] = pareto_archive
+
+    annotated["eligibility_policy"] = {
+        "schema_version": 1,
+        "performance_improvement_percent": MIN_PERFORMANCE_IMPROVEMENT_PERCENT,
+        "maximum_latency_regression_for_area_tradeoff_percent": (
+            MAX_LATENCY_REGRESSION_FOR_AREA_TRADEOFF_PERCENT
+        ),
+        "minimum_lut_or_ff_reduction_percent": MIN_AREA_REDUCTION_PERCENT,
+        "area_metrics": list(AREA_METRICS),
+    }
     return annotated
