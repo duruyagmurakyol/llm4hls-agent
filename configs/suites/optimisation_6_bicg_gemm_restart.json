@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "suite_id": "optimisation_6_bicg_gemm_restart",
+  "description": "Targeted post-fix matrix for BiCG and GEMM across all three competition models. Exercises baseline restart after no-change/duplicate candidates and final/Pareto co-simulation.",
+  "expected_runs": 6,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "requested_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    },
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "requested_id": "Qwen/Qwen3.5-122B-A10B",
+      "slug": "qwen35_122b_fp8",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    },
+    {
+      "id": "Qwen/Qwen3.6-27B",
+      "requested_id": "Qwen/Qwen3.6-27B",
+      "slug": "qwen36_27b_fp8",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "bicg",
+      "path": "benchmarks/bicg/golden",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 2,
+      "tier": "core",
+      "id": "gemm",
+      "path": "benchmarks/hls_eval/gemm",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "gemm"
+    }
+  ]
+}
