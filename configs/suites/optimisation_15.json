@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "suite_id": "optimisation_15",
+  "description": "Clean optimisation-only comparison over five valid baselines after fixing non-cosim budget admission.",
+  "expected_runs": 15,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "requested_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    },
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "requested_id": "cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit",
+      "slug": "qwen35_122b_fp8",
+      "provider": "siliconflow",
+      "model_equivalence": "provider_substitute_precision_variant",
+      "requested_precision": "AWQ-4bit",
+      "provider_precision": "FP8",
+      "provider_mapping_note": "The requested AWQ-4bit artifact is not exposed by SiliconFlow; the available Qwen3.5-122B-A10B endpoint is FP8."
+    },
+    {
+      "id": "Qwen/Qwen3.6-27B",
+      "requested_id": "Qwen/Qwen3.6-27B-FP8",
+      "slug": "qwen36_27b_fp8",
+      "provider": "siliconflow",
+      "model_equivalence": "provider_alias_same_precision",
+      "requested_precision": "FP8",
+      "provider_precision": "FP8",
+      "provider_mapping_note": "SiliconFlow omits the -FP8 suffix from the API identifier while hosting the FP8 model."
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "dotProduct_optimize",
+      "path": "external/fpt26-harness/tasks/dotProduct_optimize",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "dot_product"
+    },
+    {
+      "priority": 2,
+      "tier": "core",
+      "id": "atax",
+      "path": "benchmarks/hls_eval/atax",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "atax"
+    },
+    {
+      "priority": 3,
+      "tier": "core",
+      "id": "bicg",
+      "path": "benchmarks/bicg/golden",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 4,
+      "tier": "core",
+      "id": "gemm",
+      "path": "benchmarks/hls_eval/gemm",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "gemm"
+    },
+    {
+      "priority": 5,
+      "tier": "core",
+      "id": "vector_add",
+      "path": "benchmarks/vector_add",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    }
+  ]
+}

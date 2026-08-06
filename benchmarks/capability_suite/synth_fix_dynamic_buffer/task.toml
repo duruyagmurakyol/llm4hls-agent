@@ -1,0 +1,14 @@
+task_id = "synth_fix_dynamic_buffer"
+task_type = "synth_fix"
+difficulty = 3
+top = "scale_copy"
+kernel_file = "scale_copy.cpp"
+header_files = ["scale_copy.h"]
+public_tb = "scale_copy_tb.cpp"
+budget = 40
+requires_cosim = false
+initial_condition = "The source passes C-simulation but fails HLS synthesis. Preserve its public behavior and repair the synthesizability failure using the Vitis evidence."
+
+[target]
+part = "xcu55c-fsvh2892-2L-e"
+clock_ns = 10.0

@@ -31,6 +31,23 @@ def _output_dir(task: TaskManifest) -> Path:
     return path
 
 
+def _cosim_required(
+    task: TaskManifest,
+    budget: BudgetState | None = None,
+) -> bool:
+    """Use the package contract for Track-A and preserve legacy behaviour."""
+
+    track_a = task.data.get("track_a")
+    if isinstance(track_a, dict):
+        return bool(track_a.get("requires_cosim", False))
+    if budget is not None:
+        return budget.max_cosim_calls > 0
+    budgets = task.data.get("budgets")
+    if isinstance(budgets, dict):
+        return int(budgets.get("max_cosim_calls", 0)) > 0
+    return True
+
+
 def _write_resolved_task(task: TaskManifest) -> Path:
     snapshot = {
         "task_id": task.task_id,
@@ -40,6 +57,7 @@ def _write_resolved_task(task: TaskManifest) -> Path:
         "target": task.data["target"],
         "model": task.data["model"],
         "budgets": task.data["budgets"],
+        "track_a": task.data.get("track_a"),
         "output_dir": str(task.output_dir),
     }
     path = _output_dir(task) / "resolved_task.json"
@@ -257,6 +275,7 @@ def _run_autonomous_ppa(
 def _repair_config(task: TaskManifest) -> dict[str, object]:
     repair = task.data["repair"]
     model = task.data["model"]
+    interface = task.data.get("interface")
     return {
         "repair_mode": "direct_api",
         "experiment_id": task.task_id,
@@ -264,6 +283,10 @@ def _repair_config(task: TaskManifest) -> dict[str, object]:
         "editable_files": repair["editable_files"],
         "protected_files": repair["protected_files"],
         "context_files": repair.get("context_files", repair["protected_files"]),
+        "repair_constraints": repair.get("repair_constraints", []),
+        "top_function": (
+            interface.get("top_function") if isinstance(interface, dict) else None
+        ),
         "host_validation": repair["host_validation"],
         "independent_validation": repair["independent_validation"],
         "model": model["name"],
@@ -343,6 +366,7 @@ def _run_direct_api_repair(
     ]
     synthesis: dict[str, object] | None = None
     cosim: dict[str, object] | None = None
+    cosim_required = _cosim_required(task, budget)
 
     if passed:
         candidate = run_dir / "workspace" / task.data["repair"]["editable_files"][0]
@@ -367,7 +391,7 @@ def _run_direct_api_repair(
         synthesis_event.step = 2
         trajectory.append(synthesis_event)
 
-        if synthesis["passed"] and budget.max_cosim_calls > 0:
+        if synthesis["passed"] and cosim_required:
             cosim_stage = "post_repair_cosim"
             budget.charge_cosim(stage=cosim_stage)
             try:
@@ -387,9 +411,10 @@ def _run_direct_api_repair(
             cosim_event = _tool_event(cosim_stage, cosim)
             cosim_event.step = 3
             trajectory.append(cosim_event)
+        elif synthesis["passed"]:
+            print("Post-repair co-simulation: not required by this task")
 
     synthesis_passed = synthesis is not None and synthesis["passed"] is True
-    cosim_required = budget.max_cosim_calls > 0
     cosim_passed = cosim is not None and cosim["passed"] is True
     success = passed and synthesis_passed and (cosim_passed if cosim_required else True)
     status = (
@@ -467,21 +492,23 @@ def _detect_initial_condition(
         trajectory[-1].details.update({"route": "repair", "decision_reason": "synthesis_failed"})
         return "repair", trajectory, None
 
-    budget.charge_cosim(stage="initial_cosim")
-    try:
-        cosim = run_cosim(task, candidate)
-    except Exception:
-        budget.update_last_event(success=False)
-        raise
-    budget.update_last_event(
-        success=cosim["passed"] is True,
-        timed_out=bool(cosim["timed_out"]),
-        details={"candidate_hash": cosim["candidate_hash"], "log_path": cosim["log_path"]},
-    )
-    trajectory.append(_tool_event("initial_cosim", cosim))
-    if not cosim["passed"]:
-        trajectory[-1].details.update({"route": "repair", "decision_reason": "cosim_failed"})
-        return "repair", trajectory, None
+    cosim: dict[str, object] | None = None
+    if _cosim_required(task, budget):
+        budget.charge_cosim(stage="initial_cosim")
+        try:
+            cosim = run_cosim(task, candidate)
+        except Exception:
+            budget.update_last_event(success=False)
+            raise
+        budget.update_last_event(
+            success=cosim["passed"] is True,
+            timed_out=bool(cosim["timed_out"]),
+            details={"candidate_hash": cosim["candidate_hash"], "log_path": cosim["log_path"]},
+        )
+        trajectory.append(_tool_event("initial_cosim", cosim))
+        if not cosim["passed"]:
+            trajectory[-1].details.update({"route": "repair", "decision_reason": "cosim_failed"})
+            return "repair", trajectory, None
 
     trajectory.append(
         TrajectoryEvent(
@@ -495,6 +522,7 @@ def _detect_initial_condition(
                 "candidate_file": synthesis.get("candidate_file", str(candidate)),
                 "project_dir": synthesis.get("project_dir"),
                 "metrics": synthesis["metrics"],
+                "cosim_required": _cosim_required(task, budget),
             },
         )
     )
@@ -513,10 +541,15 @@ def _repair_baseline(task: TaskManifest, result: AgentResult) -> dict[str, objec
         event for event in result.trajectory if event.stage == "post_repair_synthesis"
     )
     cosim_event = next(
-        event for event in result.trajectory if event.stage == "post_repair_cosim"
+        (event for event in result.trajectory if event.stage == "post_repair_cosim"),
+        None,
     )
     synthesis = {"passed": synthesis_event.status == "passed", **synthesis_event.details}
-    cosim = {"passed": cosim_event.status == "passed", **cosim_event.details}
+    cosim = (
+        {"passed": cosim_event.status == "passed", **cosim_event.details}
+        if cosim_event is not None
+        else None
+    )
     return promote_verified_baseline(
         task,
         _resolve(str(synthesis_event.details["candidate_file"])),
@@ -524,6 +557,11 @@ def _repair_baseline(task: TaskManifest, result: AgentResult) -> dict[str, objec
         csim_passed=bool(repair.details.get("independent_validation_passed")),
         synthesis=synthesis,
         cosim=cosim,
+        cosim_required=(
+            bool(task.data["track_a"].get("requires_cosim", False))
+            if isinstance(task.data.get("track_a"), dict)
+            else cosim_event is not None
+        ),
     )
 
 
@@ -533,9 +571,11 @@ def _initial_baseline(
 ) -> dict[str, object]:
     csim = verification["csim"]
     synthesis = verification["synthesis"]
-    cosim = verification["cosim"]
-    if not isinstance(csim, dict) or not isinstance(synthesis, dict) or not isinstance(cosim, dict):
-        raise TypeError("Initial verification evidence must contain structured tool results")
+    cosim = verification.get("cosim")
+    if not isinstance(csim, dict) or not isinstance(synthesis, dict):
+        raise TypeError("Initial verification evidence must contain CSim and synthesis results")
+    if cosim is not None and not isinstance(cosim, dict):
+        raise TypeError("Initial co-simulation evidence must be structured when present")
     return promote_verified_baseline(
         task,
         Path(verification["source"]),
@@ -543,6 +583,11 @@ def _initial_baseline(
         csim_passed=bool(csim["passed"]),
         synthesis=synthesis,
         cosim=cosim,
+        cosim_required=(
+            bool(task.data["track_a"].get("requires_cosim", False))
+            if isinstance(task.data.get("track_a"), dict)
+            else cosim is not None
+        ),
     )
 
 
@@ -580,10 +625,93 @@ def _merge_results(prefix: AgentResult, suffix: AgentResult) -> AgentResult:
     return suffix
 
 
-def _ppa_budget_available(budget: BudgetState, max_steps: int | None) -> bool:
+def _verified_baseline_result(
+    task: TaskManifest,
+    baseline: dict[str, object],
+    *,
+    termination_reason: str,
+    error: BudgetExceeded | None = None,
+) -> AgentResult:
+    source = str(baseline["source"])
+    trajectory: list[TrajectoryEvent] = []
+    if error is not None:
+        trajectory.append(
+            TrajectoryEvent(
+                step=1,
+                stage="budget",
+                status="passed",
+                details={
+                    "error": str(error),
+                    "action": "retained_verified_baseline",
+                },
+            )
+        )
+    trajectory.append(
+        TrajectoryEvent(
+            step=len(trajectory) + 1,
+            stage="select_best",
+            status="passed",
+            details={
+                "selected_design": source,
+                "selected_design_fully_verified": True,
+                "selected_design_frequency_compliant": None,
+                "selected_design_resource_compliant": True,
+                "latest_candidate": None,
+                "best_correct_candidate": source,
+                "best_ppa_candidate": None,
+                "pareto_archive": [],
+            },
+        )
+    )
+    return AgentResult(
+        task_id=task.task_id,
+        success=True,
+        status="verified_baseline",
+        termination_reason=termination_reason,
+        output_dir=str(task.output_dir),
+        trajectory=trajectory,
+    )
+
+
+def _load_verified_baseline(task: TaskManifest) -> dict[str, object] | None:
+    path = _output_dir(task) / "verified_baseline.json"
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    source = value.get("source")
+    validation = value.get("validation")
+    if not isinstance(source, str) or not isinstance(validation, dict):
+        return None
+    if validation.get("csim_passed") is not True or validation.get("synthesis_passed") is not True:
+        return None
+    if validation.get("cosim_required", True) and validation.get("cosim_passed") is not True:
+        return None
+    return value
+
+
+def _budget_fallback_reason(budget: BudgetState) -> str:
+    if budget.stop_reason == "track_a_credit_budget_exhausted":
+        return "verified_baseline_official_credit_budget_exhausted"
+    return "verified_baseline_budget_exhausted"
+
+
+def _ppa_budget_available(
+    task: TaskManifest,
+    budget: BudgetState,
+    max_steps: int | None,
+) -> bool:
     if max_steps == 0:
         return True
-    return budget.can_generate_candidate(reserve_csim=1, reserve_synthesis=1)
+    return budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
+        reserve_cosim=1 if _cosim_required(task, budget) else 0,
+    )
 
 
 def _run_auto(
@@ -609,19 +737,42 @@ def _run_auto(
         baseline = _repair_baseline(task, repair_result)
         repair_result.trajectory.append(_baseline_event(baseline))
         print("Verified repaired source promoted to the active baseline.", flush=True)
-        if not _ppa_budget_available(budget, max_steps):
-            repair_result.status = "verified_baseline"
-            repair_result.termination_reason = "verified_baseline_no_ppa_budget"
-            return _prepend_initial_validation(repair_result, initial)
+        if not _ppa_budget_available(task, budget, max_steps):
+            reason = (
+                "verified_baseline_insufficient_official_credits_for_ppa"
+                if budget.max_track_a_credits is not None
+                else "verified_baseline_no_ppa_budget"
+            )
+            fallback = _verified_baseline_result(
+                task,
+                baseline,
+                termination_reason=reason,
+            )
+            return _prepend_initial_validation(
+                _merge_results(repair_result, fallback),
+                initial,
+            )
 
         print("Entering PPA optimisation with the repaired baseline.", flush=True)
-        optimisation = _run_autonomous_ppa(
-            task,
-            status_only=False,
-            max_steps=max_steps,
-            budget=budget,
-            baseline=baseline,
-        )
+        try:
+            optimisation = _run_autonomous_ppa(
+                task,
+                status_only=False,
+                max_steps=max_steps,
+                budget=budget,
+                baseline=baseline,
+            )
+        except BudgetExceeded as error:
+            fallback = _verified_baseline_result(
+                task,
+                baseline,
+                termination_reason=_budget_fallback_reason(budget),
+                error=error,
+            )
+            return _prepend_initial_validation(
+                _merge_results(repair_result, fallback),
+                initial,
+            )
         return _prepend_initial_validation(
             _merge_results(repair_result, optimisation),
             initial,
@@ -632,40 +783,67 @@ def _run_auto(
     baseline = _initial_baseline(task, verification)
     initial.append(_baseline_event(baseline))
     print("Verified initial source promoted to the active baseline.", flush=True)
-    if not _ppa_budget_available(budget, max_steps):
-        result = AgentResult(
-            task_id=task.task_id,
-            success=True,
-            status="verified_baseline",
-            termination_reason="verified_baseline_no_ppa_budget",
-            output_dir=str(task.output_dir),
-            trajectory=[],
+    if not _ppa_budget_available(task, budget, max_steps):
+        reason = (
+            "verified_baseline_insufficient_official_credits_for_ppa"
+            if budget.max_track_a_credits is not None
+            else "verified_baseline_no_ppa_budget"
+        )
+        result = _verified_baseline_result(
+            task,
+            baseline,
+            termination_reason=reason,
         )
         return _prepend_initial_validation(result, initial)
 
-    print(
-        "Initial CSim, synthesis and co-simulation passed; entering PPA optimisation.",
-        flush=True,
+    validation_text = (
+        "Initial CSim, synthesis and required co-simulation passed"
+        if _cosim_required(task, budget)
+        else "Initial CSim and synthesis passed; co-simulation is not required"
     )
-    result = _run_autonomous_ppa(
-        task,
-        status_only=False,
-        max_steps=max_steps,
-        budget=budget,
-        baseline=baseline,
-    )
+    print(f"{validation_text}; entering PPA optimisation.", flush=True)
+    try:
+        result = _run_autonomous_ppa(
+            task,
+            status_only=False,
+            max_steps=max_steps,
+            budget=budget,
+            baseline=baseline,
+        )
+    except BudgetExceeded as error:
+        result = _verified_baseline_result(
+            task,
+            baseline,
+            termination_reason=_budget_fallback_reason(budget),
+            error=error,
+        )
     return _prepend_initial_validation(result, initial)
 
 
 def _budget_exhausted_result(
     task: TaskManifest,
     error: BudgetExceeded,
+    budget: BudgetState,
 ) -> AgentResult:
+    baseline = _load_verified_baseline(task)
+    if baseline is not None:
+        return _verified_baseline_result(
+            task,
+            baseline,
+            termination_reason=_budget_fallback_reason(budget),
+            error=error,
+        )
+
+    official = budget.stop_reason == "track_a_credit_budget_exhausted"
     return AgentResult(
         task_id=task.task_id,
         success=False,
-        status="budget_exhausted",
-        termination_reason="budget_exhausted",
+        status=(
+            "official_credit_budget_exhausted" if official else "budget_exhausted"
+        ),
+        termination_reason=(
+            "official_credit_budget_exhausted" if official else "budget_exhausted"
+        ),
         output_dir=str(task.output_dir),
         trajectory=[
             TrajectoryEvent(
@@ -711,7 +889,7 @@ def run_agent(
         else:
             raise ValueError(f"Unsupported adapter kind: {task.adapter_kind}")
     except BudgetExceeded as error:
-        result = _budget_exhausted_result(task, error)
+        result = _budget_exhausted_result(task, error, budget)
     except Exception:
         budget.set_stop_reason("execution_error")
         budget_path = _write_budget_summary(task, budget)

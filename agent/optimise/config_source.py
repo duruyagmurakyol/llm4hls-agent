@@ -35,6 +35,44 @@ ConfigSource: TypeAlias = Path | InMemoryConfig
 ConfigInput: TypeAlias = Path | TaskManifest | dict[str, Any]
 
 
+def _load_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _saved_baseline_metrics(output_dir: Path) -> dict[str, Any]:
+    """Recover existing original-baseline metrics without invoking Vitis.
+
+    Track-A runs persist the untouched original kernel separately from the
+    promoted/selected design. Prefer that scoring baseline, then the durable
+    archive, and only then the verified baseline used by older runs.
+    """
+
+    original = _load_json_object(output_dir / "original_scoring_baseline.json")
+    metrics = original.get("metrics")
+    if isinstance(metrics, dict) and metrics:
+        return dict(metrics)
+
+    state = _load_json_object(output_dir / "candidate_state.json")
+    archived = state.get("original_baseline")
+    if isinstance(archived, dict):
+        metrics = archived.get("metrics")
+        if isinstance(metrics, dict) and metrics:
+            return dict(metrics)
+
+    verified = _load_json_object(output_dir / "verified_baseline.json")
+    metrics = verified.get("metrics")
+    if isinstance(metrics, dict) and metrics:
+        return dict(metrics)
+
+    return {}
+
+
 def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     """Translate one authoritative task manifest into the existing PPA shape."""
 
@@ -70,6 +108,31 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     minimum_frequency_mhz = float(target.get("minimum_frequency_mhz", 100.0))
     budgets = task.data["budgets"]
     max_candidates = int(budgets["max_iterations"])
+    track_a = task.data.get("track_a")
+    requires_cosim = (
+        bool(track_a.get("requires_cosim", False))
+        if isinstance(track_a, dict)
+        else int(budgets.get("max_cosim_calls", 0)) > 0
+    )
+    selection = dict(optimisation.get("selection") or {})
+    if isinstance(track_a, dict):
+        # Track-A still records the reference-harness score separately, but
+        # final design choice defaults to the richer multi-objective Pareto
+        # policy unless a manifest explicitly requests another mode.
+        selection.setdefault("mode", "research_pareto")
+
+    output_dir = Path(str(task.output_dir)).expanduser()
+    baseline: dict[str, Any] = {
+        "source": artifacts["source"],
+        "tcl": build_files[0],
+        "project_dir": optimisation.get(
+            "baseline_project_dir",
+            f"/tmp/llm4hls-agent/{task.task_id}_baseline",
+        ),
+    }
+    saved_metrics = _saved_baseline_metrics(output_dir)
+    if saved_metrics:
+        baseline["metrics"] = saved_metrics
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
@@ -78,15 +141,9 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "target_clock_period_ns": target_clock_period_ns,
         "minimum_frequency_mhz": minimum_frequency_mhz,
         "resource_limits": dict(target.get("resource_limits") or {}),
-        "selection": dict(optimisation.get("selection") or {}),
-        "baseline": {
-            "source": artifacts["source"],
-            "tcl": build_files[0],
-            "project_dir": optimisation.get(
-                "baseline_project_dir",
-                f"/tmp/llm4hls-agent/{task.task_id}_baseline",
-            ),
-        },
+        "selection": selection,
+        "requires_cosim": requires_cosim,
+        "baseline": baseline,
         "validation": validation,
         "prompt_constraints": prompt_constraints,
         "output_dir": str(task.output_dir),
@@ -97,6 +154,8 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
             "max_cosim_calls": int(budgets.get("max_cosim_calls", max_candidates)),
         },
     }
+    if isinstance(track_a, dict):
+        config["track_a"] = dict(track_a)
 
     target_loop_label = optimisation.get("target_loop_label")
     if target_loop_label:

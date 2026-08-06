@@ -1,0 +1,14 @@
+task_id = "vector_add_generate"
+task_type = "generate"
+difficulty = 2
+top = "vector_add_generate"
+kernel_file = "vector_add_generate.cpp"
+header_files = ["vector_add_generate.h"]
+public_tb = "vector_add_generate_tb.cpp"
+budget = 40
+requires_cosim = false
+initial_condition = "A signature-preserving implementation stub is provided. Generate the complete synthesizable kernel from the public specification and testbench."
+
+[target]
+part = "xcu55c-fsvh2892-2L-e"
+clock_ns = 10.0

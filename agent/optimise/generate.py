@@ -19,6 +19,12 @@ from agent.optimise.strategy_canonicalisation import (
 from agent.providers.siliconflow import complete
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RESOURCE_LIMIT_FIELDS = (
+    ("lut", "resources_lut_used", "LUT"),
+    ("ff", "resources_ff_used", "FF"),
+    ("dsp", "resources_dsp_used", "DSP"),
+    ("bram", "resources_bram_used", "BRAM"),
+)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -32,6 +38,32 @@ def configured_top(config: dict[str, Any]) -> str:
     if not isinstance(top, str) or not top.strip():
         raise ValueError("Config is missing a non-empty 'top_function' field")
     return top.strip()
+
+
+def resource_limit_prompt_suffix(config: dict[str, Any]) -> str:
+    """Append authoritative task ceilings to every model-facing PPA prompt."""
+    limits = config.get("resource_limits")
+    if not isinstance(limits, dict) or not limits:
+        return ""
+
+    lines: list[str] = []
+    for short_key, metric_key, label in RESOURCE_LIMIT_FIELDS:
+        value = limits.get(short_key, limits.get(metric_key))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        rendered = f"{float(value):g}"
+        lines.append(f"- {label} <= {rendered}")
+
+    if not lines:
+        return ""
+
+    return (
+        "\n\nHard resource ceilings (mandatory):\n"
+        + "\n".join(lines)
+        + "\n- A candidate exceeding any ceiling is ineligible, regardless of latency improvement."
+        "\n- Use bounded pipeline, unroll, partitioning, buffering, and operator replication."
+        "\n- Prefer a smaller valid speed-up over an aggressive design that violates a ceiling."
+    )
 
 
 def _attach_latency_recovery_factor(
@@ -259,6 +291,7 @@ def generate_candidate(
 
     output_dir = REPO_ROOT / config["output_dir"]
     prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
+    effective_prompt_path = output_dir / f"candidate_{candidate_index:03d}_effective_prompt.txt"
     strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
     exhausted_path = output_dir / f"candidate_{candidate_index:03d}_strategy_exhausted.json"
     if not prompt_path.is_file():
@@ -287,15 +320,20 @@ def generate_candidate(
 
     user_prompt = (
         prompt_path.read_text(encoding="utf-8")
+        + resource_limit_prompt_suffix(config)
         + _latency_recovery_prompt_suffix(strategy)
         + _latency_recovery_exhausted_suffix(exhausted)
     )
+    effective_prompt_path.write_text(user_prompt, encoding="utf-8")
 
     model_name = str(model_config["name"])
     print("\nSiliconFlow candidate generation")
     print(f"Model: {model_name}")
     print(f"Required top: {required_top}")
     print(f"Prompt: {prompt_path.relative_to(REPO_ROOT)}")
+    print(f"Effective prompt: {effective_prompt_path.relative_to(REPO_ROOT)}")
+    if config.get("resource_limits"):
+        print(f"Hard resource ceilings: {config['resource_limits']}")
     print("Calling the model once...")
 
     stage = f"candidate_{candidate_index:03d}_generation"
@@ -307,7 +345,8 @@ def generate_candidate(
             model=model_name,
             system_prompt=(
                 "You are an FPGA HLS optimisation agent. Follow the supplied constraints "
-                "exactly and return only one complete compilable C++ source file."
+                "exactly, treat hard resource ceilings as mandatory, and return only one "
+                "complete compilable C++ source file."
             ),
             user_prompt=user_prompt,
             temperature=float(model_config.get("temperature", 0.0)),
@@ -352,7 +391,9 @@ def generate_candidate(
         "output_tokens": response.output_tokens,
         "total_tokens": response.total_tokens,
         "latency_seconds": response.latency_seconds,
+        "resource_limits": config.get("resource_limits") or {},
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
+        "effective_prompt_file": str(effective_prompt_path.relative_to(REPO_ROOT)),
         "raw_response_file": str(raw_path.relative_to(REPO_ROOT)),
         "candidate_file": str(candidate_path.relative_to(REPO_ROOT)),
         "strategy_file": (

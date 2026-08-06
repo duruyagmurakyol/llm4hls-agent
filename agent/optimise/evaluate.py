@@ -204,9 +204,17 @@ def _baseline_fully_verified(config: dict[str, Any]) -> bool:
     verification = config.get("baseline", {}).get("verification")
     if not isinstance(verification, dict):
         return True
-    return all(
-        verification.get(key) is True
-        for key in ("csim_passed", "synthesis_passed", "cosim_passed")
+    requires_cosim = bool(
+        verification.get("cosim_required", config.get("requires_cosim", True))
+    )
+    return bool(
+        verification.get("csim_passed") is True
+        and verification.get("synthesis_passed") is True
+        and (
+            verification.get("cosim_passed") is True
+            if requires_cosim
+            else True
+        )
     )
 
 
@@ -222,6 +230,7 @@ def classify_candidate(
     *,
     minimum_frequency_mhz: float = DEFAULT_MINIMUM_FREQUENCY_MHZ,
     resource_limits: Any = None,
+    requires_cosim: bool = True,
 ) -> dict[str, Any]:
     prefix = f"candidate_{index:03d}"
     source = output_dir / f"{prefix}.cpp"
@@ -244,6 +253,7 @@ def classify_candidate(
         "csim": csim.get("passed") if csim else None,
         "synthesis": synthesis.get("passed") if synthesis else None,
         "synthesis_run": synthesis_attempted,
+        "cosim_required": requires_cosim,
         "cosim": cosim.get("passed") if cosim else None,
         "cosim_run": cosim_attempted,
         "fully_verified": False,
@@ -300,8 +310,6 @@ def classify_candidate(
     record["resource_limit_compliance"] = compliance
     record["meets_resource_limits"] = compliance["passed"]
 
-    # Preserve baseline-relative evidence as soon as valid synthesis metrics exist.
-    # Hard constraints and final verification still control verdicts and eligibility.
     record["deltas_percent"] = {
         key: percent_change(metrics.get(key), baseline.get(key)) for key in METRIC_KEYS
     }
@@ -399,7 +407,7 @@ def classify_candidate(
             reason="C/RTL co-simulation failed; the candidate is not fully verified.",
         )
         return record
-    if not cosim_attempted:
+    if requires_cosim and not cosim_attempted:
         record.update(
             verdict="awaiting_cosim",
             reason="Synthesis, frequency and resource checks passed; C/RTL co-simulation is required.",
@@ -410,7 +418,7 @@ def classify_candidate(
         record["static_validation"] is True
         and record["csim"] is True
         and record["synthesis"] is True
-        and record["cosim"] is True
+        and (record["cosim"] is True if requires_cosim else True)
     )
     if not is_fully_verified(record):
         record.update(
@@ -510,6 +518,7 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
         config.get("minimum_frequency_mhz", DEFAULT_MINIMUM_FREQUENCY_MHZ)
     )
     resource_limits = config.get("resource_limits") or {}
+    requires_cosim = bool(config.get("requires_cosim", True))
     baseline = derive_hardware_metrics(
         baseline_metrics(config, output_dir),
         minimum_frequency_mhz=minimum_frequency,
@@ -524,6 +533,7 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
             duplicates,
             minimum_frequency_mhz=minimum_frequency,
             resource_limits=resource_limits,
+            requires_cosim=requires_cosim,
         )
         for index in indices
     ]
@@ -550,11 +560,18 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
             )
 
     final_pareto = [record for record in pareto if record["verdict"] in PARETO_ELIGIBLE_VERDICTS]
+    baseline_verified = _baseline_fully_verified(config)
+    baseline_cosim = (
+        config.get("baseline", {}).get("verification", {}).get("cosim_passed")
+        if isinstance(config.get("baseline", {}).get("verification"), dict)
+        else (True if requires_cosim else None)
+    )
     summary = {
-        "schema_version": 7,
+        "schema_version": 8,
         "experiment_name": config.get("experiment_name"),
         "benchmark": config.get("benchmark"),
         "selection": config.get("selection", {}),
+        "verification_policy": {"requires_cosim": requires_cosim},
         "frequency_requirement": {
             "minimum_frequency_mhz": minimum_frequency,
             "maximum_clock_period_ns": maximum_clock_period_ns(minimum_frequency),
@@ -574,8 +591,9 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
             "static_validation": True,
             "csim": True,
             "synthesis": True,
-            "cosim": True,
-            "fully_verified": _baseline_fully_verified(config),
+            "cosim_required": requires_cosim,
+            "cosim": baseline_cosim,
+            "fully_verified": baseline_verified,
             "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
             "resource_limit_compliance": baseline_compliance,
             "meets_resource_limits": baseline_compliance["passed"],
@@ -594,7 +612,9 @@ def evaluate_experiment(config_path: Any) -> dict[str, Any]:
                 "candidate_index": 0,
                 "candidate_file": config["baseline"]["source"],
                 "metrics": {key: baseline.get(key) for key in METRIC_KEYS},
-                "fully_verified": _baseline_fully_verified(config),
+                "cosim_required": requires_cosim,
+                "cosim": baseline_cosim,
+                "fully_verified": baseline_verified,
                 "meets_frequency_requirement": baseline.get("meets_minimum_frequency"),
                 "resource_limit_compliance": baseline_compliance,
                 "meets_resource_limits": baseline_compliance["passed"],

@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "suite_id": "gemm_deepseek_restart_smoke",
+  "description": "Single GEMM smoke test verifying that a no-change first candidate restarts from the verified baseline and continues optimisation before final/Pareto co-simulation.",
+  "expected_runs": 1,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": false,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "requested_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "gemm",
+      "path": "benchmarks/hls_eval/gemm",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "gemm"
+    }
+  ]
+}

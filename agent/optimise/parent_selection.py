@@ -25,6 +25,16 @@ RESOURCE_KEYS = (
 LATENCY_RECOVERY_THRESHOLD_PERCENT = 50.0
 RESOURCE_RECOVERY_THRESHOLD_PERCENT = 25.0
 
+BASELINE_RESTART_REASON = "restart_from_verified_baseline"
+BASELINE_RESTART_VERDICTS = {
+    "reject_duplicate",
+    "reject_no_change",
+    "reject_no_objective_gain",
+    "reject_dominated_pre_cosim",
+    "reject_no_change_pre_cosim",
+    "reject_synthesis_equivalent",
+}
+
 
 def _load_optional_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -206,9 +216,10 @@ def _is_feasible_verified_parent(record: dict[str, Any]) -> bool:
         and compliance.get("passed") is True
         and record.get("verdict")
         not in {
-            "reject_no_change",
+            "reject_no_objective_gain",
+            "reject_dominated_pre_cosim",
+            "reject_no_change_pre_cosim",
             "reject_resource_limits",
-            "reject_synthesis_equivalent",
         }
     )
 
@@ -234,6 +245,9 @@ def _pending_resource_limit_recovery_parent(
     if resource_limit_recovery_trigger(records) is None:
         return None
 
+    # A fully verified no-change or synthesis-equivalent candidate is still a
+    # safe recovery anchor: it is effectively the baseline, but unlike the
+    # rejected over-budget child it has a concrete candidate source file.
     feasible = [record for record in records if _is_feasible_verified_parent(record)]
     if not feasible:
         return None
@@ -268,6 +282,9 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     if verdict in {
         "reject_duplicate",
         "reject_no_change",
+        "reject_no_objective_gain",
+        "reject_dominated_pre_cosim",
+        "reject_no_change_pre_cosim",
         "reject_resource_limits",
         "reject_synthesis_equivalent",
     }:
@@ -287,6 +304,42 @@ def _parent_rank(record: dict[str, Any]) -> tuple[int, int, str] | None:
     if record.get("static_validation") is True:
         return 1, index, "static_valid_candidate"
     return 0, index, "latest_non_duplicate_fallback"
+
+
+def _baseline_restart_parent(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str] | None:
+    """Restart from the verified baseline after an objectively useless result."""
+
+    indexed = [
+        record
+        for record in records
+        if isinstance(record.get("candidate_index"), int)
+    ]
+    if not indexed:
+        return None
+
+    latest = max(indexed, key=lambda item: int(item["candidate_index"]))
+    if latest.get("verdict") not in BASELINE_RESTART_VERDICTS:
+        return None
+
+    # A real Pareto point, dominating candidate, or explicitly useful
+    # constraint-violation remains a better refinement parent than baseline.
+    for record in records:
+        rank = _parent_rank(record)
+        if rank is not None and rank[0] >= 4:
+            return None
+
+    trigger_index = int(latest["candidate_index"])
+    baseline = {
+        "candidate_index": 0,
+        "candidate_file": "verified_baseline",
+        "fully_verified": True,
+        "verdict": "baseline_restart",
+        "trigger_candidate_index": trigger_index,
+        "trigger_verdict": latest.get("verdict"),
+    }
+    return baseline, BASELINE_RESTART_REASON
 
 
 def select_refinement_parent(
@@ -310,6 +363,10 @@ def select_refinement_parent(
     pending = _pending_latency_recovery_parent(record_list, selection)
     if pending is not None:
         return pending
+
+    baseline_restart = _baseline_restart_parent(record_list)
+    if baseline_restart is not None:
+        return baseline_restart
 
     ranked = [
         (rank, record)

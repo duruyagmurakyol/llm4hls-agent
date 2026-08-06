@@ -1,4 +1,4 @@
-"""Repair-generation helpers using the SiliconFlow provider."""
+"""Source-generation helpers using the configured hosted model provider."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from agent.repair.output_validation import (
     InvalidModelOutputError,
     validate_response_from_prompt,
 )
-from agent.repair.prompt import build_strict_repair_system_prompt
+from agent.repair.prompt import build_strict_source_system_prompt
 
 
 def clean_source(text: str) -> str:
@@ -29,9 +29,19 @@ def generate_repair(
     max_tokens: int = 2048,
     timeout_seconds: int = 120,
     thinking_budget: int | None = None,
+    mode: str = "repair",
 ):
-    """Generate and pre-validate one repaired source before it can be written."""
-    effective_system_prompt = build_strict_repair_system_prompt(system_prompt)
+    """Generate and pre-validate one complete editable HLS source file.
+
+    ``mode='repair'`` preserves the existing minimal-edit contract.  The
+    ``generate`` mode permits a complete implementation while keeping the same
+    source-only, interface-preserving and protected-file safety checks.
+    """
+
+    effective_system_prompt = build_strict_source_system_prompt(
+        mode=mode,
+        additional_instruction=system_prompt,
+    )
     response = complete(
         model=model,
         system_prompt=effective_system_prompt,

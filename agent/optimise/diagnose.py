@@ -286,7 +286,201 @@ def _write_strategy(
     )
 
 
+
+def prepare_baseline_restart_prompt(
+    config_path: Path,
+    next_index: int,
+) -> Path:
+    """Create an independent attempt using the verified baseline as parent."""
+
+    config = load_json(config_path.resolve())
+    output_dir = REPO_ROOT / config["output_dir"]
+    baseline_path = REPO_ROOT / config["baseline"]["source"]
+    target_path = output_dir / "baseline_source_target.json"
+    cause_path = output_dir / "baseline_source_cause.json"
+    summary_path = output_dir / "experiment_summary.json"
+
+    for path in (
+        baseline_path,
+        target_path,
+        cause_path,
+        summary_path,
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Required baseline-restart input not found: {path}"
+            )
+
+    summary = load_json(summary_path)
+    restart_verdicts = {
+        "reject_duplicate",
+        "reject_no_change",
+        "reject_no_objective_gain",
+        "reject_dominated_pre_cosim",
+        "reject_no_change_pre_cosim",
+        "reject_synthesis_equivalent",
+    }
+
+    rejected = [
+        record
+        for record in summary.get("candidates", [])
+        if (
+            isinstance(record.get("candidate_index"), int)
+            and record.get("verdict") in restart_verdicts
+        )
+    ]
+    if not rejected:
+        raise RuntimeError(
+            "Baseline restart requested without a rejected no-gain candidate"
+        )
+
+    rejected.sort(key=lambda item: int(item["candidate_index"]))
+    trigger = rejected[-1]
+    trigger_index = int(trigger["candidate_index"])
+
+    baseline_metrics = summary.get("baseline_metrics") or {}
+    trigger_metrics = trigger.get("metrics") or {}
+
+    history_lines: list[str] = []
+    rejected_indices: list[int] = []
+
+    for record in rejected:
+        index = int(record["candidate_index"])
+        rejected_indices.append(index)
+
+        deltas = record.get("deltas_percent") or {}
+        directives: list[str] = []
+
+        source_value = record.get("candidate_file")
+        if isinstance(source_value, str) and source_value:
+            source_path = Path(source_value)
+            if not source_path.is_absolute():
+                source_path = REPO_ROOT / source_path
+
+            if source_path.is_file():
+                directives = sorted(
+                    {
+                        line.strip()
+                        for line in source_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if "#pragma HLS" in line
+                    }
+                )
+
+        history_lines.append(
+            f"- Candidate {index:03d}: "
+            f"verdict={record.get('verdict')}; "
+            f"latency_delta={deltas.get('latency_ns')}; "
+            f"throughput_delta={deltas.get('throughput_period_ns')}; "
+            f"LUT_delta={deltas.get('resources_lut_used')}; "
+            f"FF_delta={deltas.get('resources_ff_used')}; "
+            f"DSP_delta={deltas.get('resources_dsp_used')}; "
+            f"directives={directives or ['none recorded']}"
+        )
+
+    target = load_json(target_path)
+    cause = load_json(cause_path)
+    top = config["top_function"]
+    history = "\n".join(history_lines)
+
+    direction = (
+        "restart from the original verified baseline and choose an independent "
+        "optimisation strategy; do not inherit any rejected candidate's "
+        "interfaces, buffers, partitioning, unrolling, declarations, loop "
+        "structure, or other implementation changes"
+    )
+
+    prompt = f"""You are performing iteration {next_index} of an AMD/Xilinx Vitis HLS PPA optimisation loop.
+
+Benchmark: {config.get('benchmark')}
+Top function: {top}
+Objective: improve latency or initiation interval while keeping resource growth proportionate. Correctness is mandatory.
+
+Measured evidence from rejected candidate {trigger_index:03d}:
+The candidate completed evaluation but did not improve any optimisation objective.
+
+Baseline metrics:
+{metric_summary(baseline_metrics)}
+
+Rejected candidate metrics:
+{metric_summary(trigger_metrics)}
+
+Rejected-attempt history:
+{history}
+
+Parent-selection decision:
+- Implementation parent: original verified baseline (candidate 000).
+- Candidate {trigger_index:03d} is evidence only, not the implementation parent.
+- Discard all interfaces, buffers, pragmas, declarations and loop rewrites introduced by rejected candidates.
+- Do not refine or extend a candidate that was worse than the baseline.
+- Choose a materially different strategy from all rejected attempts listed above.
+
+Selected target:
+- Function/report: {target.get('target_name')}
+- Loop label: {target.get('loop_label')}
+- Primary cause: {(cause.get('primary_hypothesis') or {}).get('category')}
+- Interpretation: {(cause.get('primary_hypothesis') or {}).get('interpretation')}
+
+Required direction:
+- {direction}.
+- Make one focused change whose expected hardware effect follows from measured evidence.
+- Keep every input element exactly once and all accesses in bounds.
+- Do not repeat an implementation already evaluated.
+- Do not add or modify top-level interface pragmas unless report evidence specifically proves that the interface is the bottleneck.
+
+Constraints:
+1. Preserve the exact {top} signature and algorithmic behaviour.
+2. Preserve required loop labels and the existing HLS interface contract.
+3. Modify only declarations and source regions directly required by the optimisation.
+4. Avoid complete partitioning of top-level interface arrays.
+5. Do not combine DATAFLOW and PIPELINE in a conflicting single-process region.
+6. Return one complete compilable C++ source file only.
+7. Do not include Markdown fences or explanations.
+
+Verified baseline source — use this as the sole implementation parent:
+{baseline_path.read_text(encoding='utf-8')}
+
+Rejected candidate source is intentionally omitted because it must not be used as a parent.
+"""
+
+    prompt_path = output_dir / f"candidate_{next_index:03d}_prompt.txt"
+    feedback_path = output_dir / f"candidate_{next_index:03d}_feedback.json"
+
+    prompt_path.write_text(prompt, encoding="utf-8")
+    feedback_path.write_text(
+        json.dumps(
+            {
+                "previous_candidate_index": 0,
+                "evidence_candidate_index": trigger_index,
+                "next_candidate_index": next_index,
+                "verdict": trigger.get("verdict"),
+                "restart_from_baseline": True,
+                "selected_parent": "verified_baseline",
+                "rejected_candidate_indices": rejected_indices,
+                "required_direction": direction,
+                "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print("\nPPA baseline-restart prompt")
+    print("Selected parent: verified baseline (candidate 000)")
+    print(f"Evidence candidate: {trigger_index:03d}")
+    print(f"Next prompt: {prompt_path.relative_to(REPO_ROOT)}")
+    return prompt_path
+
+
 def prepare_refinement_prompt(config_path: Path, previous_index: int, next_index: int) -> Path:
+    if previous_index == 0:
+        return prepare_baseline_restart_prompt(
+            config_path,
+            next_index,
+        )
+
     if next_index <= previous_index:
         raise ValueError("next_index must be greater than previous_index")
     config = load_json(config_path.resolve())

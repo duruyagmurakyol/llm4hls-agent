@@ -26,6 +26,31 @@ DEFAULT_BUDGETS = {
     "max_synthesis_calls": 4,
     "max_model_calls": 5,
     "max_total_tokens": None,
+    "requires_cosim": False,
+}
+
+DEFAULT_OPTIMISATION = {
+    "prompt_constraints": [],
+    "validation": {},
+    "selection": {"mode": "research_pareto"},
+}
+
+# Generous four-times-baseline ceilings for the targeted BiCG/GEMM study.
+# They preserve room for useful parallelism while rejecting explosive designs
+# such as the 94,932-LUT / 291,691-FF GEMM candidate.
+BENCHMARK_RESOURCE_LIMITS = {
+    "bicg": {
+        "lut": 34_964,
+        "ff": 86_908,
+        "dsp": 224,
+        "bram": 64,
+    },
+    "gemm": {
+        "lut": 7_124,
+        "ff": 6_540,
+        "dsp": 104,
+        "bram": 64,
+    },
 }
 
 
@@ -89,6 +114,19 @@ def _independent_validation_command(build_file: str) -> list[str]:
     return ["bash", "-lc", command]
 
 
+def _benchmark_resource_limits(benchmark: DiscoveredBenchmark) -> dict[str, int]:
+    names = {
+        benchmark.name.casefold(),
+        benchmark.root.name.casefold(),
+        benchmark.root.parent.name.casefold(),
+    }
+    for name in names:
+        configured = BENCHMARK_RESOURCE_LIMITS.get(name)
+        if configured is not None:
+            return dict(configured)
+    return {}
+
+
 def resolve_benchmark(root: Path) -> TaskManifest:
     """Discover a benchmark and return one in-memory normalised task."""
 
@@ -140,7 +178,14 @@ def resolve_benchmark(root: Path) -> TaskManifest:
             "part": benchmark.part,
             "clock_period_ns": benchmark.clock_period_ns,
             "minimum_frequency_mhz": 100.0,
-            "resource_limits": {},
+            "resource_limits": _benchmark_resource_limits(benchmark),
+        },
+        "validation_policy": {
+            "requires_cosim": False,
+            "final_requires_cosim": True,
+            "pareto_requires_cosim": False,
+            "fallback_requires_cosim": True,
+            "final_cosim_strategy": "ranked_selected_then_fallback",
         },
         "budgets": dict(DEFAULT_BUDGETS),
         "model": dict(DEFAULT_MODEL),
@@ -157,6 +202,11 @@ def resolve_benchmark(root: Path) -> TaskManifest:
                 "enabled": True,
                 "command": _independent_validation_command(build_relative),
             },
+        },
+        "optimisation": {
+            "prompt_constraints": list(DEFAULT_OPTIMISATION["prompt_constraints"]),
+            "validation": dict(DEFAULT_OPTIMISATION["validation"]),
+            "selection": dict(DEFAULT_OPTIMISATION["selection"]),
         },
         "adapter": {"kind": "auto"},
         "output_dir": f"experiments/track_a/{task_id}",
@@ -176,4 +226,8 @@ def onboard_benchmark(root: Path) -> TaskManifest:
     print(f"Testbench files: {len(task.data['artifacts']['testbench'])}")
     print(f"Part: {task.data['target']['part']}")
     print(f"Clock: {task.data['target']['clock_period_ns']:g} ns")
+    limits = task.data["target"].get("resource_limits") or {}
+    print(f"Resource limits: {limits if limits else 'none'}")
+    print("Search-time co-simulation required: no")
+    print("Final co-simulation strategy: selected, then ranked fallback")
     return task

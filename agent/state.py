@@ -157,6 +157,15 @@ class AgentResult:
             "output_dir": self.output_dir,
             "current_phase": self.current_phase.value,
             "selected_design": selection.get("selected_design"),
+            "final_design_verified": selection.get(
+                "selected_design_fully_verified"
+            ),
+            "selected_design_frequency_compliant": selection.get(
+                "selected_design_frequency_compliant"
+            ),
+            "selected_design_resource_compliant": selection.get(
+                "selected_design_resource_compliant"
+            ),
             "latest_candidate": selection.get("latest_candidate"),
             "best_correct_candidate": selection.get("best_correct_candidate"),
             "best_ppa_candidate": selection.get("best_ppa_candidate"),
