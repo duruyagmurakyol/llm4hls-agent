@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "suite_id": "optimisation_6_bicg_gemm_restart",
-  "description": "Targeted post-fix matrix for BiCG and GEMM across all three competition models. Exercises baseline restart after no-change/duplicate candidates and final/Pareto co-simulation.",
+  "description": "Targeted post-fix matrix for BiCG and GEMM across all three competition models. Uses generous four-times-baseline resource ceilings, baseline restart after no-change/duplicate candidates, and ranked selected-then-fallback final co-simulation.",
   "expected_runs": 6,
   "order": "task_then_model",
   "defaults": {
