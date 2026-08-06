@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from agent.budget import BudgetExceeded, BudgetState
 from agent.config import TaskManifest, load_task
@@ -30,6 +31,18 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _load_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        raise ValueError(f"Could not read resume state from {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"Resume state must contain a JSON object: {path}")
+    return value
+
+
 def load_resumable_baseline(output_dir: str | Path) -> dict[str, object]:
     """Load and validate the durable verified-baseline record."""
     root = _resolve(output_dir)
@@ -38,15 +51,22 @@ def load_resumable_baseline(output_dir: str | Path) -> dict[str, object]:
         raise FileNotFoundError(
             f"No verified baseline is available to resume: {record_path}"
         )
-    record = json.loads(record_path.read_text(encoding="utf-8"))
-    if not isinstance(record, dict):
-        raise ValueError("verified_baseline.json must contain a JSON object")
+    record = _load_json_object(record_path)
 
     validation = record.get("validation")
-    if not isinstance(validation, dict) or not all(
-        validation.get(key) is True
-        for key in ("csim_passed", "synthesis_passed", "cosim_passed")
-    ):
+    if not isinstance(validation, dict):
+        raise ValueError("Saved baseline has no structured validation record")
+    cosim_required = bool(validation.get("cosim_required", True))
+    verified = bool(
+        validation.get("csim_passed") is True
+        and validation.get("synthesis_passed") is True
+        and (
+            validation.get("cosim_passed") is True
+            if cosim_required
+            else True
+        )
+    )
+    if not verified:
         raise ValueError("Saved baseline is not fully verified")
 
     metrics = record.get("metrics")
@@ -69,6 +89,99 @@ def load_resumable_baseline(output_dir: str | Path) -> dict[str, object]:
     return record
 
 
+def _non_negative_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Saved budget field {field} must be a non-negative integer")
+    return value
+
+
+def _load_resumable_budget(task: TaskManifest) -> BudgetState:
+    """Restore cumulative call, token and Track-A credit usage for a retry."""
+
+    budget = BudgetState.from_manifest(task.data["budgets"])
+    summary_path = _resolve(task.output_dir) / "budget_summary.json"
+    summary = _load_json_object(summary_path)
+    if not summary:
+        return budget
+
+    consumed = summary.get("consumed")
+    if not isinstance(consumed, dict):
+        raise ValueError("Saved budget summary has no consumed section")
+
+    counters = {
+        "iterations_used": ("iterations", budget.max_iterations),
+        "model_calls_used": ("model_calls", budget.max_model_calls),
+        "csim_calls_used": ("csim_calls", budget.max_csim_calls),
+        "cosim_calls_used": ("cosim_calls", budget.max_cosim_calls),
+        "synthesis_calls_used": (
+            "synthesis_calls",
+            budget.max_synthesis_calls,
+        ),
+    }
+    for attribute, (field, limit) in counters.items():
+        value = _non_negative_int(consumed.get(field, 0), field=f"consumed.{field}")
+        if value > limit:
+            raise ValueError(
+                f"Saved budget consumed.{field}={value} exceeds configured limit {limit}"
+            )
+        setattr(budget, attribute, value)
+
+    budget.input_tokens_used = _non_negative_int(
+        consumed.get("input_tokens", 0),
+        field="consumed.input_tokens",
+    )
+    budget.output_tokens_used = _non_negative_int(
+        consumed.get("output_tokens", 0),
+        field="consumed.output_tokens",
+    )
+    if (
+        budget.max_total_tokens is not None
+        and budget.total_tokens_used > budget.max_total_tokens
+    ):
+        raise ValueError(
+            "Saved token usage exceeds the configured total-token budget"
+        )
+
+    track_a = summary.get("track_a")
+    track_a = track_a if isinstance(track_a, dict) else {}
+    if budget.max_track_a_credits is not None:
+        saved_costs = track_a.get("credit_costs")
+        if isinstance(saved_costs, dict) and saved_costs != budget.track_a_credit_costs:
+            raise ValueError(
+                "Saved Track-A credit costs do not match the current task configuration"
+            )
+        spent_value = track_a.get("credits_spent")
+        if spent_value is None:
+            spent = (
+                budget.csim_calls_used * budget.track_a_credit_costs["csim"]
+                + budget.synthesis_calls_used
+                * budget.track_a_credit_costs["synthesis"]
+                + budget.cosim_calls_used * budget.track_a_credit_costs["cosim"]
+            )
+        else:
+            spent = _non_negative_int(
+                spent_value,
+                field="track_a.credits_spent",
+            )
+        if spent > budget.max_track_a_credits:
+            raise ValueError(
+                "Saved Track-A credit usage exceeds the configured official budget"
+            )
+        budget.track_a_credits_used = spent
+
+    events = summary.get("events")
+    if isinstance(events, list):
+        budget.events = [dict(item) for item in events if isinstance(item, dict)]
+    budget.events.append(
+        {
+            "resource": "resume",
+            "stage": "resume",
+            "previous_track_a_credits_spent": budget.track_a_credits_used,
+        }
+    )
+    return budget
+
+
 def resume_agent(
     task_input: Path | TaskManifest,
     *,
@@ -80,7 +193,7 @@ def resume_agent(
         raise ValueError("--resume is supported only for automatic repair-and-optimise tasks")
 
     baseline = load_resumable_baseline(task.output_dir)
-    budget = BudgetState.from_manifest(task.data["budgets"])
+    budget = _load_resumable_budget(task)
     resolved_path = _write_resolved_task(task)
     print(f"Resolved task: {resolved_path.relative_to(REPO_ROOT)}")
     print(
@@ -88,6 +201,13 @@ def resume_agent(
         "initial validation and repair are skipped.",
         flush=True,
     )
+    if budget.max_track_a_credits is not None:
+        print(
+            "Restored official credits: "
+            f"spent={budget.track_a_credits_used}, "
+            f"remaining={budget.track_a_credits_remaining}",
+            flush=True,
+        )
 
     try:
         result = _run_autonomous_ppa(
@@ -98,9 +218,9 @@ def resume_agent(
             baseline=baseline,
         )
     except BudgetExceeded as error:
-        result = _budget_exhausted_result(task, error)
+        result = _budget_exhausted_result(task, error, budget)
     except Exception:
-        budget.set_stop_reason("execution_error")
+        budget.set_stop_reason("execution_error", overwrite=True)
         budget_path = _write_budget_summary(task, budget)
         print(f"Budget summary: {budget_path.relative_to(REPO_ROOT)}")
         raise
@@ -116,6 +236,7 @@ def resume_agent(
             "project_dir": baseline["project_dir"],
             "metrics": baseline["metrics"],
             "validation": baseline["validation"],
+            "restored_track_a_credits_spent": budget.track_a_credits_used,
         },
     )
     result.trajectory.insert(0, resume_event)
@@ -123,7 +244,7 @@ def resume_agent(
         event.step = index
 
     result = _record_phase_transitions(task, result)
-    budget.set_stop_reason(result.termination_reason)
+    budget.set_stop_reason(result.termination_reason, overwrite=True)
     budget_path = _write_budget_summary(task, budget)
     result_path = _write_result(result)
     print(f"Budget summary: {budget_path.relative_to(REPO_ROOT)}")
