@@ -1,17 +1,16 @@
-"""Structured-search wrapper around the preserved optimisation runner.
+"""Bounded structured-search wrapper around the preserved PPA runner.
 
-The established validation, budget, synthesis, archive and final-selection
-implementation remains byte-for-byte in :mod:`agent.optimise.runner_legacy`.
-This wrapper changes only search control when structured search is enabled:
+The validation, budget, synthesis, archive and final-selection implementation
+remains in :mod:`agent.optimise.runner_legacy`.  This module changes only search
+control when ``structured_v1`` is enabled:
 
-* candidates 1-3 explore distinct strategy families from the verified baseline;
-* candidate 4 exploits the best explicitly refinement-eligible exploration;
-* candidate 5 performs one bounded recovery or an independent baseline fallback;
-* no unstructured candidate 6+ retries are created.
+* C1-C3 explore distinct strategy families from the verified baseline;
+* C4 exploits the best explicitly refinement-eligible exploration;
+* C5 performs one bounded recovery or an independent baseline fallback;
+* the candidate budget is capped at five, preventing unstructured C6+ retries.
 
-The temporary hook mechanism is process-local and guarded by a lock because the
-legacy runner resolves its collaborators from module globals. Track-A executes
-one optimisation task per process, so no concurrent search is expected.
+All temporary hooks are process-local, protected by a re-entrant lock, and
+restored after every call.
 """
 
 from __future__ import annotations
@@ -46,13 +45,16 @@ from agent.optimise.structured_tail import (
 STRUCTURED_SEARCH_MODE = "structured_v1"
 STRUCTURED_PARENT_REASON = "structured_baseline_exploration"
 
-# Re-export the preserved implementation so existing imports and tests keep the
-# same surface. run_optimisation is defined below and intentionally excluded.
+# Re-export the preserved implementation so existing imports keep the same
+# surface.  The two functions defined below intentionally replace the legacy
+# prompt dispatcher and optimisation entry point.
 for _name in dir(_legacy):
-    if _name != "run_optimisation" and not _name.startswith("__"):
+    if _name not in {"run_optimisation", "_prepare_next_prompt"} and not _name.startswith("__"):
         globals().setdefault(_name, getattr(_legacy, _name))
 
 _RUN_LOCK = threading.RLock()
+_ORIGINAL_LEGACY_PREPARE = _legacy._prepare_next_prompt
+
 _DIRECT_PROMPT_HOOK_NAMES = (
     "is_resource_frequency_balance_reason",
     "is_resource_recovery_reason",
@@ -63,6 +65,7 @@ _DIRECT_PROMPT_HOOK_NAMES = (
     "resource_frequency_balance_trigger",
     "resource_limit_recovery_trigger",
 )
+
 _LEGACY_HOOK_NAMES = (
     "REPO_ROOT",
     "evaluate_experiment",
@@ -85,14 +88,14 @@ _LEGACY_HOOK_NAMES = (
 
 
 def structured_search_enabled(config: dict[str, Any]) -> bool:
-    """Return whether this PPA config opts into the structured rescue policy."""
+    """Return whether a PPA config opts into the structured rescue policy."""
 
     policy = config.get("search_policy")
     if isinstance(policy, dict) and isinstance(policy.get("mode"), str):
         return policy["mode"] == STRUCTURED_SEARCH_MODE
 
-    # Track-A task adapters created before this field existed are treated as an
-    # explicit compatibility opt-in. Standalone legacy PPA JSON remains unchanged.
+    # Track-A adapters created before this field existed are an explicit
+    # compatibility opt-in. Standalone legacy PPA JSON remains unchanged.
     return isinstance(config.get("track_a"), dict)
 
 
@@ -142,10 +145,11 @@ def _structured_history_ready(
     config: dict[str, Any],
     next_candidate_index: int,
 ) -> bool:
-    """Require all preceding exploration slots to carry matching metadata."""
+    """Require all preceding structured slots to carry matching metadata."""
 
     if next_candidate_index not in {2, 3, 4, 5}:
         return False
+
     output_dir = _output_dir(config)
     schedule = build_structured_search_schedule(max_candidates=3)
     required_count = min(next_candidate_index - 1, 3)
@@ -162,6 +166,7 @@ def _structured_history_ready(
             and strategy.get("name") == attempt["strategy_family"]
         ):
             return False
+
     if next_candidate_index == 5:
         return (output_dir / "candidate_004_search_decision.json").is_file()
     return True
@@ -184,6 +189,22 @@ def _baseline_exploration_parent(
     }
 
 
+def _sync_legacy_globals(names: tuple[str, ...]) -> dict[str, Any]:
+    """Copy wrapper-level monkeypatches into the preserved module."""
+
+    saved: dict[str, Any] = {}
+    for name in names:
+        if name in globals() and hasattr(_legacy, name):
+            saved[name] = getattr(_legacy, name)
+            setattr(_legacy, name, globals()[name])
+    return saved
+
+
+def _restore_legacy_globals(saved: dict[str, Any]) -> None:
+    for name, value in saved.items():
+        setattr(_legacy, name, value)
+
+
 def _prepare_next_prompt(
     config_source: ConfigSource,
     previous: dict[str, Any],
@@ -192,15 +213,11 @@ def _prepare_next_prompt(
     summary: dict[str, Any],
     parent_reason: str,
 ) -> None:
-    """Delegate direct calls while honouring wrapper-level monkeypatches."""
+    """Dispatch a direct legacy prompt call with wrapper monkeypatch support."""
 
-    saved: dict[str, Any] = {}
-    for name in _DIRECT_PROMPT_HOOK_NAMES:
-        if name in globals() and hasattr(_legacy, name):
-            saved[name] = getattr(_legacy, name)
-            setattr(_legacy, name, globals()[name])
+    saved = _sync_legacy_globals(_DIRECT_PROMPT_HOOK_NAMES)
     try:
-        _legacy._prepare_next_prompt(
+        _ORIGINAL_LEGACY_PREPARE(
             config_source,
             previous,
             previous_index,
@@ -209,8 +226,7 @@ def _prepare_next_prompt(
             parent_reason,
         )
     finally:
-        for name, value in saved.items():
-            setattr(_legacy, name, value)
+        _restore_legacy_globals(saved)
 
 
 @contextmanager
@@ -222,19 +238,16 @@ def _legacy_execution_hooks(
 
     del config_source
     enabled = structured_search_enabled(config)
-    saved: dict[str, Any] = {}
+    saved = _sync_legacy_globals(_LEGACY_HOOK_NAMES)
 
-    # Synchronise common monkeypatch points from this compatibility module to
-    # the preserved implementation before adding the structured wrappers.
-    for name in _LEGACY_HOOK_NAMES:
-        if name in globals() and hasattr(_legacy, name):
-            saved[name] = getattr(_legacy, name)
-            setattr(_legacy, name, globals()[name])
-
+    # Capture the exact incoming function so nested contexts restore their
+    # caller's state.  Always delegate prompt preparation to the immutable
+    # original implementation, never to a previously installed wrapper.
+    incoming_prepare = _legacy._prepare_next_prompt
     base_generate = _legacy.generate_candidate
     base_select = _legacy.select_refinement_parent
-    base_prepare = _legacy._prepare_next_prompt
     base_record = _legacy._record
+    base_prepare = _ORIGINAL_LEGACY_PREPARE
 
     def structured_generate(
         source: ConfigSource,
@@ -263,9 +276,10 @@ def _legacy_execution_hooks(
         ]
         next_index = max(indexed, default=0) + 1
 
-        if enabled and next_index in {2, 3} and _structured_history_ready(
-            config,
-            next_index,
+        if (
+            enabled
+            and next_index in {2, 3}
+            and _structured_history_ready(config, next_index)
         ):
             return (
                 _baseline_exploration_parent(config, next_index),
@@ -326,15 +340,6 @@ def _legacy_execution_hooks(
                     source,
                     candidate_index=4,
                 )
-            elif parent_reason == STRUCTURED_EXPLOIT_REASON:
-                base_prepare(
-                    source,
-                    previous,
-                    previous_index,
-                    next_index,
-                    summary,
-                    parent_reason,
-                )
             else:
                 base_prepare(
                     source,
@@ -361,15 +366,6 @@ def _legacy_execution_hooks(
                 prepare_structured_baseline_fallback_prompt(
                     source,
                     candidate_index=5,
-                )
-            elif parent_reason in STRUCTURED_RECOVERY_REASONS:
-                base_prepare(
-                    source,
-                    previous,
-                    previous_index,
-                    next_index,
-                    summary,
-                    parent_reason,
                 )
             else:
                 base_prepare(
@@ -411,8 +407,8 @@ def _legacy_execution_hooks(
         ):
             return record
 
-        # Keep the persisted summary truthful, but prevent the legacy early-stop
-        # branch from ending before the declared structured slots complete.
+        # Keep the persisted summary truthful while preventing the legacy
+        # early-stop branch from ending before all bounded slots complete.
         visible = dict(record)
         visible["verdict"] = "keep_pareto_candidate"
         visible["reason"] = (
@@ -431,8 +427,11 @@ def _legacy_execution_hooks(
     try:
         yield
     finally:
-        for name, value in saved.items():
-            setattr(_legacy, name, value)
+        # Restore the directly installed dispatcher first, then every synced
+        # collaborator.  This prevents wrapper accumulation across test or task
+        # contexts while preserving correct nested-context behaviour.
+        _legacy._prepare_next_prompt = incoming_prepare
+        _restore_legacy_globals(saved)
 
 
 def run_optimisation(
