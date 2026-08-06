@@ -9,6 +9,7 @@ from agent.config import TaskManifest
 from agent.optimise.config_source import ppa_config_from_task
 from agent.track_a_selection import (
     OFFICIAL_TRACK_A_MODE,
+    RESEARCH_PARETO_MODE,
     select_official_track_a,
 )
 
@@ -139,7 +140,7 @@ def test_required_cosim_failure_is_ineligible(tmp_path) -> None:
     assert selected["candidate_index"] == 1
 
 
-def test_track_a_manifest_defaults_to_official_selection_mode(tmp_path) -> None:
+def test_track_a_manifest_defaults_to_research_pareto_selection(tmp_path) -> None:
     task = TaskManifest(
         path=tmp_path / "task.toml",
         data={
@@ -177,5 +178,50 @@ def test_track_a_manifest_defaults_to_official_selection_mode(tmp_path) -> None:
 
     config = ppa_config_from_task(task)
 
-    assert config["selection"]["mode"] == OFFICIAL_TRACK_A_MODE
+    assert config["selection"]["mode"] == RESEARCH_PARETO_MODE
     assert config["track_a"]["difficulty"] == 2
+
+
+def test_track_a_manifest_can_explicitly_request_reference_score_selection(
+    tmp_path,
+) -> None:
+    task = TaskManifest(
+        path=tmp_path / "task.toml",
+        data={
+            "task_id": "track_a_reference_mode",
+            "task_root": str(tmp_path),
+            "artifacts": {
+                "source": str(tmp_path / "kernel.cpp"),
+                "build_files": [str(tmp_path / "task.cfg")],
+            },
+            "interface": {
+                "top_function": "kernel",
+                "protected_contract": [],
+            },
+            "target": {
+                "clock_period_ns": 5.0,
+                "minimum_frequency_mhz": 100.0,
+                "resource_limits": {},
+            },
+            "budgets": {
+                "max_iterations": 2,
+                "max_model_calls": 2,
+                "max_csim_calls": 4,
+                "max_cosim_calls": 2,
+                "max_synthesis_calls": 4,
+            },
+            "model": {},
+            "optimisation": {
+                "selection": {"mode": OFFICIAL_TRACK_A_MODE},
+            },
+            "output_dir": str(tmp_path / "output"),
+            "track_a": {
+                "difficulty": 2,
+                "requires_cosim": False,
+            },
+        },
+    )
+
+    config = ppa_config_from_task(task)
+
+    assert config["selection"]["mode"] == OFFICIAL_TRACK_A_MODE
