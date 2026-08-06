@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
@@ -308,3 +309,23 @@ def test_no_gain_candidate_still_restarts_from_baseline(tmp_path: Path) -> None:
     selected = select_refinement_parent([no_gain])
 
     _assert_baseline_restart(selected)
+
+
+def test_five_slot_schedule_starts_with_three_distinct_baseline_explorations() -> None:
+    """Define the structured schedule contract before implementing it."""
+    search_policy = importlib.import_module("agent.optimise.search_policy")
+
+    schedule = search_policy.build_structured_search_schedule(
+        max_candidates=5
+    )
+
+    assert len(schedule) == 5
+    first_three = schedule[:3]
+    assert all(attempt["phase"] == "explore" for attempt in first_three)
+    assert all(
+        attempt["parent_candidate_index"] == 0
+        for attempt in first_three
+    )
+    assert len(
+        {attempt["strategy_family"] for attempt in first_three}
+    ) == 3
