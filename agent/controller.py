@@ -419,6 +419,8 @@ def _run_direct_api_repair(
     success = passed and synthesis_passed and (cosim_passed if cosim_required else True)
     status = (
         "fully_verified"
+        if success and cosim_required
+        else "correctness_and_synthesis_established"
         if success
         else "cosim_failed"
         if synthesis_passed and cosim_required
@@ -427,7 +429,7 @@ def _run_direct_api_repair(
         else "repair_failed"
     )
     termination_reason = (
-        "repair_synthesis_and_required_cosim_completed"
+        "repair_synthesis_and_cosim_completed"
         if success and cosim_required
         else "repair_and_synthesis_completed"
         if success
@@ -515,7 +517,7 @@ def _detect_initial_condition(
             status="passed",
             details={
                 "route": "optimise",
-                "decision_reason": "all_required_initial_validation_passed",
+                "decision_reason": "all_initial_validation_passed",
                 "candidate_hash": synthesis["candidate_hash"],
                 "candidate_file": synthesis.get("candidate_file", str(candidate)),
                 "project_dir": synthesis.get("project_dir"),
