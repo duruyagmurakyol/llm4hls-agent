@@ -70,6 +70,12 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     minimum_frequency_mhz = float(target.get("minimum_frequency_mhz", 100.0))
     budgets = task.data["budgets"]
     max_candidates = int(budgets["max_iterations"])
+    track_a = task.data.get("track_a")
+    requires_cosim = (
+        bool(track_a.get("requires_cosim", False))
+        if isinstance(track_a, dict)
+        else int(budgets.get("max_cosim_calls", 0)) > 0
+    )
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
@@ -79,6 +85,7 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "minimum_frequency_mhz": minimum_frequency_mhz,
         "resource_limits": dict(target.get("resource_limits") or {}),
         "selection": dict(optimisation.get("selection") or {}),
+        "requires_cosim": requires_cosim,
         "baseline": {
             "source": artifacts["source"],
             "tcl": build_files[0],
