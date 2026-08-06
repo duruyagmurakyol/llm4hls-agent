@@ -40,6 +40,16 @@ for _name in dir(_legacy):
         globals().setdefault(_name, getattr(_legacy, _name))
 
 _RUN_LOCK = threading.RLock()
+_DIRECT_PROMPT_HOOK_NAMES = (
+    "is_resource_frequency_balance_reason",
+    "is_resource_recovery_reason",
+    "prepare_refinement_prompt",
+    "prepare_resource_frequency_balance_prompt",
+    "prepare_resource_recovery_prompt",
+    "prepare_tradeoff_prompt",
+    "resource_frequency_balance_trigger",
+    "resource_limit_recovery_trigger",
+)
 _LEGACY_HOOK_NAMES = (
     "REPO_ROOT",
     "evaluate_experiment",
@@ -49,7 +59,6 @@ _LEGACY_HOOK_NAMES = (
     "_candidate_indices",
     "_status_summary",
     "_initialise",
-    "_prepare_next_prompt",
     "_run_cosim_stage",
     "_evaluate_candidate",
     "run_candidate_cosim",
@@ -58,6 +67,7 @@ _LEGACY_HOOK_NAMES = (
     "validate_ppa_candidate",
     "check_candidate_duplicate",
     "ensure_baseline_synthesis",
+    *_DIRECT_PROMPT_HOOK_NAMES,
 )
 
 
@@ -142,6 +152,41 @@ def _baseline_exploration_parent(
     }
 
 
+def _prepare_next_prompt(
+    config_source: ConfigSource,
+    previous: dict[str, Any],
+    previous_index: int,
+    next_index: int,
+    summary: dict[str, Any],
+    parent_reason: str,
+) -> None:
+    """Delegate direct calls while honouring wrapper-level monkeypatches.
+
+    Existing tests and downstream callers patch helpers on
+    ``agent.optimise.runner``. The preserved implementation resolves those
+    helpers from ``runner_legacy`` globals, so synchronise only the prompt
+    dispatch collaborators for the duration of this direct call.
+    """
+
+    saved: dict[str, Any] = {}
+    for name in _DIRECT_PROMPT_HOOK_NAMES:
+        if name in globals() and hasattr(_legacy, name):
+            saved[name] = getattr(_legacy, name)
+            setattr(_legacy, name, globals()[name])
+    try:
+        _legacy._prepare_next_prompt(
+            config_source,
+            previous,
+            previous_index,
+            next_index,
+            summary,
+            parent_reason,
+        )
+    finally:
+        for name, value in saved.items():
+            setattr(_legacy, name, value)
+
+
 @contextmanager
 def _legacy_execution_hooks(
     config_source: ConfigSource,
@@ -149,6 +194,7 @@ def _legacy_execution_hooks(
 ) -> Iterator[None]:
     """Temporarily install structured slot behaviour into the legacy runner."""
 
+    del config_source
     enabled = structured_search_enabled(config)
     saved: dict[str, Any] = {}
 
