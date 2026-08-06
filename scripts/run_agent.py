@@ -88,6 +88,7 @@ def _verified_baseline_fallback(
                 stage="select_best",
                 status="passed",
                 details={
+                    "selection_mode": "official_track_a",
                     "selected_design": selected_design,
                     "selected_design_fully_verified": True,
                     "selected_design_frequency_compliant": None,
@@ -121,6 +122,68 @@ def _format_number(value: object, *, digits: int = 3) -> str:
     return "unavailable"
 
 
+def _load_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _enrich_track_a_result(
+    result: AgentResult,
+    path: Path,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist score, selection mode and weighted credits in final artefacts."""
+
+    budget = _load_object(path.parent / "budget_summary.json")
+    track_a_budget = (
+        budget.get("track_a") if isinstance(budget.get("track_a"), dict) else {}
+    )
+    credits = {
+        "budget": track_a_budget.get("credit_budget"),
+        "spent": track_a_budget.get("credits_spent"),
+        "remaining": track_a_budget.get("credits_remaining"),
+        "costs": dict(track_a_budget.get("credit_costs") or {}),
+    }
+    report = dict(report)
+    report["selection_mode"] = "official_track_a"
+    report["official_credits"] = credits
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    payload = result.to_dict()
+    selected = report.get("selected_design")
+    selected = selected if isinstance(selected, dict) else {}
+    payload.update(
+        {
+            "selection_mode": "official_track_a",
+            "selected_public_score_estimate": report.get(
+                "public_score_estimate"
+            ),
+            "selected_official_latency_cycles": selected.get(
+                "official_latency_cycles"
+            ),
+            "selected_meets_target_clock": selected.get("meets_target_clock"),
+            "official_credit_budget": credits.get("budget"),
+            "official_credits_spent": credits.get("spent"),
+            "official_credits_remaining": credits.get("remaining"),
+            "track_a_score_estimate": _display_path(path),
+        }
+    )
+    result_path = Path(str(result.output_dir)).expanduser()
+    if not result_path.is_absolute():
+        result_path = REPO_ROOT / result_path
+    result_path.mkdir(parents=True, exist_ok=True)
+    (result_path / "unified_agent_result.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
+
 def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
     selected = report["selected_design"]
     target_clock = selected.get("target_clock_period_ns")
@@ -138,7 +201,13 @@ def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
         if meets_target is False
         else "unavailable"
     )
+    credits = (
+        report.get("official_credits")
+        if isinstance(report.get("official_credits"), dict)
+        else {}
+    )
     print(f"Track-A score estimate: {_display_path(path)}", flush=True)
+    print("Final selection mode: official_track_a", flush=True)
     print(
         "Public score estimate: "
         f"{_format_number(report.get('public_score_estimate'), digits=4)} / "
@@ -149,6 +218,13 @@ def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
         "Official latency cycles: "
         f"baseline={report['original_scoring_baseline'].get('official_latency_cycles')}, "
         f"selected={selected.get('official_latency_cycles')}",
+        flush=True,
+    )
+    print(
+        "Official credits: "
+        f"{credits.get('spent', 'unavailable')} / "
+        f"{credits.get('budget', 'unavailable')} "
+        f"(remaining={credits.get('remaining', 'unavailable')})",
         flush=True,
     )
     print(f"Meets {target_text} target: {compliance}", flush=True)
@@ -242,6 +318,11 @@ def main() -> None:
         else:
             if score is not None:
                 score_path, score_report = score
+                score_report = _enrich_track_a_result(
+                    result,
+                    score_path,
+                    score_report,
+                )
                 _print_track_a_score(score_path, score_report)
 
     summary = build_run_summary(
