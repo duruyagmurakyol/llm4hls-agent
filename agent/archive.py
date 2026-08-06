@@ -8,7 +8,11 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from agent.optimise.pareto_frontier import annotate_pareto_frontier
+from agent.optimise.pareto_frontier import (
+    OBJECTIVES,
+    annotate_pareto_frontier,
+    record_dominates,
+)
 from agent.optimise.selection import (
     configured_ranking,
     deterministic_selection_key,
@@ -43,6 +47,138 @@ def _display(path: Path) -> str:
 
 def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _objective_values(record: dict[str, Any]) -> tuple[float, ...] | None:
+    metrics = record.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    values: list[float] = []
+    for key in OBJECTIVES:
+        value = metrics.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        values.append(float(value))
+    return tuple(values)
+
+
+def _apply_pre_cosim_pareto_gate(
+    output_dir: Path,
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Skip expensive co-simulation when synthesis proves a candidate cannot win.
+
+    This gate is deliberately conservative. It acts only on candidates already
+    marked ``awaiting_cosim`` after CSim, synthesis, timing and resource checks.
+    Co-simulation is skipped only when a fully verified current Pareto member is
+    no worse in every objective, or when all objective metrics are identical.
+    Any genuine performance/resource improvement or trade-off still proceeds to
+    required C/RTL co-simulation before it can become selectable.
+    """
+
+    frontier = [
+        item
+        for item in summary.get("pareto_archive", [])
+        if isinstance(item, dict) and item.get("fully_verified") is True
+    ]
+    candidates = [
+        item
+        for item in summary.get("candidates", [])
+        if isinstance(item, dict)
+    ]
+
+    for record in candidates:
+        if record.get("verdict") != "awaiting_cosim":
+            continue
+
+        candidate_values = _objective_values(record)
+        if candidate_values is None:
+            continue
+
+        identical = next(
+            (
+                item
+                for item in frontier
+                if _objective_values(item) == candidate_values
+            ),
+            None,
+        )
+        dominators = [
+            item
+            for item in frontier
+            if record_dominates(item, record)
+        ]
+        dominator = (
+            max(
+                dominators,
+                key=lambda item: int(item.get("candidate_index", 0)),
+            )
+            if dominators
+            else None
+        )
+
+        if identical is None and dominator is None:
+            continue
+
+        comparator = identical if identical is not None else dominator
+        comparator_index = int(comparator.get("candidate_index", 0))
+        comparator_label = (
+            "verified baseline"
+            if comparator_index == 0
+            else f"verified candidate_{comparator_index:03d}"
+        )
+        verdict = (
+            "reject_no_change_pre_cosim"
+            if identical is not None
+            else "reject_dominated_pre_cosim"
+        )
+        reason = (
+            f"Synthesis objectives are identical to the {comparator_label}; "
+            "required co-simulation was skipped because the candidate cannot "
+            "improve the Pareto archive."
+            if identical is not None
+            else (
+                f"Synthesis objectives are dominated by the {comparator_label}; "
+                "required co-simulation was skipped because the candidate cannot "
+                "enter the Pareto archive."
+            )
+        )
+        record.update(
+            {
+                "verdict": verdict,
+                "reason": reason,
+                "fully_verified": False,
+                "cosim": None,
+                "cosim_run": False,
+                "cosim_skipped": True,
+                "cosim_skip_reason": "provisional_pareto_rejection",
+                "dominated_by": comparator_index,
+            }
+        )
+
+        index = int(record.get("candidate_index", 0))
+        decision = {
+            "schema_version": 1,
+            "candidate_index": index,
+            "decision": "skip_cosim",
+            "reason": "provisional_pareto_rejection",
+            "verdict": verdict,
+            "dominated_by": comparator_index,
+            "objectives": list(OBJECTIVES),
+            "candidate_metrics": {
+                key: record.get("metrics", {}).get(key) for key in OBJECTIVES
+            },
+            "comparator_metrics": {
+                key: comparator.get("metrics", {}).get(key) for key in OBJECTIVES
+            },
+        }
+        (output_dir / f"candidate_{index:03d}_cosim_decision.json").write_text(
+            json.dumps(decision, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    summary["candidates"] = candidates
+    return summary
 
 
 def _is_frequency_compliant(record: dict[str, Any]) -> bool:
@@ -147,6 +283,8 @@ def preserve_candidate_state(
     output_dir = _resolve(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     summary = annotate_pareto_frontier(output_dir, summary)
+    if mode != OFFICIAL_TRACK_A_MODE:
+        summary = _apply_pre_cosim_pareto_gate(output_dir, summary)
     archive_dir = output_dir / "candidate_archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
