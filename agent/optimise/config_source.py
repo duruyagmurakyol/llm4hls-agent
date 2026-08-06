@@ -76,6 +76,9 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         if isinstance(track_a, dict)
         else int(budgets.get("max_cosim_calls", 0)) > 0
     )
+    selection = dict(optimisation.get("selection") or {})
+    if isinstance(track_a, dict):
+        selection.setdefault("mode", "official_track_a")
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
@@ -84,7 +87,7 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
         "target_clock_period_ns": target_clock_period_ns,
         "minimum_frequency_mhz": minimum_frequency_mhz,
         "resource_limits": dict(target.get("resource_limits") or {}),
-        "selection": dict(optimisation.get("selection") or {}),
+        "selection": selection,
         "requires_cosim": requires_cosim,
         "baseline": {
             "source": artifacts["source"],
@@ -104,6 +107,8 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
             "max_cosim_calls": int(budgets.get("max_cosim_calls", max_candidates)),
         },
     }
+    if isinstance(track_a, dict):
+        config["track_a"] = dict(track_a)
 
     target_loop_label = optimisation.get("target_loop_label")
     if target_loop_label:
