@@ -26,6 +26,7 @@ DEFAULT_BUDGETS = {
     "max_synthesis_calls": 4,
     "max_model_calls": 5,
     "max_total_tokens": None,
+    "requires_cosim": False,
 }
 
 DEFAULT_OPTIMISATION = {
