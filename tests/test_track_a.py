@@ -59,9 +59,11 @@ clock_ns = 5.0
     assert task.adapter_kind == "auto"
     assert task.data["task_kind"] == "repair"
     assert task.data["target"]["part"] == "xcu55c-fsvh2892-2L-e"
-    assert task.data["target"]["clock_period_ns"] == 5.0
+    assert task.data["target"]["clock_period_ns"] == 10.0
+    assert task.data["target"]["minimum_frequency_mhz"] == 100.0
     assert task.data["track_a"]["hidden_and_reference_excluded"] is True
     assert task.data["track_a"]["requires_cosim"] is False
+    assert task.data["budgets"]["requires_cosim"] is False
     assert task.data["budgets"]["track_a_credit_budget"] == 20
     assert task.data["budgets"]["track_a_credit_costs"] == {
         "csim": 1,
@@ -75,6 +77,7 @@ clock_ns = 5.0
     assert (staged / "description.md").is_file()
     assert (staged / "task.toml").is_file()
     assert (staged / "task.cfg").is_file()
+    assert "clock=10ns" in (staged / "task.cfg").read_text(encoding="utf-8")
     assert not (staged / "hidden").exists()
     assert not (staged / "reference").exists()
     assert "SECRET_HIDDEN_TEST" not in "\n".join(
@@ -129,6 +132,7 @@ clock_ns = 5.0
 
     task = track_a.resolve_track_a_task(package)
     assert task.data["track_a"]["requires_cosim"] is True
+    assert task.data["budgets"]["requires_cosim"] is True
     assert task.data["budgets"]["track_a_credit_budget"] == 80
     assert ppa_config_from_task(task)["requires_cosim"] is True
 
