@@ -78,7 +78,10 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     )
     selection = dict(optimisation.get("selection") or {})
     if isinstance(track_a, dict):
-        selection.setdefault("mode", "official_track_a")
+        # Track-A still records the reference-harness score separately, but
+        # final design choice defaults to the richer multi-objective Pareto
+        # policy unless a manifest explicitly requests another mode.
+        selection.setdefault("mode", "research_pareto")
 
     config: dict[str, Any] = {
         "experiment_name": f"{task.task_id}_ppa",
