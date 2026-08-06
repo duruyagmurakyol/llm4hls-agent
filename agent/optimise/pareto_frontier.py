@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent.optimise.eligibility import annotate_experiment_summary
 from agent.optimise.strategy_realisation import apply_strategy_realisation
 from agent.optimise.synthesis_equivalence import apply_synthesis_equivalence
 
@@ -51,7 +52,7 @@ def annotate_pareto_frontier(
     output_dir: Path,
     summary: dict[str, Any],
 ) -> dict[str, Any]:
-    """Annotate candidates and write a standalone current-frontier artefact."""
+    """Annotate candidates and write current-frontier/eligibility artefacts."""
     summary = apply_strategy_realisation(output_dir, summary)
     summary = apply_synthesis_equivalence(summary)
     frontier = [
@@ -105,16 +106,29 @@ def annotate_pareto_frontier(
             }
         )
 
+    summary["candidates"] = candidates
+    summary = annotate_experiment_summary(summary)
+    frontier = [
+        item
+        for item in summary.get("pareto_archive", [])
+        if isinstance(item, dict)
+    ]
+
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "objectives": list(OBJECTIVES),
         "members": frontier,
         "dominated_candidates": dominated,
+        "eligibility_policy": summary.get("eligibility_policy", {}),
     }
     summary["pareto_frontier"] = payload
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "pareto_frontier.json").write_text(
         json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "experiment_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n",
         encoding="utf-8",
     )
     return summary
