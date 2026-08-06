@@ -45,6 +45,7 @@ class BudgetState:
     track_a_credit_costs: dict[str, int] = field(
         default_factory=lambda: dict(TRACK_A_DEFAULT_CREDIT_COSTS)
     )
+    requires_cosim: bool = True
 
     iterations_used: int = 0
     model_calls_used: int = 0
@@ -82,6 +83,10 @@ class BudgetState:
                 "budgets.track_a_credit_budget must be null or a positive integer"
             )
 
+        raw_requires_cosim = budgets.get("requires_cosim", True)
+        if not isinstance(raw_requires_cosim, bool):
+            raise ValueError("budgets.requires_cosim must be a boolean")
+
         return cls(
             max_iterations=int(budgets["max_iterations"]),
             max_model_calls=int(budgets["max_model_calls"]),
@@ -97,6 +102,7 @@ class BudgetState:
                 int(raw_credit_budget) if raw_credit_budget is not None else None
             ),
             track_a_credit_costs=costs,
+            requires_cosim=raw_requires_cosim,
         )
 
     def _limit(self, resource: str) -> int:
@@ -335,6 +341,7 @@ class BudgetState:
         reserve_synthesis: int = 1,
         reserve_cosim: int = 0,
     ) -> bool:
+        effective_cosim_reserve = reserve_cosim if self.requires_cosim else 0
         token_available = self.max_total_tokens is None or self.total_tokens_remaining > 0
         call_capacity = all(
             (
@@ -346,8 +353,8 @@ class BudgetState:
                 self.can_consume("synthesis_calls", reserve=reserve_synthesis - 1)
                 if reserve_synthesis > 0
                 else True,
-                self.can_consume("cosim_calls", reserve=reserve_cosim - 1)
-                if reserve_cosim > 0
+                self.can_consume("cosim_calls", reserve=effective_cosim_reserve - 1)
+                if effective_cosim_reserve > 0
                 else True,
                 token_available,
             )
@@ -361,7 +368,7 @@ class BudgetState:
         required_credits = (
             self.track_a_credit_cost("csim", reserve_csim)
             + self.track_a_credit_cost("synthesis", reserve_synthesis)
-            + self.track_a_credit_cost("cosim", reserve_cosim)
+            + self.track_a_credit_cost("cosim", effective_cosim_reserve)
         )
         return remaining >= required_credits
 
@@ -379,6 +386,7 @@ class BudgetState:
                 "max_cosim_calls": self.max_cosim_calls,
                 "max_synthesis_calls": self.max_synthesis_calls,
                 "max_total_tokens": self.max_total_tokens,
+                "requires_cosim": self.requires_cosim,
             },
             "consumed": {
                 "iterations": self.iterations_used,
