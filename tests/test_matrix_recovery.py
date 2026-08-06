@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.budget import BudgetState
 from agent.config import load_task, validate_task
 from agent.onboarding_safe import resolve_benchmark
 from agent.stage_aware import supports_stage_aware_task
@@ -16,6 +17,23 @@ def test_discovered_benchmark_manifest_supports_optimisation_mode() -> None:
     assert task.data["adapter"]["kind"] == "auto"
     assert task.data["optimisation"]["selection"]["mode"] == "research_pareto"
     assert task.data["optimisation"]["validation"] == {}
+
+
+def test_discovered_non_cosim_benchmark_can_start_optimisation_candidate() -> None:
+    task = resolve_benchmark(REPO_ROOT / "benchmarks" / "hls_eval" / "atax")
+    budget = BudgetState.from_manifest(task.data["budgets"])
+
+    assert task.data["validation_policy"]["requires_cosim"] is False
+    assert budget.requires_cosim is False
+
+    budget.charge_csim(stage="initial_csim", success=True)
+    budget.charge_synthesis(stage="initial_synthesis", success=True)
+
+    assert budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
+        reserve_cosim=1,
+    ) is True
 
 
 def test_materialised_stage_aware_manifest_remains_stage_aware(tmp_path: Path) -> None:
