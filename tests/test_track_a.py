@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent import config, track_a
+from agent.optimise.config_source import ppa_config_from_task
 
 
 def _write(path: Path, text: str) -> None:
@@ -60,6 +61,14 @@ clock_ns = 5.0
     assert task.data["target"]["part"] == "xcu55c-fsvh2892-2L-e"
     assert task.data["target"]["clock_period_ns"] == 5.0
     assert task.data["track_a"]["hidden_and_reference_excluded"] is True
+    assert task.data["track_a"]["requires_cosim"] is False
+    assert task.data["budgets"]["track_a_credit_budget"] == 20
+    assert task.data["budgets"]["track_a_credit_costs"] == {
+        "csim": 1,
+        "synthesis": 4,
+        "cosim": 20,
+    }
+    assert ppa_config_from_task(task)["requires_cosim"] is False
     assert (staged / "projection.cpp").is_file()
     assert (staged / "projection.h").is_file()
     assert (staged / "projection_tb.cpp").is_file()
@@ -87,6 +96,41 @@ clock_ns = 5.0
 
     config.validate_task(task.data)
     config.validate_task_paths(task.data)
+
+
+def test_structural_track_a_package_requires_cosim(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path / "repo"
+    package = tmp_path / "stream_task"
+    repo_root.mkdir()
+    package.mkdir()
+
+    _write(
+        package / "task.toml",
+        """task_id = "stream_task"
+task_type = "structural"
+top = "kernel"
+kernel_file = "kernel.cpp"
+header_files = ["kernel.h"]
+public_tb = "kernel_tb.cpp"
+budget = 80
+requires_cosim = true
+
+[target]
+part = "xcu55c-fsvh2892-2L-e"
+clock_ns = 5.0
+""",
+    )
+    _write(package / "kernel.h", "void kernel();\n")
+    _write(package / "kernel.cpp", '#include "kernel.h"\nvoid kernel() {}\n')
+    _write(package / "kernel_tb.cpp", '#include "kernel.h"\nint main(){kernel();}\n')
+
+    monkeypatch.setattr(track_a, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(config, "REPO_ROOT", repo_root)
+
+    task = track_a.resolve_track_a_task(package)
+    assert task.data["track_a"]["requires_cosim"] is True
+    assert task.data["budgets"]["track_a_credit_budget"] == 80
+    assert ppa_config_from_task(task)["requires_cosim"] is True
 
 
 def test_track_a_rejects_path_escape(tmp_path, monkeypatch) -> None:
