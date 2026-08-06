@@ -177,7 +177,7 @@ void vector_add(const float a[VECTOR_SIZE], const float b[VECTOR_SIZE], float c[
     }
 
 
-def test_missing_label_is_not_guessed_when_multiple_loops_are_ambiguous() -> None:
+def test_missing_label_uses_first_top_loop_when_rewrite_is_ambiguous() -> None:
     candidate = '''#include "vector_add.h"
 void vector_add(const float a[VECTOR_SIZE], const float b[VECTOR_SIZE], float c[VECTOR_SIZE]) {
     for (int j = 0; j < VECTOR_SIZE; ++j) { c[j] = a[j]; }
@@ -197,8 +197,11 @@ void vector_add(const float a[VECTOR_SIZE], const float b[VECTOR_SIZE], float c[
         target_loop_label="vector_add_loop",
     )
 
-    assert "vector_add_loop:" not in source
-    assert not any(
-        item["action"] == "restore_loop_label"
+    assert source.count("vector_add_loop:") == 1
+    assert source.index("vector_add_loop:") < source.index("for (int j")
+    change = next(
+        item
         for item in report["changes"]
+        if item["action"] == "restore_loop_label"
     )
+    assert change["fallback_to_first_loop"] is True
