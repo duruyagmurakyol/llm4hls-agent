@@ -24,6 +24,8 @@ from agent.terminal_reporting import (  # noqa: E402
     render_run_terminal,
 )
 from agent.track_a import (  # noqa: E402
+    SUBMISSION_CLOCK_PERIOD_NS,
+    SUBMISSION_MINIMUM_FREQUENCY_MHZ,
     is_track_a_task,
     onboard_track_a_task,
 )
@@ -88,7 +90,7 @@ def _verified_baseline_fallback(
                 stage="select_best",
                 status="passed",
                 details={
-                    "selection_mode": "official_track_a",
+                    "selection_mode": "research_pareto",
                     "selected_design": selected_design,
                     "selected_design_fully_verified": True,
                     "selected_design_frequency_compliant": None,
@@ -132,14 +134,31 @@ def _load_object(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _selection_mode(output_dir: Path) -> str:
+    summary = _load_object(output_dir / "experiment_summary.json")
+    mode = summary.get("selection_mode")
+    if isinstance(mode, str) and mode:
+        return mode
+
+    state = _load_object(output_dir / "candidate_state.json")
+    policy = state.get("selection_policy")
+    if isinstance(policy, dict):
+        mode = policy.get("mode")
+        if isinstance(mode, str) and mode:
+            return mode
+
+    return "research_pareto"
+
+
 def _enrich_track_a_result(
     result: AgentResult,
     path: Path,
     report: dict[str, Any],
 ) -> dict[str, Any]:
-    """Persist score, selection mode and weighted credits in final artefacts."""
+    """Persist selection, submission timing and reference-harness evidence."""
 
-    budget = _load_object(path.parent / "budget_summary.json")
+    output_dir = path.parent
+    budget = _load_object(output_dir / "budget_summary.json")
     track_a_budget = (
         budget.get("track_a") if isinstance(budget.get("track_a"), dict) else {}
     )
@@ -149,28 +168,67 @@ def _enrich_track_a_result(
         "remaining": track_a_budget.get("credits_remaining"),
         "costs": dict(track_a_budget.get("credit_costs") or {}),
     }
+    mode = _selection_mode(output_dir)
     report = dict(report)
-    report["selection_mode"] = "official_track_a"
-    report["official_credits"] = credits
+    selected = report.get("selected_design")
+    selected = dict(selected) if isinstance(selected, dict) else {}
+    estimated_frequency = selected.get("estimated_frequency_mhz")
+    meets_submission_frequency = (
+        estimated_frequency >= SUBMISSION_MINIMUM_FREQUENCY_MHZ
+        if isinstance(estimated_frequency, (int, float))
+        and not isinstance(estimated_frequency, bool)
+        else None
+    )
+    selected.update(
+        {
+            "submission_clock_period_ns": SUBMISSION_CLOCK_PERIOD_NS,
+            "submission_minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
+            "meets_submission_frequency": meets_submission_frequency,
+        }
+    )
+    for legacy_key in (
+        "target_clock_period_ns",
+        "target_frequency_mhz",
+        "meets_target_clock",
+    ):
+        selected.pop(legacy_key, None)
+
+    report["selected_design"] = selected
+    report["selection_mode"] = mode
+    report["reference_harness_score_estimate"] = report.get(
+        "public_score_estimate"
+    )
+    report["reference_harness_maximum_score"] = report.get("maximum_score")
+    report["reference_harness_credits"] = credits
+    report["submission_clock_period_ns"] = SUBMISSION_CLOCK_PERIOD_NS
+    report["submission_minimum_frequency_mhz"] = (
+        SUBMISSION_MINIMUM_FREQUENCY_MHZ
+    )
+    report["meets_submission_frequency"] = meets_submission_frequency
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     payload = result.to_dict()
-    selected = report.get("selected_design")
-    selected = selected if isinstance(selected, dict) else {}
     payload.update(
         {
-            "selection_mode": "official_track_a",
-            "selected_public_score_estimate": report.get(
-                "public_score_estimate"
+            "selection_mode": mode,
+            "submission_clock_period_ns": SUBMISSION_CLOCK_PERIOD_NS,
+            "submission_minimum_frequency_mhz": (
+                SUBMISSION_MINIMUM_FREQUENCY_MHZ
             ),
-            "selected_official_latency_cycles": selected.get(
+            "meets_submission_frequency": meets_submission_frequency,
+            "reference_harness_score_estimate": report.get(
+                "reference_harness_score_estimate"
+            ),
+            "reference_harness_maximum_score": report.get(
+                "reference_harness_maximum_score"
+            ),
+            "selected_reference_latency_cycles": selected.get(
                 "official_latency_cycles"
             ),
-            "selected_meets_target_clock": selected.get("meets_target_clock"),
-            "official_credit_budget": credits.get("budget"),
-            "official_credits_spent": credits.get("spent"),
-            "official_credits_remaining": credits.get("remaining"),
-            "track_a_score_estimate": _display_path(path),
+            "reference_harness_credit_budget": credits.get("budget"),
+            "reference_harness_credits_spent": credits.get("spent"),
+            "reference_harness_credits_remaining": credits.get("remaining"),
+            "reference_harness_score_report": _display_path(path),
         }
     )
     result_path = Path(str(result.output_dir)).expanduser()
@@ -186,48 +244,50 @@ def _enrich_track_a_result(
 
 def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
     selected = report["selected_design"]
-    target_clock = selected.get("target_clock_period_ns")
-    meets_target = selected.get("meets_target_clock")
-    target_text = (
-        f"{target_clock:g} ns"
-        if isinstance(target_clock, (int, float))
-        and not isinstance(target_clock, bool)
-        else "configured clock"
-    )
-    compliance = (
+    compliance = selected.get("meets_submission_frequency")
+    compliance_text = (
         "yes"
-        if meets_target is True
+        if compliance is True
         else "no"
-        if meets_target is False
+        if compliance is False
         else "unavailable"
     )
     credits = (
-        report.get("official_credits")
-        if isinstance(report.get("official_credits"), dict)
+        report.get("reference_harness_credits")
+        if isinstance(report.get("reference_harness_credits"), dict)
         else {}
     )
-    print(f"Track-A score estimate: {_display_path(path)}", flush=True)
-    print("Final selection mode: official_track_a", flush=True)
     print(
-        "Public score estimate: "
-        f"{_format_number(report.get('public_score_estimate'), digits=4)} / "
-        f"{_format_number(report.get('maximum_score'), digits=4)}",
+        f"Reference-harness score report: {_display_path(path)}",
+        flush=True,
+    )
+    print(f"Final selection mode: {report.get('selection_mode')}", flush=True)
+    print(
+        "Reference-harness score estimate: "
+        f"{_format_number(report.get('reference_harness_score_estimate'), digits=4)} / "
+        f"{_format_number(report.get('reference_harness_maximum_score'), digits=4)}",
         flush=True,
     )
     print(
-        "Official latency cycles: "
+        "Reference-harness latency cycles: "
         f"baseline={report['original_scoring_baseline'].get('official_latency_cycles')}, "
         f"selected={selected.get('official_latency_cycles')}",
         flush=True,
     )
     print(
-        "Official credits: "
+        "Reference-harness credits: "
         f"{credits.get('spent', 'unavailable')} / "
         f"{credits.get('budget', 'unavailable')} "
         f"(remaining={credits.get('remaining', 'unavailable')})",
         flush=True,
     )
-    print(f"Meets {target_text} target: {compliance}", flush=True)
+    print(
+        "Submission frequency: "
+        f"estimated={_format_number(selected.get('estimated_frequency_mhz'))} MHz, "
+        f"minimum={SUBMISSION_MINIMUM_FREQUENCY_MHZ:g} MHz, "
+        f"compliant={compliance_text}",
+        flush=True,
+    )
 
 
 def main() -> None:
