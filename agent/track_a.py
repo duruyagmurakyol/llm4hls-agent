@@ -21,7 +21,8 @@ from agent.onboarding import REPO_ROOT
 
 
 DEFAULT_PART = "xcu55c-fsvh2892-2L-e"
-DEFAULT_CLOCK_NS = 5.0
+SUBMISSION_MINIMUM_FREQUENCY_MHZ = 100.0
+SUBMISSION_CLOCK_PERIOD_NS = 1000.0 / SUBMISSION_MINIMUM_FREQUENCY_MHZ
 DEFAULT_MODEL = "Qwen/Qwen3.5-122B-A10B"
 _SUPPORTED_TASK_TYPES = {
     "generate",
@@ -86,14 +87,6 @@ def _positive_int(value: object, *, field: str, default: int) -> int:
     return value
 
 
-def _positive_float(value: object, *, field: str, default: float) -> float:
-    if value is None:
-        return default
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-        raise ValueError(f"task.toml {field} must be a positive number")
-    return float(value)
-
-
 def _model_config() -> dict[str, Any]:
     selected_provider = os.environ.get(
         "LLM4HLS_PROVIDER",
@@ -123,8 +116,8 @@ def _model_config() -> dict[str, Any]:
     }
 
 
-def _budgets(credit_budget: int) -> dict[str, Any]:
-    """Keep detailed call limits and the official weighted-credit ceiling."""
+def _budgets(credit_budget: int, *, requires_cosim: bool) -> dict[str, Any]:
+    """Keep detailed call limits and the reference-harness credit ceiling."""
 
     iterations = max(2, min(6, credit_budget // 8 or 2))
     max_total = os.environ.get("LLM4HLS_MAX_TOTAL_TOKENS")
@@ -135,6 +128,7 @@ def _budgets(credit_budget: int) -> dict[str, Any]:
         "max_synthesis_calls": max(3, iterations + 1),
         "max_model_calls": iterations,
         "max_total_tokens": int(max_total) if max_total else None,
+        "requires_cosim": requires_cosim,
         "track_a_credit_budget": credit_budget,
         "track_a_credit_costs": {
             "csim": 1,
@@ -226,9 +220,7 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
     if not isinstance(target, dict):
         raise ValueError("task.toml [target] must be a table")
     part = str(target.get("part") or DEFAULT_PART).strip()
-    clock_ns = _positive_float(
-        target.get("clock_ns"), field="target.clock_ns", default=DEFAULT_CLOCK_NS
-    )
+    clock_ns = SUBMISSION_CLOCK_PERIOD_NS
     difficulty = _positive_int(spec.get("difficulty"), field="difficulty", default=1)
     credit_budget = _positive_int(spec.get("budget"), field="budget", default=40)
     requires_cosim = bool(spec.get("requires_cosim", False))
@@ -278,7 +270,7 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
         + " --work_dir vitis_work",
     ]
     model = _model_config()
-    budgets = _budgets(credit_budget)
+    budgets = _budgets(credit_budget, requires_cosim=requires_cosim)
 
     data: dict[str, Any] = {
         "task_id": f"track_a_{task_id}",
@@ -307,7 +299,7 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
             "tool_version": "2025.2",
             "part": part,
             "clock_period_ns": clock_ns,
-            "minimum_frequency_mhz": 100.0,
+            "minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
             "resource_limits": {},
         },
         "budgets": budgets,
@@ -347,6 +339,8 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
             "difficulty": difficulty,
             "credit_budget": credit_budget,
             "requires_cosim": requires_cosim,
+            "submission_clock_period_ns": clock_ns,
+            "submission_minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
             "initial_condition": str(spec.get("initial_condition", "")),
             "llm_provider": model["transport_provider"],
             "hidden_and_reference_excluded": True,
@@ -367,9 +361,13 @@ def onboard_track_a_task(root: Path) -> TaskManifest:
     print(f"Source: {task.data['artifacts']['source']}")
     print(f"Public testbench: {task.data['artifacts']['testbench'][0]}")
     print(f"Part: {task.data['target']['part']}")
-    print(f"Clock: {task.data['target']['clock_period_ns']:g} ns")
+    print(
+        "Submission timing: "
+        f"{task.data['target']['clock_period_ns']:g} ns / "
+        f"{task.data['target']['minimum_frequency_mhz']:g} MHz minimum"
+    )
     print(f"LLM provider: {meta['llm_provider']}")
-    print(f"Official credit budget: {meta['credit_budget']}")
+    print(f"Reference-harness credit budget: {meta['credit_budget']}")
     print(f"Co-simulation required: {'yes' if meta['requires_cosim'] else 'no'}")
     print("Hidden tests/reference solutions copied: no")
     print(f"Staged public package: {task.data['task_root']}")
