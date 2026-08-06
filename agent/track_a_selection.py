@@ -61,8 +61,8 @@ def selection_mode(selection: dict[str, Any] | None) -> str:
     return value
 
 
-def _original_latency(output_dir: Path, baseline_metrics: dict[str, Any]) -> Any:
-    """Load original-kernel latency without launching another synthesis call."""
+def _original_latency(output_dir: Path) -> Any:
+    """Load measured original-kernel latency without launching another call."""
 
     record = _load_json(output_dir / "original_scoring_baseline.json")
     latency = record.get("official_latency_cycles")
@@ -86,12 +86,6 @@ def _original_latency(output_dir: Path, baseline_metrics: dict[str, Any]) -> Any
                 )
                 if latency is not None:
                     return latency
-
-    # For initially correct optimisation tasks, the verified safety baseline is
-    # the untouched original public kernel. This fallback avoids a redundant
-    # synthesis call while preserving the original-vs-candidate comparison.
-    if record.get("synthesis_passed") is not False:
-        return official_latency_cycles(baseline_metrics)
     return None
 
 
@@ -207,8 +201,7 @@ def select_official_track_a(
     track_a = config.get("track_a") if isinstance(config.get("track_a"), dict) else {}
     difficulty = int(track_a.get("difficulty", 1))
     selection = config.get("selection") if isinstance(config.get("selection"), dict) else {}
-    baseline_metrics = dict(values[0].get("metrics") or {})
-    original_latency = _original_latency(output_dir, baseline_metrics)
+    original_latency = _original_latency(output_dir)
     annotated = [
         annotate_official_track_a_record(
             record,
