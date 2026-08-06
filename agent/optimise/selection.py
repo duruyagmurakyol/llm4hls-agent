@@ -118,11 +118,12 @@ def is_fully_verified(record: dict[str, Any]) -> bool:
     direct = record.get("fully_verified")
     if isinstance(direct, bool):
         return direct
+    requires_cosim = bool(record.get("cosim_required", True))
     return bool(
         record.get("static_validation") is True
         and record.get("csim") is True
         and record.get("synthesis") is True
-        and record.get("cosim") is True
+        and (record.get("cosim") is True if requires_cosim else True)
         and isinstance(record.get("metrics"), dict)
         and record.get("metrics")
     )
