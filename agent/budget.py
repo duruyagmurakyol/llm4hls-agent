@@ -15,6 +15,11 @@ RESOURCE_LIMITS = {
     "cosim_calls": "max_cosim_calls",
     "synthesis_calls": "max_synthesis_calls",
 }
+TRACK_A_DEFAULT_CREDIT_COSTS = {
+    "csim": 1,
+    "synthesis": 4,
+    "cosim": 20,
+}
 
 
 class BudgetExceeded(RuntimeError):
@@ -31,6 +36,10 @@ class BudgetState:
     max_cosim_calls: int
     max_synthesis_calls: int
     max_total_tokens: int | None = None
+    max_track_a_credits: int | None = None
+    track_a_credit_costs: dict[str, int] = field(
+        default_factory=lambda: dict(TRACK_A_DEFAULT_CREDIT_COSTS)
+    )
 
     iterations_used: int = 0
     model_calls_used: int = 0
@@ -39,11 +48,35 @@ class BudgetState:
     synthesis_calls_used: int = 0
     input_tokens_used: int = 0
     output_tokens_used: int = 0
+    track_a_credits_used: int = 0
     stop_reason: str | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_manifest(cls, budgets: Mapping[str, Any]) -> "BudgetState":
+        raw_costs = budgets.get("track_a_credit_costs")
+        costs = dict(TRACK_A_DEFAULT_CREDIT_COSTS)
+        if raw_costs is not None:
+            if not isinstance(raw_costs, Mapping):
+                raise ValueError("budgets.track_a_credit_costs must be an object")
+            for kind in TRACK_A_DEFAULT_CREDIT_COSTS:
+                value = raw_costs.get(kind)
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    raise ValueError(
+                        f"budgets.track_a_credit_costs.{kind} must be a positive integer"
+                    )
+                costs[kind] = value
+
+        raw_credit_budget = budgets.get("track_a_credit_budget")
+        if raw_credit_budget is not None and (
+            isinstance(raw_credit_budget, bool)
+            or not isinstance(raw_credit_budget, int)
+            or raw_credit_budget <= 0
+        ):
+            raise ValueError(
+                "budgets.track_a_credit_budget must be null or a positive integer"
+            )
+
         return cls(
             max_iterations=int(budgets["max_iterations"]),
             max_model_calls=int(budgets["max_model_calls"]),
@@ -55,6 +88,10 @@ class BudgetState:
                 if budgets.get("max_total_tokens") is not None
                 else None
             ),
+            max_track_a_credits=(
+                int(raw_credit_budget) if raw_credit_budget is not None else None
+            ),
+            track_a_credit_costs=costs,
         )
 
     def _limit(self, resource: str) -> int:
@@ -81,6 +118,12 @@ class BudgetState:
             return None
         return max(0, self.max_total_tokens - self.total_tokens_used)
 
+    @property
+    def track_a_credits_remaining(self) -> int | None:
+        if self.max_track_a_credits is None:
+            return None
+        return max(0, self.max_track_a_credits - self.track_a_credits_used)
+
     def can_consume(self, resource: str, amount: int = 1, *, reserve: int = 0) -> bool:
         if amount < 0 or reserve < 0:
             raise ValueError("Budget amounts and reserves must be non-negative")
@@ -93,6 +136,31 @@ class BudgetState:
             raise BudgetExceeded(
                 f"Cannot consume {amount} {resource}; "
                 f"remaining={self.remaining(resource)}, reserve={reserve}"
+            )
+
+    def track_a_credit_cost(self, kind: str, amount: int = 1) -> int:
+        if kind not in self.track_a_credit_costs:
+            raise ValueError(f"Unknown Track-A tool kind: {kind}")
+        if amount < 0:
+            raise ValueError("Track-A credit amount must be non-negative")
+        return int(self.track_a_credit_costs[kind]) * amount
+
+    def can_afford_track_a(self, kind: str, amount: int = 1, *, reserve: int = 0) -> bool:
+        if reserve < 0:
+            raise ValueError("Track-A credit reserve must be non-negative")
+        remaining = self.track_a_credits_remaining
+        if remaining is None:
+            return True
+        return remaining >= self.track_a_credit_cost(kind, amount) + reserve
+
+    def require_track_a(self, kind: str, amount: int = 1, *, reserve: int = 0) -> None:
+        if not self.can_afford_track_a(kind, amount, reserve=reserve):
+            self.set_stop_reason("track_a_credit_budget_exhausted")
+            remaining = self.track_a_credits_remaining
+            cost = self.track_a_credit_cost(kind, amount)
+            raise BudgetExceeded(
+                f"Cannot spend {cost} Track-A credits on {kind}; "
+                f"remaining={remaining}, reserve={reserve}"
             )
 
     def charge(
@@ -118,6 +186,39 @@ class BudgetState:
             event["details"] = dict(details)
         self.events.append(event)
 
+    def _charge_tool(
+        self,
+        resource: str,
+        track_a_kind: str,
+        *,
+        stage: str,
+        success: bool | None = None,
+        timed_out: bool = False,
+    ) -> None:
+        """Atomically charge a call counter and the weighted Track-A ledger."""
+
+        self.require(resource)
+        self.require_track_a(track_a_kind)
+        setattr(self, f"{resource}_used", self._used(resource) + 1)
+
+        event: dict[str, Any] = {
+            "resource": resource,
+            "amount": 1,
+            "stage": stage,
+            "success": success,
+            "timed_out": timed_out,
+        }
+        if self.max_track_a_credits is not None:
+            cost = self.track_a_credit_cost(track_a_kind)
+            self.track_a_credits_used += cost
+            event["track_a"] = {
+                "kind": track_a_kind,
+                "credit_cost": cost,
+                "credits_spent_after": self.track_a_credits_used,
+                "credits_remaining_after": self.track_a_credits_remaining,
+            }
+        self.events.append(event)
+
     def charge_iteration(self, *, stage: str) -> None:
         self.charge("iterations", stage=stage)
 
@@ -134,8 +235,9 @@ class BudgetState:
         success: bool | None = None,
         timed_out: bool = False,
     ) -> None:
-        self.charge(
+        self._charge_tool(
             "csim_calls",
+            "csim",
             stage=stage,
             success=success,
             timed_out=timed_out,
@@ -148,8 +250,9 @@ class BudgetState:
         success: bool | None = None,
         timed_out: bool = False,
     ) -> None:
-        self.charge(
+        self._charge_tool(
             "cosim_calls",
+            "cosim",
             stage=stage,
             success=success,
             timed_out=timed_out,
@@ -162,8 +265,9 @@ class BudgetState:
         success: bool | None = None,
         timed_out: bool = False,
     ) -> None:
-        self.charge(
+        self._charge_tool(
             "synthesis_calls",
+            "synthesis",
             stage=stage,
             success=success,
             timed_out=timed_out,
@@ -225,7 +329,7 @@ class BudgetState:
         reserve_cosim: int = 0,
     ) -> bool:
         token_available = self.max_total_tokens is None or self.total_tokens_remaining > 0
-        return all(
+        call_capacity = all(
             (
                 self.can_consume("iterations"),
                 self.can_consume("model_calls"),
@@ -241,6 +345,18 @@ class BudgetState:
                 token_available,
             )
         )
+        if not call_capacity:
+            return False
+
+        remaining = self.track_a_credits_remaining
+        if remaining is None:
+            return True
+        required_credits = (
+            self.track_a_credit_cost("csim", reserve_csim)
+            + self.track_a_credit_cost("synthesis", reserve_synthesis)
+            + self.track_a_credit_cost("cosim", reserve_cosim)
+        )
+        return remaining >= required_credits
 
     def set_stop_reason(self, reason: str, *, overwrite: bool = False) -> None:
         if overwrite or self.stop_reason is None:
@@ -248,7 +364,7 @@ class BudgetState:
 
     def summary(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "initial": {
                 "max_iterations": self.max_iterations,
                 "max_model_calls": self.max_model_calls,
@@ -274,6 +390,13 @@ class BudgetState:
                 "cosim_calls": self.remaining("cosim_calls"),
                 "synthesis_calls": self.remaining("synthesis_calls"),
                 "total_tokens": self.total_tokens_remaining,
+            },
+            "track_a": {
+                "enabled": self.max_track_a_credits is not None,
+                "credit_budget": self.max_track_a_credits,
+                "credit_costs": dict(self.track_a_credit_costs),
+                "credits_spent": self.track_a_credits_used,
+                "credits_remaining": self.track_a_credits_remaining,
             },
             "stop_reason": self.stop_reason,
             "events": list(self.events),
