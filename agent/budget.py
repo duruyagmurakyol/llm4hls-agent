@@ -20,6 +20,11 @@ TRACK_A_DEFAULT_CREDIT_COSTS = {
     "synthesis": 4,
     "cosim": 20,
 }
+TOOL_RESOURCE_TO_TRACK_A_KIND = {
+    "csim_calls": "csim",
+    "synthesis_calls": "synthesis",
+    "cosim_calls": "cosim",
+}
 
 
 class BudgetExceeded(RuntimeError):
@@ -137,6 +142,9 @@ class BudgetState:
                 f"Cannot consume {amount} {resource}; "
                 f"remaining={self.remaining(resource)}, reserve={reserve}"
             )
+        track_a_kind = TOOL_RESOURCE_TO_TRACK_A_KIND.get(resource)
+        if track_a_kind is not None:
+            self.require_track_a(track_a_kind, amount)
 
     def track_a_credit_cost(self, kind: str, amount: int = 1) -> int:
         if kind not in self.track_a_credit_costs:
@@ -198,7 +206,6 @@ class BudgetState:
         """Atomically charge a call counter and the weighted Track-A ledger."""
 
         self.require(resource)
-        self.require_track_a(track_a_kind)
         setattr(self, f"{resource}_used", self._used(resource) + 1)
 
         event: dict[str, Any] = {
