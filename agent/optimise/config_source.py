@@ -157,6 +157,14 @@ def ppa_config_from_task(task: TaskManifest) -> dict[str, Any]:
     if isinstance(track_a, dict):
         config["track_a"] = dict(track_a)
 
+    # Search control is part of the authoritative task contract. Preserve an
+    # explicit policy when translating the unified manifest into the legacy PPA
+    # shape; otherwise the bounded structured runner silently falls back to the
+    # legacy reactive loop.
+    search_policy = task.data.get("search_policy")
+    if isinstance(search_policy, dict):
+        config["search_policy"] = dict(search_policy)
+
     target_loop_label = optimisation.get("target_loop_label")
     if target_loop_label:
         config["target_loop_label"] = target_loop_label
