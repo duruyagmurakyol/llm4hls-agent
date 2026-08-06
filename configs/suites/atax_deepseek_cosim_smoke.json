@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "suite_id": "atax_deepseek_cosim_smoke",
+  "description": "Single difficult-kernel smoke test for final/Pareto co-simulation and verified fallback using ATAX with DeepSeek V4 Pro.",
+  "expected_runs": 1,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": false,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "requested_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "atax",
+      "path": "benchmarks/hls_eval/atax",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "atax"
+    }
+  ]
+}
