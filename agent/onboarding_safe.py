@@ -22,11 +22,12 @@ DEFAULT_MODEL = {
 DEFAULT_BUDGETS = {
     "max_iterations": 5,
     "max_csim_calls": 5,
-    "max_cosim_calls": 0,
+    # One baseline/fallback co-simulation plus one for every possible candidate.
+    "max_cosim_calls": 6,
     "max_synthesis_calls": 4,
     "max_model_calls": 5,
     "max_total_tokens": None,
-    "requires_cosim": False,
+    "requires_cosim": True,
 }
 
 DEFAULT_OPTIMISATION = {
@@ -149,7 +150,11 @@ def resolve_benchmark(root: Path) -> TaskManifest:
             "minimum_frequency_mhz": 100.0,
             "resource_limits": {},
         },
-        "validation_policy": {"requires_cosim": False},
+        "validation_policy": {
+            "requires_cosim": True,
+            "pareto_requires_cosim": True,
+            "fallback_requires_cosim": True,
+        },
         "budgets": dict(DEFAULT_BUDGETS),
         "model": dict(DEFAULT_MODEL),
         "repair": {
@@ -189,4 +194,5 @@ def onboard_benchmark(root: Path) -> TaskManifest:
     print(f"Testbench files: {len(task.data['artifacts']['testbench'])}")
     print(f"Part: {task.data['target']['part']}")
     print(f"Clock: {task.data['target']['clock_period_ns']:g} ns")
+    print("Final/Pareto co-simulation required: yes")
     return task
