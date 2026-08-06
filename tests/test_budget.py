@@ -47,6 +47,7 @@ def test_budget_records_shared_consumption(budget: BudgetState) -> None:
     }
     assert summary["remaining"]["csim_calls"] == 2
     assert summary["remaining"]["total_tokens"] == 1367
+    assert summary["track_a"]["enabled"] is False
 
 
 def test_failed_and_timed_out_calls_still_consume_budget(
@@ -79,6 +80,45 @@ def test_budget_exhaustion_blocks_operation() -> None:
     assert budget.stop_reason == "csim_calls_budget_exhausted"
 
 
+def test_track_a_weighted_credits_are_atomic_and_auditable() -> None:
+    budget = BudgetState.from_manifest(
+        {
+            "max_iterations": 4,
+            "max_model_calls": 4,
+            "max_csim_calls": 4,
+            "max_cosim_calls": 2,
+            "max_synthesis_calls": 4,
+            "track_a_credit_budget": 25,
+            "track_a_credit_costs": {
+                "csim": 1,
+                "synthesis": 4,
+                "cosim": 20,
+            },
+        }
+    )
+
+    budget.charge_csim(stage="initial_csim", success=True)
+    budget.charge_synthesis(stage="initial_synthesis", success=True)
+    budget.charge_cosim(stage="initial_cosim", success=True)
+
+    summary = budget.summary()
+    assert summary["track_a"] == {
+        "enabled": True,
+        "credit_budget": 25,
+        "credit_costs": {"csim": 1, "synthesis": 4, "cosim": 20},
+        "credits_spent": 25,
+        "credits_remaining": 0,
+    }
+    assert summary["events"][-1]["track_a"]["credit_cost"] == 20
+
+    with pytest.raises(BudgetExceeded, match="Track-A credits"):
+        budget.require("csim_calls")
+
+    assert budget.csim_calls_used == 1
+    assert budget.track_a_credits_used == 25
+    assert budget.stop_reason == "track_a_credit_budget_exhausted"
+
+
 def test_candidate_generation_preserves_validation_headroom(
     budget: BudgetState,
 ) -> None:
@@ -96,6 +136,30 @@ def test_candidate_generation_preserves_validation_headroom(
     assert not budget.can_generate_candidate(
         reserve_csim=2,
         reserve_synthesis=2,
+    )
+
+
+def test_candidate_generation_reserves_weighted_track_a_credits() -> None:
+    budget = BudgetState.from_manifest(
+        {
+            "max_iterations": 2,
+            "max_model_calls": 2,
+            "max_csim_calls": 4,
+            "max_cosim_calls": 2,
+            "max_synthesis_calls": 4,
+            "track_a_credit_budget": 6,
+        }
+    )
+
+    budget.charge_csim(stage="initial_csim")
+    assert budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
+    )
+    budget.charge_csim(stage="candidate_csim")
+    assert not budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
     )
 
 
