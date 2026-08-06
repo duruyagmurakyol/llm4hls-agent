@@ -161,6 +161,20 @@ def _validate_autonomous_ppa(
         raise ValueError("optimisation.validation must be an object")
 
 
+def _requires_auto_cosim_budget(data: dict[str, Any]) -> bool:
+    policy = data.get("validation_policy")
+    if isinstance(policy, dict) and "requires_cosim" in policy:
+        return bool(policy["requires_cosim"])
+
+    track_a = data.get("track_a")
+    if isinstance(track_a, dict) and "requires_cosim" in track_a:
+        return bool(track_a["requires_cosim"])
+
+    # Preserve the historical auto-manifest rule unless a task explicitly
+    # declares that co-simulation is not part of its verification contract.
+    return True
+
+
 def _validate_auto(data: dict[str, Any], adapter: dict[str, Any]) -> None:
     if "config" in adapter:
         raise ValueError("auto tasks must be configured directly in the task manifest")
@@ -175,15 +189,9 @@ def _validate_auto(data: dict[str, Any], adapter: dict[str, Any]) -> None:
                 f"budgets.{key} must be at least 2 for auto detection and repair verification"
             )
 
-    track_a = data.get("track_a")
-    requires_cosim = (
-        bool(track_a.get("requires_cosim", False))
-        if isinstance(track_a, dict)
-        else False
-    )
-    if requires_cosim and budgets["max_cosim_calls"] < 2:
+    if _requires_auto_cosim_budget(data) and budgets["max_cosim_calls"] < 2:
         raise ValueError(
-            "budgets.max_cosim_calls must be at least 2 when co-simulation is required"
+            "budgets.max_cosim_calls must be at least 2 for auto detection and repair verification"
         )
 
 
