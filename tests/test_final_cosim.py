@@ -137,8 +137,30 @@ def _report(path: Path, passed: bool) -> dict[str, Any]:
     }
 
 
-def test_selected_cosim_failure_falls_back_to_verified_pareto(tmp_path: Path) -> None:
-    task, selected, fallback, baseline, result = _prepare(tmp_path)
+def test_selected_success_stops_without_validating_lower_ranked_designs(
+    tmp_path: Path,
+) -> None:
+    task, selected, _fallback, _baseline, result = _prepare(tmp_path)
+    calls: list[str] = []
+
+    def fake_cosim(_task: TaskManifest, path: Path) -> dict[str, Any]:
+        calls.append(path.name)
+        return _report(path, True)
+
+    audit = enforce_final_cosim_policy(task, result, cosim_runner=fake_cosim)
+
+    assert calls == [selected.name]
+    assert audit["policy"] == "ranked_selected_then_fallback"
+    assert audit["status"] == "passed"
+    assert audit["fallback_used"] is False
+    assert audit["candidates_audited"] == 1
+    assert audit["candidates_skipped_after_success"] == 2
+
+
+def test_selected_cosim_failure_falls_back_to_next_ranked_pareto(
+    tmp_path: Path,
+) -> None:
+    task, selected, fallback, _baseline, result = _prepare(tmp_path)
     calls: list[str] = []
 
     def fake_cosim(_task: TaskManifest, path: Path) -> dict[str, Any]:
@@ -150,11 +172,12 @@ def test_selected_cosim_failure_falls_back_to_verified_pareto(tmp_path: Path) ->
         (Path(task.output_dir) / "candidate_state.json").read_text(encoding="utf-8")
     )
 
-    assert set(calls) == {selected.name, fallback.name, baseline.name}
+    assert calls == [selected.name, fallback.name]
     assert audit["status"] == "passed_with_fallback"
     assert audit["fallback_used"] is True
     assert audit["metered_agent_budget"] is False
     assert audit["verified_pareto_count"] == 1
+    assert audit["candidates_skipped_after_success"] == 1
     assert result.success is True
     assert result.status == "completed_with_cosim_fallback"
     assert result.termination_reason == "selected_cosim_failed_fallback_verified"
@@ -164,18 +187,38 @@ def test_selected_cosim_failure_falls_back_to_verified_pareto(tmp_path: Path) ->
     assert Path(state["pareto_archive"][0]["candidate_file"]).resolve() == fallback.resolve()
 
 
-def test_all_cosim_failures_make_final_result_unsuccessful(tmp_path: Path) -> None:
-    task, _selected, _fallback, _baseline, result = _prepare(tmp_path)
+def test_baseline_is_only_run_after_ranked_pareto_candidates_fail(
+    tmp_path: Path,
+) -> None:
+    task, selected, fallback, baseline, result = _prepare(tmp_path)
+    calls: list[str] = []
 
-    audit = enforce_final_cosim_policy(
-        task,
-        result,
-        cosim_runner=lambda _task, path: _report(path, False),
-    )
+    def fake_cosim(_task: TaskManifest, path: Path) -> dict[str, Any]:
+        calls.append(path.name)
+        return _report(path, path == baseline)
+
+    audit = enforce_final_cosim_policy(task, result, cosim_runner=fake_cosim)
+
+    assert calls == [selected.name, fallback.name, baseline.name]
+    assert audit["status"] == "passed_with_fallback"
+    assert audit["fallback_used"] is True
+    assert audit["verified_pareto_count"] == 0
+
+
+def test_all_cosim_failures_make_final_result_unsuccessful(tmp_path: Path) -> None:
+    task, selected, fallback, baseline, result = _prepare(tmp_path)
+    calls: list[str] = []
+
+    def fake_cosim(_task: TaskManifest, path: Path) -> dict[str, Any]:
+        calls.append(path.name)
+        return _report(path, False)
+
+    audit = enforce_final_cosim_policy(task, result, cosim_runner=fake_cosim)
     state = json.loads(
         (Path(task.output_dir) / "candidate_state.json").read_text(encoding="utf-8")
     )
 
+    assert calls == [selected.name, fallback.name, baseline.name]
     assert audit["status"] == "failed"
     assert result.success is False
     assert result.status == "final_cosim_failed"
@@ -184,10 +227,10 @@ def test_all_cosim_failures_make_final_result_unsuccessful(tmp_path: Path) -> No
     assert state["pareto_archive"] == []
 
 
-def test_existing_successful_cosim_is_reused_without_another_tool_call(
+def test_existing_successful_selected_cosim_stops_without_tool_call(
     tmp_path: Path,
 ) -> None:
-    task, selected, fallback, baseline, result = _prepare(tmp_path)
+    task, selected, _fallback, _baseline, result = _prepare(tmp_path)
     state_path = Path(task.output_dir) / "candidate_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     for record in [state["selected_design"], *state["pareto_archive"]]:
@@ -204,11 +247,8 @@ def test_existing_successful_cosim_is_reused_without_another_tool_call(
 
     audit = enforce_final_cosim_policy(task, result, cosim_runner=fake_cosim)
 
-    assert selected.name not in calls
-    assert set(calls) == {fallback.name, baseline.name}
+    assert calls == []
     assert audit["status"] == "passed"
     assert audit["fallback_used"] is False
-    selected_audit = next(
-        item for item in audit["candidates"] if item["source"] == str(selected.resolve())
-    )
-    assert selected_audit["reused_existing_cosim"] is True
+    assert audit["candidates_audited"] == 1
+    assert audit["candidates"][0]["reused_existing_cosim"] is True
