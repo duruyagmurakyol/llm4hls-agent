@@ -7,8 +7,9 @@ functions while changing only the decision made after initial validation.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from agent import controller
 from agent.budget import BudgetExceeded, BudgetState
@@ -25,7 +26,7 @@ def _normalise_mode(mode: str) -> ExecutionMode:
         raise ValueError(
             "execution mode must be one of: " + ", ".join(sorted(EXECUTION_MODES))
         )
-    return value  # type: ignore[return-value]
+    return cast(ExecutionMode, value)
 
 
 def _frequency_compliant(
@@ -88,7 +89,11 @@ def _write_verified_state(
                 + budget.cosim_calls_used
             ),
         },
-        "verdict": "already_verified" if baseline.get("origin") == "initial" else "repair_verified",
+        "verdict": (
+            "already_verified"
+            if baseline.get("origin") == "initial"
+            else "repair_verified"
+        ),
         "track_a_selection": {},
         "validation": {
             "static_validation": True,
@@ -99,6 +104,7 @@ def _write_verified_state(
     }
     state = {
         "schema_version": 4,
+        "execution_mode": mode,
         "selection_policy": {
             "mode": f"{mode}_only",
             "description": (
@@ -116,7 +122,7 @@ def _write_verified_state(
         "pareto_archive": [],
     }
     (output_dir / "candidate_state.json").write_text(
-        __import__("json").dumps(state, indent=2) + "\n",
+        json.dumps(state, indent=2) + "\n",
         encoding="utf-8",
     )
     return selected
