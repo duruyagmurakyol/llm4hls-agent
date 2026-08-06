@@ -28,8 +28,6 @@ RESOURCE_RECOVERY_THRESHOLD_PERCENT = 25.0
 BASELINE_RESTART_REASON = "restart_from_verified_baseline"
 BASELINE_RESTART_VERDICTS = {
     "reject_duplicate",
-    "reject_static",
-    "reject_strategy_not_realised",
     "reject_no_change",
     "reject_no_objective_gain",
     "reject_dominated_pre_cosim",
@@ -330,11 +328,14 @@ def _baseline_restart_parent(
         return None
 
     latest = max(indexed, key=lambda item: int(item["candidate_index"]))
-    archive_only = bool(
-        latest.get("archive_eligible") is True
+    explicitly_retired = bool(
+        "refinement_eligible" in latest
         and latest.get("refinement_eligible") is False
     )
-    if latest.get("verdict") not in BASELINE_RESTART_VERDICTS and not archive_only:
+    if (
+        latest.get("verdict") not in BASELINE_RESTART_VERDICTS
+        and not explicitly_retired
+    ):
         return None
 
     # A genuinely useful Pareto point, dominating candidate, or explicitly
