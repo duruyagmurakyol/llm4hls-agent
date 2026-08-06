@@ -163,6 +163,54 @@ def test_candidate_generation_reserves_weighted_track_a_credits() -> None:
     )
 
 
+def test_optional_cosim_does_not_consume_candidate_reservation() -> None:
+    budget = BudgetState.from_manifest(
+        {
+            "max_iterations": 2,
+            "max_model_calls": 2,
+            "max_csim_calls": 3,
+            "max_cosim_calls": 1,
+            "max_synthesis_calls": 3,
+            "track_a_credit_budget": 10,
+            "requires_cosim": False,
+        }
+    )
+
+    budget.charge_csim(stage="baseline_csim")
+    budget.charge_synthesis(stage="baseline_synthesis")
+
+    assert budget.track_a_credits_remaining == 5
+    assert budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
+        reserve_cosim=1,
+    )
+
+
+def test_required_cosim_is_reserved_for_candidate_validation() -> None:
+    budget = BudgetState.from_manifest(
+        {
+            "max_iterations": 2,
+            "max_model_calls": 2,
+            "max_csim_calls": 3,
+            "max_cosim_calls": 1,
+            "max_synthesis_calls": 3,
+            "track_a_credit_budget": 25,
+            "requires_cosim": True,
+        }
+    )
+
+    budget.charge_csim(stage="baseline_csim")
+    budget.charge_synthesis(stage="baseline_synthesis")
+
+    assert budget.track_a_credits_remaining == 20
+    assert not budget.can_generate_candidate(
+        reserve_csim=1,
+        reserve_synthesis=1,
+        reserve_cosim=1,
+    )
+
+
 def test_token_limit_is_enforced_after_provider_usage() -> None:
     budget = BudgetState(
         max_iterations=1,
