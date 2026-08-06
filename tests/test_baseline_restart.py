@@ -16,8 +16,9 @@ def record(
     *,
     fully_verified: bool = True,
     static_validation: bool | None = True,
+    refinement_eligible: bool | None = None,
 ) -> dict:
-    return {
+    value = {
         "candidate_index": index,
         "candidate_file": f"candidate_{index:03d}.cpp",
         "verdict": verdict,
@@ -25,7 +26,6 @@ def record(
         "static_validation": static_validation,
         "csim": fully_verified,
         "synthesis": fully_verified,
-        "refinement_eligible": False,
         "meets_frequency_requirement": True,
         "resource_limit_compliance": {
             "configured": False,
@@ -48,6 +48,11 @@ def record(
             "tool_seconds": 1.0,
         },
     }
+    # Legacy summaries do not contain Stage-3 eligibility fields. Only include
+    # the field when a test deliberately exercises the new explicit policy.
+    if refinement_eligible is not None:
+        value["refinement_eligible"] = refinement_eligible
+    return value
 
 
 def _assert_baseline_restart(verdict: str) -> None:
@@ -74,7 +79,7 @@ def test_duplicate_restarts_from_baseline() -> None:
     _assert_baseline_restart("reject_duplicate")
 
 
-def test_latest_no_gain_does_not_override_pareto_parent() -> None:
+def test_latest_no_gain_does_not_override_legacy_pareto_parent() -> None:
     selected = select_refinement_parent(
         [
             record(1, "keep_pareto_candidate"),
@@ -89,7 +94,7 @@ def test_latest_no_gain_does_not_override_pareto_parent() -> None:
     assert reason == "pareto_candidate"
 
 
-def test_latest_duplicate_does_not_override_pareto_parent() -> None:
+def test_latest_duplicate_does_not_override_legacy_pareto_parent() -> None:
     selected = select_refinement_parent(
         [
             record(1, "keep_pareto_candidate"),
@@ -104,7 +109,26 @@ def test_latest_duplicate_does_not_override_pareto_parent() -> None:
     assert reason == "pareto_candidate"
 
 
-def test_latest_static_failure_remains_repairable() -> None:
+def test_explicitly_ineligible_pareto_does_not_block_baseline_restart() -> None:
+    selected = select_refinement_parent(
+        [
+            record(
+                1,
+                "keep_pareto_candidate",
+                refinement_eligible=False,
+            ),
+            record(2, "reject_no_objective_gain"),
+        ]
+    )
+
+    assert selected is not None
+    parent, reason = selected
+
+    assert parent["candidate_index"] == 0
+    assert reason == BASELINE_RESTART_REASON
+
+
+def test_latest_legacy_static_failure_remains_repairable() -> None:
     selected = select_refinement_parent(
         [
             record(1, "reject_no_objective_gain"),
@@ -121,6 +145,27 @@ def test_latest_static_failure_remains_repairable() -> None:
     parent, _ = selected
 
     assert parent["candidate_index"] == 2
+
+
+def test_explicitly_retired_static_failure_restarts_from_baseline() -> None:
+    selected = select_refinement_parent(
+        [
+            record(1, "reject_no_objective_gain"),
+            record(
+                2,
+                "reject_static",
+                fully_verified=False,
+                static_validation=True,
+                refinement_eligible=False,
+            ),
+        ]
+    )
+
+    assert selected is not None
+    parent, reason = selected
+
+    assert parent["candidate_index"] == 0
+    assert reason == BASELINE_RESTART_REASON
 
 
 def test_restart_prompt_uses_baseline_not_rejected_source(
