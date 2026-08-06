@@ -24,6 +24,9 @@ DEFAULT_PART = "xcu55c-fsvh2892-2L-e"
 SUBMISSION_MINIMUM_FREQUENCY_MHZ = 100.0
 SUBMISSION_CLOCK_PERIOD_NS = 1000.0 / SUBMISSION_MINIMUM_FREQUENCY_MHZ
 DEFAULT_MODEL = "Qwen/Qwen3.5-122B-A10B"
+# Repository-wide safety policy: no final design or Pareto archive member is
+# selectable without passing C/RTL co-simulation.
+UNIVERSAL_FINAL_COSIM = True
 _SUPPORTED_TASK_TYPES = {
     "generate",
     "repair",
@@ -117,18 +120,26 @@ def _model_config() -> dict[str, Any]:
 
 
 def _budgets(credit_budget: int, *, requires_cosim: bool) -> dict[str, Any]:
-    """Keep detailed call limits and the reference-harness credit ceiling."""
+    """Keep detailed call limits and the reference-harness credit ceiling.
 
+    ``requires_cosim`` is retained in the signature for compatibility with the
+    task package, but the effective repository policy is universal. The call
+    limit allows one verified baseline/fallback plus every generated candidate
+    to be co-simulated. The weighted Track-A credit ledger still prevents the
+    controller from exceeding the official task budget.
+    """
+
+    del requires_cosim
     iterations = max(2, min(6, credit_budget // 8 or 2))
     max_total = os.environ.get("LLM4HLS_MAX_TOTAL_TOKENS")
     return {
         "max_iterations": iterations,
         "max_csim_calls": max(4, iterations + 2),
-        "max_cosim_calls": max(2, min(4, iterations)),
+        "max_cosim_calls": iterations + 1,
         "max_synthesis_calls": max(3, iterations + 1),
         "max_model_calls": iterations,
         "max_total_tokens": int(max_total) if max_total else None,
-        "requires_cosim": requires_cosim,
+        "requires_cosim": UNIVERSAL_FINAL_COSIM,
         "track_a_credit_budget": credit_budget,
         "track_a_credit_costs": {
             "csim": 1,
@@ -223,7 +234,8 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
     clock_ns = SUBMISSION_CLOCK_PERIOD_NS
     difficulty = _positive_int(spec.get("difficulty"), field="difficulty", default=1)
     credit_budget = _positive_int(spec.get("budget"), field="budget", default=40)
-    requires_cosim = bool(spec.get("requires_cosim", False))
+    declared_requires_cosim = bool(spec.get("requires_cosim", False))
+    requires_cosim = UNIVERSAL_FINAL_COSIM
 
     staging_root = REPO_ROOT / "experiments" / "track_a_staging" / task_id
     output_dir = REPO_ROOT / "experiments" / "track_a" / task_id
@@ -302,6 +314,11 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
             "minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
             "resource_limits": {},
         },
+        "validation_policy": {
+            "requires_cosim": requires_cosim,
+            "pareto_requires_cosim": True,
+            "fallback_requires_cosim": True,
+        },
         "budgets": budgets,
         "model": model,
         "repair": {
@@ -338,7 +355,10 @@ def resolve_track_a_task(root: Path) -> TaskManifest:
             "task_type": task_type,
             "difficulty": difficulty,
             "credit_budget": credit_budget,
+            "declared_requires_cosim": declared_requires_cosim,
             "requires_cosim": requires_cosim,
+            "pareto_requires_cosim": True,
+            "fallback_requires_cosim": True,
             "submission_clock_period_ns": clock_ns,
             "submission_minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
             "initial_condition": str(spec.get("initial_condition", "")),
@@ -368,7 +388,7 @@ def onboard_track_a_task(root: Path) -> TaskManifest:
     )
     print(f"LLM provider: {meta['llm_provider']}")
     print(f"Reference-harness credit budget: {meta['credit_budget']}")
-    print(f"Co-simulation required: {'yes' if meta['requires_cosim'] else 'no'}")
+    print("Final/Pareto co-simulation required: yes")
     print("Hidden tests/reference solutions copied: no")
     print(f"Staged public package: {task.data['task_root']}")
     return task
