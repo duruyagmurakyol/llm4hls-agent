@@ -150,6 +150,31 @@ def _selection_mode(output_dir: Path) -> str:
     return "research_pareto"
 
 
+def _selected_state(output_dir: Path) -> dict[str, Any]:
+    state = _load_object(output_dir / "candidate_state.json")
+    selected = state.get("selected_design")
+    selected = selected if isinstance(selected, dict) else {}
+
+    verified = state.get("selected_design_fully_verified")
+    if not isinstance(verified, bool):
+        verified = selected.get("fully_verified")
+
+    frequency = state.get("selected_design_frequency_compliant")
+    if not isinstance(frequency, bool):
+        frequency = selected.get("meets_frequency_requirement")
+
+    resources = state.get("selected_design_resource_compliant")
+    if not isinstance(resources, bool):
+        resources = selected.get("meets_resource_limits")
+
+    return {
+        "record": selected,
+        "verified": verified if isinstance(verified, bool) else None,
+        "frequency_compliant": frequency if isinstance(frequency, bool) else None,
+        "resource_compliant": resources if isinstance(resources, bool) else None,
+    }
+
+
 def _enrich_track_a_result(
     result: AgentResult,
     path: Path,
@@ -158,7 +183,8 @@ def _enrich_track_a_result(
     """Persist selection, submission timing and reference-harness evidence."""
 
     output_dir = path.parent
-    budget = _load_object(output_dir / "budget_summary.json")
+    budget_path = output_dir / "budget_summary.json"
+    budget = _load_object(budget_path)
     track_a_budget = (
         budget.get("track_a") if isinstance(budget.get("track_a"), dict) else {}
     )
@@ -169,6 +195,27 @@ def _enrich_track_a_result(
         "costs": dict(track_a_budget.get("credit_costs") or {}),
     }
     mode = _selection_mode(output_dir)
+    selection = _selected_state(output_dir)
+    final_design_verified = selection["verified"]
+
+    # Reaching the end of a metered budget after retaining a fully verified
+    # selected design is a completed bounded run, not a failed verification.
+    if (
+        result.termination_reason == "final_verification_budget_unavailable"
+        and final_design_verified is True
+    ):
+        result.success = True
+        result.status = "completed_budget"
+        result.termination_reason = (
+            "verified_result_selected_after_budget_exhaustion"
+        )
+        if budget:
+            budget["stop_reason"] = result.termination_reason
+            budget_path.write_text(
+                json.dumps(budget, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
     report = dict(report)
     selected = report.get("selected_design")
     selected = dict(selected) if isinstance(selected, dict) else {}
@@ -184,6 +231,7 @@ def _enrich_track_a_result(
             "submission_clock_period_ns": SUBMISSION_CLOCK_PERIOD_NS,
             "submission_minimum_frequency_mhz": SUBMISSION_MINIMUM_FREQUENCY_MHZ,
             "meets_submission_frequency": meets_submission_frequency,
+            "fully_verified": final_design_verified,
         }
     )
     for legacy_key in (
@@ -195,6 +243,13 @@ def _enrich_track_a_result(
 
     report["selected_design"] = selected
     report["selection_mode"] = mode
+    report["final_design_verified"] = final_design_verified
+    report["selected_design_frequency_compliant"] = selection[
+        "frequency_compliant"
+    ]
+    report["selected_design_resource_compliant"] = selection[
+        "resource_compliant"
+    ]
     report["reference_harness_score_estimate"] = report.get(
         "public_score_estimate"
     )
@@ -211,6 +266,13 @@ def _enrich_track_a_result(
     payload.update(
         {
             "selection_mode": mode,
+            "final_design_verified": final_design_verified,
+            "selected_design_frequency_compliant": selection[
+                "frequency_compliant"
+            ],
+            "selected_design_resource_compliant": selection[
+                "resource_compliant"
+            ],
             "submission_clock_period_ns": SUBMISSION_CLOCK_PERIOD_NS,
             "submission_minimum_frequency_mhz": (
                 SUBMISSION_MINIMUM_FREQUENCY_MHZ
@@ -252,6 +314,14 @@ def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
         if compliance is False
         else "unavailable"
     )
+    verified = report.get("final_design_verified")
+    verified_text = (
+        "yes"
+        if verified is True
+        else "no"
+        if verified is False
+        else "unavailable"
+    )
     credits = (
         report.get("reference_harness_credits")
         if isinstance(report.get("reference_harness_credits"), dict)
@@ -262,6 +332,7 @@ def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
         flush=True,
     )
     print(f"Final selection mode: {report.get('selection_mode')}", flush=True)
+    print(f"Final design fully verified: {verified_text}", flush=True)
     print(
         "Reference-harness score estimate: "
         f"{_format_number(report.get('reference_harness_score_estimate'), digits=4)} / "
