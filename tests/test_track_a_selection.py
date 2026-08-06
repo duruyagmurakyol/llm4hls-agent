@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agent.config import TaskManifest
 from agent.optimise.config_source import ppa_config_from_task
 from agent.track_a_selection import (
@@ -97,8 +99,8 @@ def test_official_selector_does_not_invent_original_latency(tmp_path) -> None:
     assert selected["candidate_index"] == 1
     assert annotated[0]["track_a_selection"]["acceleration"] is None
     assert annotated[1]["track_a_selection"]["acceleration"] is None
-    assert annotated[0]["track_a_selection"]["public_score_estimate"] == 2.1
-    assert annotated[1]["track_a_selection"]["public_score_estimate"] == 2.1
+    assert annotated[0]["track_a_selection"]["public_score_estimate"] == pytest.approx(2.1)
+    assert annotated[1]["track_a_selection"]["public_score_estimate"] == pytest.approx(2.1)
 
 
 def test_equal_score_and_latency_prefers_lower_weighted_credits(tmp_path) -> None:
