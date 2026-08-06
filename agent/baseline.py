@@ -1,4 +1,4 @@
-"""Promote a fully validated source into the active PPA baseline."""
+"""Promote a source that passed every verification stage required by its task."""
 
 from __future__ import annotations
 
@@ -68,9 +68,11 @@ def promote_verified_baseline(
     origin: str,
     csim_passed: bool,
     synthesis: dict[str, Any],
-    cosim: dict[str, Any],
+    cosim: dict[str, Any] | None,
+    cosim_required: bool = True,
 ) -> dict[str, Any]:
-    """Copy one verified source and its synthesis reports into stable task output."""
+    """Copy one task-valid source and its synthesis reports into stable output."""
+
     source = source.resolve()
     if not source.is_file():
         raise FileNotFoundError(f"Verified baseline source not found: {source}")
@@ -78,14 +80,21 @@ def promote_verified_baseline(
         raise ValueError("Cannot promote a baseline that did not pass CSim")
     if synthesis.get("passed") is not True:
         raise ValueError("Cannot promote a baseline that did not pass synthesis")
-    if cosim.get("passed") is not True:
-        raise ValueError("Cannot promote a baseline that did not pass co-simulation")
+    if cosim_required and (cosim is None or cosim.get("passed") is not True):
+        raise ValueError(
+            "Cannot promote a baseline that did not pass required co-simulation"
+        )
+    if cosim is not None and cosim.get("passed") is not True:
+        raise ValueError("Cannot promote a baseline after failed co-simulation")
 
     digest = _sha256(source)
     synthesis_hash = str(synthesis.get("candidate_hash", ""))
-    cosim_hash = str(cosim.get("candidate_hash", ""))
-    if digest != synthesis_hash or digest != cosim_hash:
-        raise ValueError("Verified baseline hashes do not identify the same source")
+    if digest != synthesis_hash:
+        raise ValueError("Verified baseline and synthesis hashes do not match")
+    if cosim is not None:
+        cosim_hash = str(cosim.get("candidate_hash", ""))
+        if digest != cosim_hash:
+            raise ValueError("Verified baseline and co-simulation hashes do not match")
 
     metrics = synthesis.get("metrics")
     if not isinstance(metrics, dict) or not metrics:
@@ -129,7 +138,7 @@ def promote_verified_baseline(
         raise FileNotFoundError(f"Promoted top synthesis report is missing: {top_report}")
 
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "origin": origin,
         "source": displayed_source,
         "original_source": _display(source),
@@ -141,7 +150,8 @@ def promote_verified_baseline(
         "validation": {
             "csim_passed": True,
             "synthesis_passed": True,
-            "cosim_passed": True,
+            "cosim_required": cosim_required,
+            "cosim_passed": True if cosim is not None else None,
         },
     }
     (output_dir / "verified_baseline.json").write_text(
