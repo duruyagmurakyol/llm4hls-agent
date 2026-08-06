@@ -1,0 +1,14 @@
+task_id = "structural_blind_stream"
+task_type = "structural"
+difficulty = 4
+top = "stream_triple"
+kernel_file = "stream_triple.cpp"
+header_files = ["stream_triple.h"]
+public_tb = "stream_triple_tb.cpp"
+budget = 80
+requires_cosim = true
+initial_condition = "The implementation passes C-simulation but does not complete required C/RTL co-simulation. Diagnose the structural failure from tool evidence while preserving the public numerical contract."
+
+[target]
+part = "xcu55c-fsvh2892-2L-e"
+clock_ns = 10.0
