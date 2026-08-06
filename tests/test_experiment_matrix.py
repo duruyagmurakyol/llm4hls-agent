@@ -10,6 +10,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "run_experiment_matrix.py"
 SUITE = REPO_ROOT / "configs" / "suites" / "overnight_60.json"
+OPTIMISATION_SUITE = REPO_ROOT / "configs" / "suites" / "optimisation_15.json"
 
 
 def _module():
@@ -70,6 +71,29 @@ def test_only_unique_golden_designs_use_optimisation_mode() -> None:
     ]
     assert len({task.canonical_design for task in optimisation}) == 6
     assert all(task.mode == "repair" for task in tasks if task not in optimisation)
+
+
+def test_corrected_optimisation_suite_has_fifteen_executable_runs() -> None:
+    module = _module()
+    suite = module._load_suite(OPTIMISATION_SUITE)
+    planned = module.expand_matrix(suite)
+
+    assert len(planned) == 15
+    assert len({item.run_key for item in planned}) == 15
+    assert {item.task.task_id for item in planned} == {
+        "dotProduct_optimize",
+        "atax",
+        "bicg",
+        "gemm",
+        "vector_add",
+    }
+    assert all(item.task.mode == "optimise" for item in planned)
+    assert all(item.task.task_id != "stream_pipeline" for item in planned)
+    assert [item.model.slug for item in planned[:3]] == [
+        "deepseek_v4_pro",
+        "qwen35_122b_fp8",
+        "qwen36_27b_fp8",
+    ]
 
 
 def test_materialisation_isolates_model_outputs_and_preserves_source_task(
