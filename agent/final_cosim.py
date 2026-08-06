@@ -1,9 +1,9 @@
 """Universal post-search C/RTL co-simulation promotion gate.
 
 The competition harness meters tool calls used by the autonomous search, while
-its grading-side validation is uncharged.  This module deliberately runs after
-the search budget has closed.  It audits every currently archived Pareto member,
-the selected design, and the verified baseline fallback.  A design remains
+its grading-side validation is uncharged. This module deliberately runs after
+the search budget has closed. It audits every currently archived Pareto member,
+the selected design, and the verified baseline fallback. A design remains
 selectable only when CSim, synthesis, and C/RTL co-simulation all pass.
 
 This separation preserves a fair, bounded search while preventing a
@@ -127,14 +127,17 @@ def _collect_records(
     output_dir: Path,
 ) -> tuple[list[dict[str, Any]], set[str], str | None]:
     selected = state.get("selected_design")
-    selected_record = dict(selected) if isinstance(selected, dict) else None
     selected_identity: str | None = None
+    if isinstance(selected, dict):
+        selected_source = _source(selected)
+        if selected_source is not None:
+            selected_identity = _identity(selected, selected_source)
+
     records: list[dict[str, Any]] = []
     pareto_identities: set[str] = set()
     seen: set[str] = set()
 
     def add(value: Any, *, pareto: bool = False) -> None:
-        nonlocal selected_identity
         if not isinstance(value, dict):
             return
         record = dict(value)
@@ -150,11 +153,6 @@ def _collect_records(
             seen.add(identity)
         if pareto:
             pareto_identities.add(identity)
-        if selected_record is value or (
-            selected_record is not None
-            and selected_record.get("candidate_hash") == identity
-        ):
-            selected_identity = identity
 
     add(selected)
     for item in state.get("pareto_archive", []):
@@ -163,11 +161,6 @@ def _collect_records(
     add(state.get("best_correct_candidate"))
     add(state.get("original_baseline"))
     add(_baseline_record(output_dir))
-
-    if selected_identity is None and selected_record is not None:
-        source = _source(selected_record)
-        if source is not None:
-            selected_identity = _identity(selected_record, source)
     return records, pareto_identities, selected_identity
 
 
@@ -251,6 +244,19 @@ def _eligible(record: dict[str, Any]) -> bool:
     )
 
 
+def _is_baseline(record: dict[str, Any]) -> bool:
+    role = str(record.get("role") or "")
+    index = record.get("candidate_index")
+    return bool(
+        role in {
+            "verified_baseline_fallback",
+            "original_baseline",
+            "baseline",
+        }
+        or index == 0
+    )
+
+
 def _archive_selected(output_dir: Path, record: dict[str, Any]) -> dict[str, Any]:
     source = _source(record)
     if source is None:
@@ -299,9 +305,11 @@ def _select_fallback(
             True,
         )
 
-    verified_fallbacks = [record for record in records if _eligible(record)]
-    if verified_fallbacks:
-        return verified_fallbacks[0], True
+    verified_baselines = [
+        record for record in records if _is_baseline(record) and _eligible(record)
+    ]
+    if verified_baselines:
+        return verified_baselines[0], True
     return None, selected is not None
 
 
@@ -332,12 +340,12 @@ def enforce_final_cosim_policy(
     state = _load_json(state_path)
     audit_path = output_dir / "final_cosim_audit.json"
 
-    if not result.success or not state:
+    if not state:
         audit = {
             "schema_version": 1,
             "policy": "all_pareto_and_selected",
             "status": "skipped",
-            "reason": "no_successful_selectable_state",
+            "reason": "no_selectable_state",
             "metered_agent_budget": False,
             "candidates": [],
         }
@@ -384,7 +392,9 @@ def enforce_final_cosim_policy(
         elif reused:
             report = {
                 "passed": existing_cosim is True,
-                "failure_class": "none" if existing_cosim is True else "previous_cosim_failure",
+                "failure_class": (
+                    "none" if existing_cosim is True else "previous_cosim_failure"
+                ),
                 "timed_out": False,
                 "return_code": 0 if existing_cosim is True else None,
                 "candidate_hash": identity,
@@ -456,6 +466,7 @@ def enforce_final_cosim_policy(
                 "selected_design_frequency_compliant": False,
                 "selected_design_resource_compliant": False,
                 "best_ppa_candidate": None,
+                "best_correct_candidate": None,
                 "pareto_archive": [
                     item.get("archived_file") for item in verified_pareto
                 ],
@@ -468,6 +479,7 @@ def enforce_final_cosim_policy(
         selected = _archive_selected(output_dir, chosen)
         chosen_identity = str(chosen.get("candidate_hash"))
         state["selected_design"] = selected
+        state["best_correct_candidate"] = selected
         state["selected_design_fully_verified"] = True
         state["selected_design_frequency_compliant"] = selected.get(
             "meets_frequency_requirement"
@@ -477,7 +489,9 @@ def enforce_final_cosim_policy(
         ) is not False
         if chosen_identity in pareto_identities:
             state["best_ppa_candidate"] = selected
-        if fallback_used:
+        elif fallback_used:
+            state["best_ppa_candidate"] = None
+        if fallback_used and result.success:
             result.status = "completed_with_cosim_fallback"
             result.termination_reason = "selected_cosim_failed_fallback_verified"
         select_event.status = "passed"
@@ -494,7 +508,7 @@ def enforce_final_cosim_policy(
                 "best_ppa_candidate": (
                     selected["archived_file"]
                     if chosen_identity in pareto_identities
-                    else select_event.details.get("best_ppa_candidate")
+                    else None
                 ),
                 "best_correct_candidate": selected["archived_file"],
                 "pareto_archive": [
