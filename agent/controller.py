@@ -31,13 +31,21 @@ def _output_dir(task: TaskManifest) -> Path:
     return path
 
 
-def _cosim_required(task: TaskManifest) -> bool:
+def _cosim_required(
+    task: TaskManifest,
+    budget: BudgetState | None = None,
+) -> bool:
     """Use the package contract for Track-A and preserve legacy behaviour."""
 
     track_a = task.data.get("track_a")
     if isinstance(track_a, dict):
         return bool(track_a.get("requires_cosim", False))
-    return int(task.data["budgets"].get("max_cosim_calls", 0)) > 0
+    if budget is not None:
+        return budget.max_cosim_calls > 0
+    budgets = task.data.get("budgets")
+    if isinstance(budgets, dict):
+        return int(budgets.get("max_cosim_calls", 0)) > 0
+    return True
 
 
 def _write_resolved_task(task: TaskManifest) -> Path:
@@ -267,6 +275,7 @@ def _run_autonomous_ppa(
 def _repair_config(task: TaskManifest) -> dict[str, object]:
     repair = task.data["repair"]
     model = task.data["model"]
+    interface = task.data.get("interface")
     return {
         "repair_mode": "direct_api",
         "experiment_id": task.task_id,
@@ -275,7 +284,9 @@ def _repair_config(task: TaskManifest) -> dict[str, object]:
         "protected_files": repair["protected_files"],
         "context_files": repair.get("context_files", repair["protected_files"]),
         "repair_constraints": repair.get("repair_constraints", []),
-        "top_function": task.data["interface"]["top_function"],
+        "top_function": (
+            interface.get("top_function") if isinstance(interface, dict) else None
+        ),
         "host_validation": repair["host_validation"],
         "independent_validation": repair["independent_validation"],
         "model": model["name"],
@@ -355,7 +366,7 @@ def _run_direct_api_repair(
     ]
     synthesis: dict[str, object] | None = None
     cosim: dict[str, object] | None = None
-    cosim_required = _cosim_required(task)
+    cosim_required = _cosim_required(task, budget)
 
     if passed:
         candidate = run_dir / "workspace" / task.data["repair"]["editable_files"][0]
@@ -480,7 +491,7 @@ def _detect_initial_condition(
         return "repair", trajectory, None
 
     cosim: dict[str, object] | None = None
-    if _cosim_required(task):
+    if _cosim_required(task, budget):
         budget.charge_cosim(stage="initial_cosim")
         try:
             cosim = run_cosim(task, candidate)
@@ -509,7 +520,7 @@ def _detect_initial_condition(
                 "candidate_file": synthesis.get("candidate_file", str(candidate)),
                 "project_dir": synthesis.get("project_dir"),
                 "metrics": synthesis["metrics"],
-                "cosim_required": _cosim_required(task),
+                "cosim_required": _cosim_required(task, budget),
             },
         )
     )
@@ -544,7 +555,11 @@ def _repair_baseline(task: TaskManifest, result: AgentResult) -> dict[str, objec
         csim_passed=bool(repair.details.get("independent_validation_passed")),
         synthesis=synthesis,
         cosim=cosim,
-        cosim_required=_cosim_required(task),
+        cosim_required=(
+            bool(task.data["track_a"].get("requires_cosim", False))
+            if isinstance(task.data.get("track_a"), dict)
+            else cosim_event is not None
+        ),
     )
 
 
@@ -566,7 +581,11 @@ def _initial_baseline(
         csim_passed=bool(csim["passed"]),
         synthesis=synthesis,
         cosim=cosim,
-        cosim_required=_cosim_required(task),
+        cosim_required=(
+            bool(task.data["track_a"].get("requires_cosim", False))
+            if isinstance(task.data.get("track_a"), dict)
+            else cosim is not None
+        ),
     )
 
 
@@ -689,7 +708,7 @@ def _ppa_budget_available(
     return budget.can_generate_candidate(
         reserve_csim=1,
         reserve_synthesis=1,
-        reserve_cosim=1 if _cosim_required(task) else 0,
+        reserve_cosim=1 if _cosim_required(task, budget) else 0,
     )
 
 
@@ -777,7 +796,7 @@ def _run_auto(
 
     validation_text = (
         "Initial CSim, synthesis and required co-simulation passed"
-        if _cosim_required(task)
+        if _cosim_required(task, budget)
         else "Initial CSim and synthesis passed; co-simulation is not required"
     )
     print(f"{validation_text}; entering PPA optimisation.", flush=True)
