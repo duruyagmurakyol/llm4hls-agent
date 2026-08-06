@@ -148,6 +148,7 @@ def resolve_benchmark(root: Path) -> TaskManifest:
             "minimum_frequency_mhz": 100.0,
             "resource_limits": {},
         },
+        "validation_policy": {"requires_cosim": False},
         "budgets": dict(DEFAULT_BUDGETS),
         "model": dict(DEFAULT_MODEL),
         "repair": {
