@@ -57,13 +57,28 @@ def main() -> None:
         if not isinstance(raw, dict):
             continue
         model_id = str(raw.get("id", "")).strip()
+        requested_id = str(raw.get("requested_id", model_id)).strip()
         provider = str(raw.get("provider", "siliconflow")).strip().casefold()
         slug = str(raw.get("slug", model_id)).strip()
+        equivalence = str(raw.get("model_equivalence", "exact_requested_id")).strip()
         key_name = _required_key(provider)
-        print(f"Checking {model_id} via {provider}...", flush=True)
+        if requested_id == model_id:
+            print(f"Checking {model_id} via {provider}...", flush=True)
+        else:
+            print(
+                f"Checking provider ID {model_id} via {provider} "
+                f"(requested: {requested_id})...",
+                flush=True,
+            )
 
         record: dict[str, Any] = {
             "model_id": model_id,
+            "provider_model_id": model_id,
+            "requested_model_id": requested_id,
+            "model_equivalence": equivalence,
+            "requested_precision": raw.get("requested_precision"),
+            "provider_precision": raw.get("provider_precision"),
+            "provider_mapping_note": raw.get("provider_mapping_note"),
             "model_slug": slug,
             "provider": provider,
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -126,7 +141,7 @@ def main() -> None:
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "suite": str(suite_path),
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "all_available": all(item["available"] is True for item in results),
