@@ -291,6 +291,7 @@ def generate_candidate(
 
     output_dir = REPO_ROOT / config["output_dir"]
     prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
+    effective_prompt_path = output_dir / f"candidate_{candidate_index:03d}_effective_prompt.txt"
     strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
     exhausted_path = output_dir / f"candidate_{candidate_index:03d}_strategy_exhausted.json"
     if not prompt_path.is_file():
@@ -323,12 +324,14 @@ def generate_candidate(
         + _latency_recovery_prompt_suffix(strategy)
         + _latency_recovery_exhausted_suffix(exhausted)
     )
+    effective_prompt_path.write_text(user_prompt, encoding="utf-8")
 
     model_name = str(model_config["name"])
     print("\nSiliconFlow candidate generation")
     print(f"Model: {model_name}")
     print(f"Required top: {required_top}")
     print(f"Prompt: {prompt_path.relative_to(REPO_ROOT)}")
+    print(f"Effective prompt: {effective_prompt_path.relative_to(REPO_ROOT)}")
     if config.get("resource_limits"):
         print(f"Hard resource ceilings: {config['resource_limits']}")
     print("Calling the model once...")
@@ -390,6 +393,7 @@ def generate_candidate(
         "latency_seconds": response.latency_seconds,
         "resource_limits": config.get("resource_limits") or {},
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
+        "effective_prompt_file": str(effective_prompt_path.relative_to(REPO_ROOT)),
         "raw_response_file": str(raw_path.relative_to(REPO_ROOT)),
         "candidate_file": str(candidate_path.relative_to(REPO_ROOT)),
         "strategy_file": (
