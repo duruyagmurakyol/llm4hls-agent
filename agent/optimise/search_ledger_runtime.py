@@ -1,6 +1,6 @@
 """Runtime enforcement for the structured-search novelty ledger.
 
-The pure ledger lives in :mod:`agent.optimise.search_ledger`.  This module adds
+The pure ledger lives in :mod:`agent.optimise.search_ledger`. This module adds
 three guarded runtime boundaries without changing the preserved optimisation
 runner:
 
@@ -8,9 +8,10 @@ runner:
 * register the exact model-facing prompt immediately before the provider call;
 * record generated source hashes and terminal evaluation verdicts.
 
-Legacy PPA configurations bypass every guard.  Installation is idempotent and
+Legacy PPA configurations bypass every guard. Installation is idempotent and
 patches only the function references held by ``runner_legacy`` plus the provider
-call imported by ``generate.py``.
+call imported by ``generate.py``. The guards self-install on direct module import
+so all import paths observe the same deterministic runtime state.
 """
 
 from __future__ import annotations
@@ -376,3 +377,8 @@ def install_structured_search_ledger_runtime() -> None:
     runner_legacy.evaluate_experiment = _guarded_evaluate
     generation.complete = _guarded_complete
     setattr(runner_legacy, marker, True)
+
+
+# Direct imports of this module must observe the same guarded state as imports
+# that arrive through ``search_policy``. Repeated calls remain no-ops.
+install_structured_search_ledger_runtime()
