@@ -219,7 +219,9 @@ def _source_record(record: dict[str, Any], archived: Path, role: str) -> dict[st
 
     def validation_value(key: str) -> Any:
         value = record.get(key)
-        return True if baseline and value is None else value
+        if baseline and value is None and key != "cosim":
+            return True
+        return value
 
     track_a_selection = (
         dict(record.get("track_a_selection") or {})
@@ -297,6 +299,12 @@ def preserve_candidate_state(
             if isinstance(summary.get("frequency_requirement"), dict)
             else {}
         )
+        verification = config.get("baseline", {}).get("verification")
+        verification = dict(verification) if isinstance(verification, dict) else {}
+        requires_cosim = bool(config.get("requires_cosim", True))
+        baseline_csim = verification.get("csim_passed", True)
+        baseline_synthesis = verification.get("synthesis_passed", True)
+        baseline_cosim = verification.get("cosim_passed")
         baseline = {
             "candidate_index": 0,
             "candidate_file": config["baseline"]["source"],
@@ -306,13 +314,17 @@ def preserve_candidate_state(
             ),
             "meets_resource_limits": True,
             "resource_limit_compliance": {"configured": False, "passed": True},
-            "fully_verified": True,
-            "cosim_required": bool(config.get("requires_cosim", True)),
+            "fully_verified": bool(
+                baseline_csim is True
+                and baseline_synthesis is True
+                and (baseline_cosim is True if requires_cosim else True)
+            ),
+            "cosim_required": requires_cosim,
             "verdict": "baseline",
             "static_validation": True,
-            "csim": True,
-            "synthesis": True,
-            "cosim": True,
+            "csim": baseline_csim,
+            "synthesis": baseline_synthesis,
+            "cosim": baseline_cosim,
             "cost": {
                 "input_tokens": 0,
                 "output_tokens": 0,
