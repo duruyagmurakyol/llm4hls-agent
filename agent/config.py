@@ -169,11 +169,22 @@ def _validate_auto(data: dict[str, Any], adapter: dict[str, Any]) -> None:
     _validate_autonomous_ppa(data, adapter)
 
     budgets = data["budgets"]
-    for key in ("max_csim_calls", "max_synthesis_calls", "max_cosim_calls"):
+    for key in ("max_csim_calls", "max_synthesis_calls"):
         if budgets[key] < 2:
             raise ValueError(
                 f"budgets.{key} must be at least 2 for auto detection and repair verification"
             )
+
+    track_a = data.get("track_a")
+    requires_cosim = (
+        bool(track_a.get("requires_cosim", False))
+        if isinstance(track_a, dict)
+        else False
+    )
+    if requires_cosim and budgets["max_cosim_calls"] < 2:
+        raise ValueError(
+            "budgets.max_cosim_calls must be at least 2 when co-simulation is required"
+        )
 
 
 def _resolve_task_path(value: str) -> Path:
