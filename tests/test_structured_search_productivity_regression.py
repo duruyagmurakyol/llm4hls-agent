@@ -4,6 +4,7 @@ import importlib
 import json
 from pathlib import Path
 
+from agent.optimise.eligibility import annotate_candidate_eligibility
 from agent.optimise.parent_selection import (
     BASELINE_RESTART_REASON,
     select_refinement_parent,
@@ -42,12 +43,13 @@ def _verified_candidate(
     dsp: int,
     dsp_delta: float,
 ) -> dict:
-    return {
+    record = {
         "candidate_index": index,
         "candidate_file": str(output_dir / f"candidate_{index:03d}.cpp"),
         "static_validation": True,
         "csim": True,
         "synthesis": True,
+        "cosim_required": True,
         "cosim": True,
         "fully_verified": True,
         "meets_frequency_requirement": True,
@@ -92,6 +94,7 @@ def _verified_candidate(
         },
         "verdict": verdict,
     }
+    return annotate_candidate_eligibility(record)
 
 
 def _rejected_candidate(
@@ -100,12 +103,13 @@ def _rejected_candidate(
     *,
     verdict: str,
 ) -> dict:
-    return {
+    record = {
         "candidate_index": index,
         "candidate_file": str(output_dir / f"candidate_{index:03d}.cpp"),
         "static_validation": False,
         "csim": None,
         "synthesis": None,
+        "cosim_required": True,
         "cosim": None,
         "fully_verified": False,
         "meets_frequency_requirement": None,
@@ -128,6 +132,7 @@ def _rejected_candidate(
         },
         "verdict": verdict,
     }
+    return annotate_candidate_eligibility(record)
 
 
 def _poor_dsp_only_pareto(output_dir: Path, index: int = 2) -> dict:
