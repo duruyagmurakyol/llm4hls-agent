@@ -316,6 +316,7 @@ def prepare_baseline_restart_prompt(
         "reject_no_objective_gain",
         "reject_dominated_pre_cosim",
         "reject_no_change_pre_cosim",
+        "reject_synthesis_equivalent",
     }
 
     rejected = [

@@ -221,3 +221,16 @@ def test_restart_prompt_uses_baseline_not_rejected_source(
     assert feedback["previous_candidate_index"] == 0
     assert feedback["evidence_candidate_index"] == 1
     assert feedback["restart_from_baseline"] is True
+
+
+def test_synthesis_equivalent_restarts_from_baseline() -> None:
+    selected = select_refinement_parent(
+        [record(1, "reject_synthesis_equivalent")]
+    )
+
+    assert selected is not None
+    parent, reason = selected
+
+    assert parent["candidate_index"] == 0
+    assert parent["trigger_candidate_index"] == 1
+    assert reason == BASELINE_RESTART_REASON
