@@ -18,6 +18,10 @@ from agent.config import TaskManifest  # noqa: E402
 from agent.controller import run_agent  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 from agent.resume import resume_agent  # noqa: E402
+from agent.stage_aware import (  # noqa: E402
+    run_stage_aware_task,
+    supports_stage_aware_task,
+)
 from agent.state import AgentResult, TrajectoryEvent  # noqa: E402
 from agent.terminal_reporting import (  # noqa: E402
     build_run_summary,
@@ -198,8 +202,6 @@ def _enrich_track_a_result(
     selection = _selected_state(output_dir)
     final_design_verified = selection["verified"]
 
-    # Reaching the end of a metered budget after retaining a fully verified
-    # selected design is a completed bounded run, not a failed verification.
     if (
         result.termination_reason == "final_verification_budget_unavailable"
         and final_design_verified is True
@@ -413,15 +415,22 @@ def main() -> None:
         if isinstance(task_input, TaskManifest):
             capture_original_scoring_baseline(task_input)
 
-        result = (
-            resume_agent(task_input, max_steps=args.max_agent_steps)
-            if args.resume
-            else run_agent(
+        if args.resume:
+            result = resume_agent(task_input, max_steps=args.max_agent_steps)
+        elif isinstance(task_input, TaskManifest) and supports_stage_aware_task(
+            task_input
+        ):
+            if args.status_only:
+                raise ValueError(
+                    "--status-only is not supported for stage-aware task types"
+                )
+            result = run_stage_aware_task(task_input)
+        else:
+            result = run_agent(
                 task_input,
                 status_only=args.status_only,
                 max_steps=args.max_agent_steps,
             )
-        )
     except ValueError as error:
         fallback = _verified_baseline_fallback(task_input, error)
         if fallback is None:
