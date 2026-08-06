@@ -59,6 +59,40 @@ def _config() -> dict[str, object]:
     }
 
 
+def _task_data(tmp_path: Path, *, optimisation: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "task_id": "track_a_example",
+        "task_root": str(tmp_path),
+        "artifacts": {
+            "source": str(tmp_path / "kernel.cpp"),
+            "build_files": [str(tmp_path / "task.cfg")],
+        },
+        "interface": {
+            "top_function": "kernel",
+            "protected_contract": [],
+        },
+        "target": {
+            "clock_period_ns": 5.0,
+            "minimum_frequency_mhz": 100.0,
+            "resource_limits": {},
+        },
+        "budgets": {
+            "max_iterations": 2,
+            "max_model_calls": 2,
+            "max_csim_calls": 4,
+            "max_cosim_calls": 2,
+            "max_synthesis_calls": 4,
+        },
+        "model": {},
+        "optimisation": optimisation or {},
+        "output_dir": str(tmp_path / "output"),
+        "track_a": {
+            "difficulty": 2,
+            "requires_cosim": False,
+        },
+    }
+
+
 def test_official_selector_maximises_public_score_before_resources(tmp_path) -> None:
     (tmp_path / "original_scoring_baseline.json").write_text(
         json.dumps({"official_latency_cycles": 100}),
@@ -143,37 +177,7 @@ def test_required_cosim_failure_is_ineligible(tmp_path) -> None:
 def test_track_a_manifest_defaults_to_research_pareto_selection(tmp_path) -> None:
     task = TaskManifest(
         path=tmp_path / "task.toml",
-        data={
-            "task_id": "track_a_example",
-            "task_root": str(tmp_path),
-            "artifacts": {
-                "source": str(tmp_path / "kernel.cpp"),
-                "build_files": [str(tmp_path / "task.cfg")],
-            },
-            "interface": {
-                "top_function": "kernel",
-                "protected_contract": [],
-            },
-            "target": {
-                "clock_period_ns": 5.0,
-                "minimum_frequency_mhz": 100.0,
-                "resource_limits": {},
-            },
-            "budgets": {
-                "max_iterations": 2,
-                "max_model_calls": 2,
-                "max_csim_calls": 4,
-                "max_cosim_calls": 2,
-                "max_synthesis_calls": 4,
-            },
-            "model": {},
-            "optimisation": {},
-            "output_dir": str(tmp_path / "output"),
-            "track_a": {
-                "difficulty": 2,
-                "requires_cosim": False,
-            },
-        },
+        data=_task_data(tmp_path),
     )
 
     config = ppa_config_from_task(task)
@@ -187,41 +191,38 @@ def test_track_a_manifest_can_explicitly_request_reference_score_selection(
 ) -> None:
     task = TaskManifest(
         path=tmp_path / "task.toml",
-        data={
-            "task_id": "track_a_reference_mode",
-            "task_root": str(tmp_path),
-            "artifacts": {
-                "source": str(tmp_path / "kernel.cpp"),
-                "build_files": [str(tmp_path / "task.cfg")],
-            },
-            "interface": {
-                "top_function": "kernel",
-                "protected_contract": [],
-            },
-            "target": {
-                "clock_period_ns": 5.0,
-                "minimum_frequency_mhz": 100.0,
-                "resource_limits": {},
-            },
-            "budgets": {
-                "max_iterations": 2,
-                "max_model_calls": 2,
-                "max_csim_calls": 4,
-                "max_cosim_calls": 2,
-                "max_synthesis_calls": 4,
-            },
-            "model": {},
-            "optimisation": {
-                "selection": {"mode": OFFICIAL_TRACK_A_MODE},
-            },
-            "output_dir": str(tmp_path / "output"),
-            "track_a": {
-                "difficulty": 2,
-                "requires_cosim": False,
-            },
-        },
+        data=_task_data(
+            tmp_path,
+            optimisation={"selection": {"mode": OFFICIAL_TRACK_A_MODE}},
+        ),
     )
 
     config = ppa_config_from_task(task)
 
     assert config["selection"]["mode"] == OFFICIAL_TRACK_A_MODE
+
+
+def test_track_a_manifest_reuses_saved_original_baseline_metrics(tmp_path) -> None:
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    expected = {
+        "clock_period_ns": 3.17,
+        "latency_worst_cycles": 1027,
+        "resources_lut_used": 156,
+        "resources_ff_used": 93,
+        "resources_dsp_used": 2,
+        "resources_bram_used": 0,
+    }
+    (output_dir / "original_scoring_baseline.json").write_text(
+        json.dumps({"metrics": expected}),
+        encoding="utf-8",
+    )
+    task = TaskManifest(
+        path=tmp_path / "task.toml",
+        data=_task_data(tmp_path),
+    )
+
+    config = ppa_config_from_task(task)
+
+    assert config["baseline"]["metrics"] == expected
+    assert config["selection"]["mode"] == RESEARCH_PARETO_MODE
