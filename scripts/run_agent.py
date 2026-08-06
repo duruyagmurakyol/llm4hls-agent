@@ -14,7 +14,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from agent.config import TaskManifest  # noqa: E402
+from agent.config import TaskManifest, load_task  # noqa: E402
 from agent.execution_mode import run_execution_mode  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 from agent.resume import resume_agent  # noqa: E402
@@ -414,7 +414,7 @@ def main() -> None:
         else:
             if args.onboard_only:
                 raise ValueError("--onboard-only requires a task or benchmark directory.")
-            task_input = target
+            task_input = load_task(target)
 
         if args.onboard_only:
             return
