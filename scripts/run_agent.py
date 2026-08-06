@@ -14,6 +14,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from agent.config import TaskManifest  # noqa: E402
 from agent.controller import run_agent  # noqa: E402
 from agent.onboarding_safe import onboard_benchmark  # noqa: E402
 from agent.resume import resume_agent  # noqa: E402
@@ -26,6 +27,10 @@ from agent.track_a import (  # noqa: E402
     is_track_a_task,
     onboard_track_a_task,
 )
+from agent.track_a_scoring import (  # noqa: E402
+    capture_original_scoring_baseline,
+    write_track_a_score_estimate,
+)
 
 
 def _verified_baseline_fallback(
@@ -34,10 +39,10 @@ def _verified_baseline_fallback(
 ) -> tuple[AgentResult, Path] | None:
     """Treat an unmappable optional PPA target as a verified-baseline stop.
 
-    Repair, synthesis and co-simulation have already completed before this
-    error is raised. The promoted baseline is therefore the safe final design;
-    absence of a loop-level optimisation target must not turn that verified
-    result into a configuration failure.
+    Repair and every validation stage required by the task have already
+    completed before this error is raised. The promoted baseline is therefore
+    the safe final design; absence of a loop-level optimisation target must not
+    turn that verified result into a configuration failure.
     """
 
     message = str(error)
@@ -103,6 +108,52 @@ def _verified_baseline_fallback(
     return result, result_path
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _format_number(value: object, *, digits: int = 3) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:.{digits}f}"
+    return "unavailable"
+
+
+def _print_track_a_score(path: Path, report: dict[str, Any]) -> None:
+    selected = report["selected_design"]
+    target_clock = selected.get("target_clock_period_ns")
+    meets_target = selected.get("meets_target_clock")
+    target_text = (
+        f"{target_clock:g} ns"
+        if isinstance(target_clock, (int, float))
+        and not isinstance(target_clock, bool)
+        else "configured clock"
+    )
+    compliance = (
+        "yes"
+        if meets_target is True
+        else "no"
+        if meets_target is False
+        else "unavailable"
+    )
+    print(f"Track-A score estimate: {_display_path(path)}", flush=True)
+    print(
+        "Public score estimate: "
+        f"{_format_number(report.get('public_score_estimate'), digits=4)} / "
+        f"{_format_number(report.get('maximum_score'), digits=4)}",
+        flush=True,
+    )
+    print(
+        "Official latency cycles: "
+        f"baseline={report['original_scoring_baseline'].get('official_latency_cycles')}, "
+        f"selected={selected.get('official_latency_cycles')}",
+        flush=True,
+    )
+    print(f"Meets {target_text} target: {compliance}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the unified budgeted LLM4HLS agent."
@@ -152,6 +203,9 @@ def main() -> None:
         if args.resume and args.status_only:
             raise ValueError("--resume cannot be combined with --status-only")
 
+        if isinstance(task_input, TaskManifest):
+            capture_original_scoring_baseline(task_input)
+
         result = (
             resume_agent(task_input, max_steps=args.max_agent_steps)
             if args.resume
@@ -179,6 +233,16 @@ def main() -> None:
     except RuntimeError as error:
         print(f"Agent execution failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
+
+    if isinstance(task_input, TaskManifest):
+        try:
+            score = write_track_a_score_estimate(task_input, result)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"Track-A score reporting failed: {error}", file=sys.stderr)
+        else:
+            if score is not None:
+                score_path, score_report = score
+                _print_track_a_score(score_path, score_report)
 
     summary = build_run_summary(
         result,
