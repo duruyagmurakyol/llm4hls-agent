@@ -39,7 +39,9 @@ def _config(tmp_path: Path) -> tuple[Path, dict]:
 
 
 def _record(tmp_path: Path, index: int) -> dict:
-    candidate = tmp_path / "run" / f"candidate_{index:03d}.cpp"
+    output_dir = tmp_path / "run"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    candidate = output_dir / f"candidate_{index:03d}.cpp"
     candidate.write_text(
         "#include <stdint.h>\nint kernel(int x) { return x; }\n",
         encoding="utf-8",
