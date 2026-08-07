@@ -37,6 +37,7 @@ DEFAULT_THINKING_BUDGETS = {
 STRUCTURED_EXPLORATION_MARKER = "Structured exploration contract:"
 CORRECTIVE_RETRY_MARKER = "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:"
 NO_SEMANTIC_CHANGE_MARKER = "because: no_semantic_change."
+POST_SYNTHESIS_NO_GAIN_MARKER = "POST-SYNTHESIS NO-GAIN RETRY:"
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
@@ -131,28 +132,37 @@ def _structured_reasoning_policy(
     user_prompt: str,
     configured_enable_thinking: bool | None,
 ) -> tuple[bool | None, str]:
-    """Use cheap direct generation first; escalate reasoning only after a no-op.
+    """Apply model-specific reasoning policy to structured source generation.
 
-    Structured C1-C3 prompts already contain a controller-selected strategy.
-    Qwen therefore starts without hidden reasoning. A partial strategy
-    implementation receives the existing same-slot corrective retry, still
-    without thinking. Only a no-semantic-change retry enables thinking.
-    Non-structured calls retain their configured behaviour unchanged.
+    Structured prompts already contain a controller-selected strategy. Qwen
+    starts with direct generation and enables bounded reasoning for no-op or
+    post-synthesis no-gain retries. Kimi uses direct generation with an
+    explicit bounded reasoning allowance because its SiliconFlow endpoint may
+    otherwise consume the completion budget in hidden reasoning. Other models
+    retain their configured behaviour.
     """
 
-    if (
-        model != "Qwen/Qwen3.5-122B-A10B"
-        or STRUCTURED_EXPLORATION_MARKER not in user_prompt
-    ):
+    if STRUCTURED_EXPLORATION_MARKER not in user_prompt:
         return configured_enable_thinking, "configured"
 
-    if CORRECTIVE_RETRY_MARKER not in user_prompt:
+    if model == "Qwen/Qwen3.5-122B-A10B":
+        if CORRECTIVE_RETRY_MARKER not in user_prompt:
+            return False, "direct_non_thinking"
+
+        if POST_SYNTHESIS_NO_GAIN_MARKER in user_prompt:
+            return True, "post_synthesis_reasoning_escalation"
+
+        if NO_SEMANTIC_CHANGE_MARKER in user_prompt:
+            return True, "reasoning_escalation"
+
+        return False, "corrective_non_thinking"
+
+    if model == "moonshotai/Kimi-K2.7-Code":
+        if CORRECTIVE_RETRY_MARKER in user_prompt:
+            return False, "corrective_non_thinking"
         return False, "direct_non_thinking"
 
-    if NO_SEMANTIC_CHANGE_MARKER in user_prompt:
-        return True, "reasoning_escalation"
-
-    return False, "corrective_non_thinking"
+    return configured_enable_thinking, "configured"
 
 
 def complete(
@@ -201,6 +211,16 @@ def complete(
 
     effective_thinking_budget = thinking_budget
     if (
+        selected_provider == "siliconflow"
+        and model == "moonshotai/Kimi-K2.7-Code"
+        and generation_mode in {"direct_non_thinking", "corrective_non_thinking"}
+        and effective_thinking_budget is None
+    ):
+        # SiliconFlow/Kimi can consume the full completion budget in hidden
+        # reasoning even when thinking is disabled. An explicit small bound
+        # preserves enough completion capacity to emit the required C++ source.
+        effective_thinking_budget = 1024
+    elif (
         selected_provider == "siliconflow"
         and effective_enable_thinking is True
         and effective_thinking_budget is None

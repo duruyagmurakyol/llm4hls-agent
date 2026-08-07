@@ -245,14 +245,52 @@ def _strategy_text(strategy: dict[str, Any]) -> str:
             + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
         )
 
-    factor = strategy["parameters"]["factor"]
+    name = str(strategy.get("name") or "unnamed_strategy")
+
+    if name == "partial_unroll":
+        parameters = strategy.get("parameters") or {}
+        factor = parameters.get("factor")
+        if not isinstance(factor, int) or factor <= 0:
+            raise ValueError(
+                "partial_unroll strategy requires a positive integer parameters.factor"
+            )
+        return (
+            f"Selected strategy: partial loop unrolling with factor {factor}.\n"
+            f"Reason: {strategy.get('reason', '')}\n"
+            "Required changes:\n"
+            + "\n".join(
+                f"- {item}" for item in (strategy.get("required_changes") or [])
+            )
+            + "\nForbidden changes:\n"
+            + "\n".join(
+                f"- {item}" for item in (strategy.get("forbidden_changes") or [])
+            )
+        )
+
+    # Generic structured strategies such as C4/C5 fallback families do not
+    # necessarily have an unroll factor. Render their supplied contract
+    # directly instead of treating them as partial-unroll strategies.
+    parameters = strategy.get("parameters") or {}
+    parameter_lines = "\n".join(
+        f"- {key}: {value}" for key, value in parameters.items()
+    )
+
     return (
-        f"Selected strategy: partial loop unrolling with factor {factor}.\n"
-        f"Reason: {strategy['reason']}\n"
-        "Required changes:\n"
-        + "\n".join(f"- {item}" for item in strategy["required_changes"])
+        f"Selected strategy: {name}.\n"
+        f"Reason: {strategy.get('reason', '')}\n"
+        + (
+            "Parameters:\n" + parameter_lines + "\n"
+            if parameter_lines
+            else ""
+        )
+        + "Required changes:\n"
+        + "\n".join(
+            f"- {item}" for item in (strategy.get("required_changes") or [])
+        )
         + "\nForbidden changes:\n"
-        + "\n".join(f"- {item}" for item in strategy["forbidden_changes"])
+        + "\n".join(
+            f"- {item}" for item in (strategy.get("forbidden_changes") or [])
+        )
     )
 
 

@@ -19,7 +19,12 @@ class _FakeHTTPResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
-def _run_and_capture(monkeypatch, user_prompt: str) -> tuple[dict, dict]:
+def _run_and_capture(
+    monkeypatch,
+    user_prompt: str,
+    *,
+    model: str = "Qwen/Qwen3.5-122B-A10B",
+) -> tuple[dict, dict]:
     monkeypatch.setenv("SILICONFLOW_API_KEY", "test-key")
     captured: dict = {}
 
@@ -43,7 +48,7 @@ def _run_and_capture(monkeypatch, user_prompt: str) -> tuple[dict, dict]:
 
     monkeypatch.setattr(siliconflow.urllib.request, "urlopen", fake_urlopen)
     response = siliconflow.complete(
-        model="Qwen/Qwen3.5-122B-A10B",
+        model=model,
         system_prompt="system",
         user_prompt=user_prompt,
         max_tokens=4096,
@@ -133,3 +138,63 @@ def test_explicit_thinking_budget_overrides_safe_default(monkeypatch) -> None:
     )
 
     assert captured["payload"]["thinking_budget"] == 1024
+
+
+def test_qwen_post_synthesis_no_gain_retry_escalates_reasoning(monkeypatch) -> None:
+    payload, raw = _run_and_capture(
+        monkeypatch,
+        "Structured exploration contract:\n"
+        "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
+        "POST-SYNTHESIS NO-GAIN RETRY:\n"
+        "- The previous implementation passed correctness checks and synthesis, "
+        "but produced no useful objective gain.\n",
+    )
+
+    assert payload["enable_thinking"] is True
+    assert payload["thinking_budget"] == 1536
+    assert payload["max_tokens"] == 4096
+    assert (
+        raw["_llm4hls_generation_mode"]
+        == "post_synthesis_reasoning_escalation"
+    )
+
+
+def test_kimi_structured_initial_is_direct_with_bounded_reasoning(monkeypatch) -> None:
+    payload, raw = _run_and_capture(
+        monkeypatch,
+        "Structured exploration contract:\n"
+        "- Strategy family: memory_parallelism.\n",
+        model="moonshotai/Kimi-K2.7-Code",
+    )
+
+    assert payload["enable_thinking"] is False
+    assert payload["thinking_budget"] == 1024
+    assert payload["max_tokens"] == 4096
+    assert raw["_llm4hls_generation_mode"] == "direct_non_thinking"
+
+
+def test_kimi_structured_corrective_retry_stays_direct_and_bounded(monkeypatch) -> None:
+    payload, raw = _run_and_capture(
+        monkeypatch,
+        "Structured exploration contract:\n"
+        "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
+        "POST-SYNTHESIS NO-GAIN RETRY:\n",
+        model="moonshotai/Kimi-K2.7-Code",
+    )
+
+    assert payload["enable_thinking"] is False
+    assert payload["thinking_budget"] == 1024
+    assert raw["_llm4hls_generation_mode"] == "corrective_non_thinking"
+
+
+def test_deepseek_structured_generation_keeps_configured_policy(monkeypatch) -> None:
+    payload, raw = _run_and_capture(
+        monkeypatch,
+        "Structured exploration contract:\n"
+        "- Strategy family: critical_path_restructuring.\n",
+        model="deepseek-ai/DeepSeek-V4-Pro",
+    )
+
+    assert payload["enable_thinking"] is True
+    assert "thinking_budget" not in payload
+    assert raw["_llm4hls_generation_mode"] == "configured"

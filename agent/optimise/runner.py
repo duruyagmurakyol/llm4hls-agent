@@ -16,6 +16,7 @@ restored after every call.
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -49,6 +50,12 @@ from agent.optimise.structured_tail import (
 STRUCTURED_SEARCH_MODE = "structured_v1"
 STRUCTURED_PARENT_REASON = "structured_baseline_exploration"
 STRUCTURED_GENERATION_RETRIES = 1
+STRUCTURED_POST_SYNTHESIS_RETRIES = 1
+STRUCTURED_POST_SYNTHESIS_RETRY_VERDICTS = {
+    "reject_no_change",
+    "reject_no_objective_gain",
+    "reject_resource_limits",
+}
 
 # Re-export the preserved implementation so existing imports keep the same
 # surface.  The two functions defined below intentionally replace the legacy
@@ -330,6 +337,398 @@ def _merge_generation_retry_metadata(
     )
 
 
+def _structured_post_synthesis_retry_reason(
+    record: dict[str, Any] | None,
+) -> str | None:
+    """Return a one-shot refinement reason for a verified synthesis no-gain result."""
+
+    if not isinstance(record, dict):
+        return None
+    verdict = record.get("verdict")
+    if verdict not in STRUCTURED_POST_SYNTHESIS_RETRY_VERDICTS:
+        return None
+
+    # This is deliberately NOT the existing pre-Vitis no-change retry.
+    # Only trigger after a real successful synthesis result.
+    if record.get("synthesis") is not True:
+        return None
+
+    if verdict == "reject_resource_limits":
+        # Resource-limit candidates cannot be fully_verified by definition,
+        # but a correctness-preserving, frequency-valid performance gain is
+        # valuable evidence for one bounded resource-recovery refinement.
+        if record.get("csim") is not True:
+            return None
+        if record.get("meets_frequency_requirement") is not True:
+            return None
+
+        performance = record.get("performance_comparison") or {}
+        gains = (
+            performance.get("latency_delta_percent"),
+            performance.get("throughput_delta_percent"),
+        )
+        if not any(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value < 0
+            for value in gains
+        ):
+            return None
+
+        return str(verdict)
+
+    if record.get("fully_verified") is not True:
+        return None
+
+    return str(verdict)
+
+
+def _format_measured_delta(value: Any) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{float(value):+.2f}%"
+    return "unavailable"
+
+
+def _structured_post_synthesis_retry_suffix(
+    strategy: dict[str, Any],
+    record: dict[str, Any],
+) -> str:
+    """Build generic measured feedback for one same-strategy implementation retry."""
+
+    family = str(strategy.get("name") or "assigned_strategy")
+    performance = record.get("performance_comparison") or {}
+    deltas = record.get("deltas_percent") or {}
+
+    latency = _format_measured_delta(
+        performance.get("latency_delta_percent")
+    )
+    throughput = _format_measured_delta(
+        performance.get("throughput_delta_percent")
+    )
+    lut = _format_measured_delta(deltas.get("resources_lut_used"))
+    ff = _format_measured_delta(deltas.get("resources_ff_used"))
+    dsp = _format_measured_delta(deltas.get("resources_dsp_used"))
+    bram = _format_measured_delta(deltas.get("resources_bram_used"))
+
+    family_hint = ""
+    if family == "memory_parallelism":
+        family_hint = (
+            "\n- For memory parallelism, added storage, banking, or partitioning must "
+            "expose useful concurrent accesses. Avoid serial buffering that merely "
+            "relocates the same sequential access pattern."
+        )
+    elif family == "buffered_parallelism":
+        family_hint = (
+            "\n- For buffered parallelism, the buffer must feed genuinely concurrent "
+            "consumers; match buffering/banking with bounded compute parallelism."
+        )
+    elif family == "bounded_unroll":
+        family_hint = (
+            "\n- For bounded unrolling, make sure the selected loop has independent "
+            "work and that memory access bandwidth can support the requested parallelism."
+        )
+    elif family == "critical_path_restructuring":
+        family_hint = (
+            "\n- For critical-path restructuring, materially shorten or overlap the "
+            "reported limiting computation rather than only moving equivalent operations."
+        )
+    elif family == "sliding_window_reuse":
+        family_hint = (
+            "\n- For sliding-window reuse, the new local structure must eliminate "
+            "repeated external accesses rather than add an extra serial copy stage."
+        )
+    elif family == "dataflow_pipeline":
+        family_hint = (
+            "\n- For dataflow, create genuinely overlapping producer/consumer stages "
+            "rather than applying DATAFLOW to an effectively serial implementation."
+        )
+
+    previous_reason = str(record.get("reason") or "no objective gain")
+
+    compliance = record.get("resource_limit_compliance") or {}
+    violations = compliance.get("violations") or []
+    violation_lines = []
+    for item in violations:
+        if not isinstance(item, dict):
+            continue
+        metric = item.get("metric")
+        actual = item.get("actual")
+        limit = item.get("limit")
+        if metric is not None and actual is not None and limit is not None:
+            violation_lines.append(
+                f"  - {metric}: {actual} > hard limit {limit}"
+            )
+
+    if record.get("verdict") == "reject_resource_limits":
+        outcome_text = (
+            "- The previous implementation passed correctness checks and synthesis "
+            "and produced a useful performance gain, but exceeded one or more hard "
+            "resource ceilings.\n"
+            "- Preserve as much of the measured performance gain as possible while "
+            "substantially reducing the resources that exceeded their limits.\n"
+            "- Resource violations were:\n"
+            + ("\n".join(violation_lines) if violation_lines else "  - unavailable")
+            + "\n"
+        )
+    else:
+        outcome_text = (
+            "- The previous implementation passed correctness checks and synthesis, "
+            "but it did not realise a useful hardware improvement.\n"
+        )
+
+    return (
+        "\n\nCORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
+        "POST-SYNTHESIS NO-GAIN RETRY:\n"
+        + outcome_text
+        + f"- Previous verdict: {record.get('verdict')}.\n"
+        f"- Previous evaluation reason: {previous_reason}\n"
+        f"- Strategy family remains: {family}.\n"
+        "- Preserve the same strategy family, but implement it through a materially "
+        "different hardware mechanism.\n"
+        "- Do not simply repeat the previous implementation.\n"
+        "- Measured candidate deltas versus the verified baseline were:\n"
+        f"  - latency: {latency}\n"
+        f"  - throughput period: {throughput}\n"
+        f"  - LUT: {lut}\n"
+        f"  - FF: {ff}\n"
+        f"  - DSP: {dsp}\n"
+        f"  - BRAM: {bram}\n"
+        "- Use these measured results as evidence that the previous implementation "
+        "was ineffective. Seek actual useful concurrency, reuse, critical-path "
+        "reduction, or resource reduction appropriate to the assigned strategy."
+        + family_hint
+        + "\n- Preserve correctness, interfaces, bounds, and hard resource limits."
+        "\n- Return only the complete compilable C++ source file."
+    )
+
+
+_POST_SYNTHESIS_FILE_SUFFIXES = (
+    ".cpp",
+    "_prompt.txt",
+    "_effective_prompt.txt",
+    "_model_response.txt",
+    "_model_metadata.json",
+    "_generation_retry_failure.json",
+    "_static_validation.json",
+    "_duplicate_check.json",
+    "_csim_validation.json",
+    "_synthesis.json",
+    "_cosim.json",
+    "_diff.patch",
+)
+
+
+def _preserve_post_synthesis_attempt(
+    output_dir: Path,
+    candidate_index: int,
+    attempt_number: int = 1,
+) -> dict[str, Any]:
+    """Archive the synthesis-tested implementation before overwriting its slot."""
+
+    prefix = f"candidate_{candidate_index:03d}"
+    archive_prefix = (
+        f"{prefix}_post_synthesis_attempt_{attempt_number}"
+    )
+
+    for suffix in _POST_SYNTHESIS_FILE_SUFFIXES:
+        source = output_dir / f"{prefix}{suffix}"
+        destination = output_dir / f"{archive_prefix}{suffix}"
+        if source.is_file():
+            destination.write_bytes(source.read_bytes())
+
+    # Preserve Vitis logs/TCL as well. The actual temporary Vitis project is
+    # intentionally not copied; the JSON report already contains its metrics.
+    for stage in ("csim", "synthesis", "cosim"):
+        source_dir = output_dir / f"{prefix}_{stage}"
+        destination_dir = output_dir / f"{archive_prefix}_{stage}"
+        if source_dir.is_dir():
+            shutil.rmtree(destination_dir, ignore_errors=True)
+            shutil.copytree(source_dir, destination_dir)
+
+    metadata_path = output_dir / f"{archive_prefix}_model_metadata.json"
+    return _load_strategy(metadata_path)
+
+
+def _restore_post_synthesis_generation_artifacts(
+    output_dir: Path,
+    candidate_index: int,
+    attempt_number: int = 1,
+) -> None:
+    """Restore attempt one when the refinement generation itself produces no change."""
+
+    prefix = f"candidate_{candidate_index:03d}"
+    archive_prefix = (
+        f"{prefix}_post_synthesis_attempt_{attempt_number}"
+    )
+    for suffix in (
+        ".cpp",
+        "_prompt.txt",
+        "_effective_prompt.txt",
+        "_model_response.txt",
+        "_model_metadata.json",
+    ):
+        archived = output_dir / f"{archive_prefix}{suffix}"
+        active = output_dir / f"{prefix}{suffix}"
+        if archived.is_file():
+            active.write_bytes(archived.read_bytes())
+
+
+def _preserve_post_synthesis_retry_generation(
+    output_dir: Path,
+    candidate_index: int,
+) -> None:
+    """Keep the retry's model-facing artefacts even if attempt one is restored."""
+
+    prefix = f"candidate_{candidate_index:03d}"
+    for suffix in (
+        "_prompt.txt",
+        "_effective_prompt.txt",
+        "_model_response.txt",
+        "_model_metadata.json",
+        "_generation_retry_failure.json",
+    ):
+        source = output_dir / f"{prefix}{suffix}"
+        destination = output_dir / f"{prefix}_post_synthesis_retry{suffix}"
+        if source.is_file():
+            destination.write_bytes(source.read_bytes())
+
+
+def _atomic_generation_attempts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten already-aggregated generation metadata without double-counting tokens."""
+
+    nested = metadata.get("generation_attempts")
+    if isinstance(nested, list):
+        attempts = [
+            dict(item)
+            for item in nested
+            if isinstance(item, dict)
+        ]
+        if attempts:
+            return attempts
+    return [dict(metadata)] if metadata else []
+
+
+def _merge_post_synthesis_retry_metadata(
+    output_dir: Path,
+    candidate_index: int,
+    previous_metadata: dict[str, Any],
+    retry_reason: str,
+) -> None:
+    """Merge model cost/provenance from the original and post-synthesis calls."""
+
+    metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
+    latest = _load_strategy(metadata_path)
+    if not latest:
+        return
+
+    attempts = (
+        _atomic_generation_attempts(previous_metadata)
+        + _atomic_generation_attempts(latest)
+    )
+    if not attempts:
+        return
+
+    merged = dict(latest)
+
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        values = [
+            int(item[key])
+            for item in attempts
+            if isinstance(item.get(key), int)
+            and not isinstance(item.get(key), bool)
+        ]
+        if values:
+            merged[key] = sum(values)
+
+    latencies = [
+        float(item["latency_seconds"])
+        for item in attempts
+        if isinstance(item.get("latency_seconds"), (int, float))
+        and not isinstance(item.get("latency_seconds"), bool)
+    ]
+    if latencies:
+        merged["latency_seconds"] = sum(latencies)
+
+    if previous_metadata.get("generation_retry_reason") is not None:
+        merged["generation_retry_reason"] = previous_metadata[
+            "generation_retry_reason"
+        ]
+
+    merged["generation_attempt_count"] = len(attempts)
+    merged["generation_attempts"] = attempts
+    merged["post_synthesis_retry_count"] = 1
+    merged["post_synthesis_retry_reason"] = retry_reason
+
+    metadata_path.write_text(
+        json.dumps(merged, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _clear_candidate_evaluation_artifacts(
+    output_dir: Path,
+    candidate_index: int,
+) -> None:
+    """Remove stale pass/fail records before evaluating the replacement source."""
+
+    prefix = f"candidate_{candidate_index:03d}"
+    for suffix in (
+        "_static_validation.json",
+        "_duplicate_check.json",
+        "_csim_validation.json",
+        "_synthesis.json",
+        "_cosim.json",
+        "_diff.patch",
+    ):
+        (output_dir / f"{prefix}{suffix}").unlink(missing_ok=True)
+
+
+def _post_synthesis_retry_budget_available(
+    budget: Any,
+    *,
+    requires_cosim: bool,
+) -> bool:
+    """Reserve enough authoritative budget to evaluate the replacement source."""
+
+    if budget is None:
+        return True
+
+    for resource in ("model_calls", "csim_calls", "synthesis_calls"):
+        if not budget.can_consume(resource):
+            return False
+
+    if requires_cosim and not budget.can_consume("cosim_calls"):
+        return False
+
+    remaining_tokens = getattr(budget, "total_tokens_remaining", None)
+    if remaining_tokens == 0:
+        return False
+
+    if hasattr(budget, "can_afford_track_a"):
+        if not budget.can_afford_track_a("csim"):
+            return False
+        if not budget.can_afford_track_a("synthesis"):
+            return False
+        if requires_cosim and not budget.can_afford_track_a("cosim"):
+            return False
+
+    return True
+
+
+def _write_post_synthesis_retry_record(
+    output_dir: Path,
+    candidate_index: int,
+    payload: dict[str, Any],
+) -> Path:
+    path = output_dir / f"candidate_{candidate_index:03d}_post_synthesis_retry.json"
+    path.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+
 def _structured_history_ready(
     config: dict[str, Any],
     next_candidate_index: int,
@@ -440,6 +839,7 @@ def _legacy_execution_hooks(
     base_generate = _legacy.generate_candidate
     base_select = _legacy.select_refinement_parent
     base_record = _legacy._record
+    base_evaluate_candidate = _legacy._evaluate_candidate
     base_prepare = _ORIGINAL_LEGACY_PREPARE
 
     def structured_generate(
@@ -510,6 +910,263 @@ def _legacy_execution_hooks(
             retry_reason,
         )
         return retry_path
+
+
+    def structured_evaluate_candidate(
+        source: ConfigSource,
+        candidate_index: int,
+        trajectory: list[dict[str, Any]],
+        budget: Any = None,
+    ) -> dict[str, Any]:
+        """Evaluate once, then refine the same C1-C3 strategy once after verified no-gain."""
+
+        summary = base_evaluate_candidate(
+            source,
+            candidate_index,
+            trajectory,
+            budget,
+        )
+
+        if not enabled or STRUCTURED_POST_SYNTHESIS_RETRIES <= 0:
+            return summary
+
+        # Keep the five-slot controller structure intact: this refinement
+        # belongs to the C1-C3 exploration strategy that just failed to
+        # materialise useful hardware, not to a new search slot.
+        attempt = _exploration_attempt(candidate_index, config)
+        if attempt is None:
+            return summary
+
+        record = base_record(summary, candidate_index)
+        retry_reason = _structured_post_synthesis_retry_reason(record)
+        if retry_reason is None:
+            return summary
+
+        output_dir = _output_dir(config)
+        retry_record_path = (
+            output_dir
+            / f"candidate_{candidate_index:03d}_post_synthesis_retry.json"
+        )
+
+        # One-shot and resumable: never repeatedly burn budget on the same
+        # synthesis-equivalent implementation after a restart.
+        if retry_record_path.is_file():
+            return summary
+
+        requires_cosim = bool(config.get("requires_cosim", True))
+        if not _post_synthesis_retry_budget_available(
+            budget,
+            requires_cosim=requires_cosim,
+        ):
+            _write_post_synthesis_retry_record(
+                output_dir,
+                candidate_index,
+                {
+                    "candidate_index": candidate_index,
+                    "attempted": False,
+                    "status": "skipped_budget_unavailable",
+                    "trigger_verdict": retry_reason,
+                    "strategy_family": attempt["strategy_family"],
+                },
+            )
+            trajectory.append(
+                {
+                    "candidate": candidate_index,
+                    "stage": "post_synthesis_same_strategy_retry",
+                    "passed": False,
+                    "skipped": True,
+                    "reason": "budget_unavailable",
+                }
+            )
+            return summary
+
+        strategy = _load_strategy(
+            output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+        )
+        if not strategy:
+            return summary
+
+        candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
+        prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
+        if not candidate_path.is_file() or not prompt_path.is_file():
+            return summary
+
+        original_source = candidate_path.read_text(encoding="utf-8")
+        previous_metadata = _preserve_post_synthesis_attempt(
+            output_dir,
+            candidate_index,
+            1,
+        )
+
+        # Remove any earlier pre-Vitis corrective suffix. The measured
+        # post-synthesis feedback becomes the authoritative retry instruction.
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        retry_marker = "\n\nCORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
+        base_prompt = prompt_text.split(retry_marker, 1)[0].rstrip()
+        retry_suffix = _structured_post_synthesis_retry_suffix(
+            strategy,
+            record,
+        )
+        prompt_path.write_text(
+            base_prompt + retry_suffix + "\n",
+            encoding="utf-8",
+        )
+
+        # A stale pre-Vitis failure record must not be mistaken for failure
+        # of this post-synthesis retry. Its original copy was archived above.
+        (
+            output_dir
+            / f"candidate_{candidate_index:03d}_generation_retry_failure.json"
+        ).unlink(missing_ok=True)
+
+        _write_post_synthesis_retry_record(
+            output_dir,
+            candidate_index,
+            {
+                "candidate_index": candidate_index,
+                "attempted": True,
+                "status": "generation_started",
+                "trigger_verdict": retry_reason,
+                "trigger_reason": record.get("reason"),
+                "strategy_family": strategy.get("name"),
+                "trigger_metrics": record.get("metrics") or {},
+                "trigger_deltas_percent": record.get("deltas_percent") or {},
+            },
+        )
+
+        print(
+            f"Candidate {candidate_index:03d} post-synthesis retry: "
+            f"{retry_reason}; strategy={strategy.get('name')}",
+            flush=True,
+        )
+
+        retry_path = base_generate(
+            source,
+            candidate_index,
+            budget=budget,
+        )
+
+        _preserve_post_synthesis_retry_generation(
+            output_dir,
+            candidate_index,
+        )
+
+        retry_source = retry_path.read_text(encoding="utf-8")
+        changed = (
+            normalise_source(retry_source)
+            != normalise_source(original_source)
+        )
+
+        retry_failure_path = (
+            output_dir
+            / f"candidate_{candidate_index:03d}_generation_retry_failure.json"
+        )
+
+        if retry_failure_path.is_file() or not changed:
+            # The synthesis-tested first implementation remains the truthful
+            # active candidate if regeneration itself failed or repeated it.
+            _restore_post_synthesis_generation_artifacts(
+                output_dir,
+                candidate_index,
+                1,
+            )
+            _write_post_synthesis_retry_record(
+                output_dir,
+                candidate_index,
+                {
+                    "candidate_index": candidate_index,
+                    "attempted": True,
+                    "status": (
+                        "generation_failed"
+                        if retry_failure_path.is_file()
+                        else "generation_no_semantic_change"
+                    ),
+                    "trigger_verdict": retry_reason,
+                    "strategy_family": strategy.get("name"),
+                    "replacement_source_changed": False,
+                },
+            )
+            trajectory.append(
+                {
+                    "candidate": candidate_index,
+                    "stage": "post_synthesis_same_strategy_retry",
+                    "passed": False,
+                    "reason": (
+                        "generation_failed"
+                        if retry_failure_path.is_file()
+                        else "generation_no_semantic_change"
+                    ),
+                }
+            )
+            return summary
+
+        _merge_post_synthesis_retry_metadata(
+            output_dir,
+            candidate_index,
+            previous_metadata,
+            retry_reason,
+        )
+
+        _clear_candidate_evaluation_artifacts(
+            output_dir,
+            candidate_index,
+        )
+
+        trajectory.append(
+            {
+                "candidate": candidate_index,
+                "stage": "post_synthesis_same_strategy_retry",
+                "passed": True,
+                "strategy_family": strategy.get("name"),
+                "trigger_verdict": retry_reason,
+            }
+        )
+
+        # Re-run the normal safety -> duplicate -> CSim -> synthesis pipeline.
+        # Call the preserved evaluator directly so this cannot recurse into a
+        # second post-synthesis retry.
+        retry_summary = base_evaluate_candidate(
+            source,
+            candidate_index,
+            trajectory,
+            budget,
+        )
+        retry_record = base_record(retry_summary, candidate_index)
+
+        _write_post_synthesis_retry_record(
+            output_dir,
+            candidate_index,
+            {
+                "candidate_index": candidate_index,
+                "attempted": True,
+                "status": "evaluated",
+                "trigger_verdict": retry_reason,
+                "strategy_family": strategy.get("name"),
+                "replacement_source_changed": True,
+                "final_verdict": (
+                    retry_record.get("verdict")
+                    if isinstance(retry_record, dict)
+                    else None
+                ),
+                "final_reason": (
+                    retry_record.get("reason")
+                    if isinstance(retry_record, dict)
+                    else None
+                ),
+                "final_metrics": (
+                    retry_record.get("metrics") or {}
+                    if isinstance(retry_record, dict)
+                    else {}
+                ),
+                "final_deltas_percent": (
+                    retry_record.get("deltas_percent") or {}
+                    if isinstance(retry_record, dict)
+                    else {}
+                ),
+            },
+        )
+
+        return retry_summary
 
     def structured_select(
         records: Any,
@@ -672,6 +1329,7 @@ def _legacy_execution_hooks(
         _legacy.select_refinement_parent = structured_select
         _legacy._prepare_next_prompt = structured_prepare
         _legacy._record = structured_record
+        _legacy._evaluate_candidate = structured_evaluate_candidate
 
     try:
         yield
