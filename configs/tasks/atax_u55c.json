@@ -1,0 +1,57 @@
+{
+  "task_id": "hls_eval_atax_u55c",
+  "task_kind": "correct_unoptimised",
+  "artifacts": {
+    "source": "benchmarks/hls_eval/atax/src/atax.cpp",
+    "testbench": [
+      "benchmarks/hls_eval/atax/testbench/atax_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval/atax/src/atax.h"
+    ],
+    "specification": "configs/tasks/specifications/atax.md",
+    "build_files": [
+      "benchmarks/hls_eval/atax/task_u55c.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_atax",
+    "language": "cpp",
+    "numerical_tolerance": null,
+    "protected_contract": [
+      "Preserve the kernel_atax function signature and C linkage.",
+      "Preserve output semantics checked by the supplied testbench.",
+      "Keep all accesses within A[38][42], x[42], tmp[38], and y[42]."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "part": "xcu55c-fsvh2892-2L-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {}
+  },
+  "budgets": {
+    "max_iterations": 5,
+    "max_csim_calls": 6,
+    "max_cosim_calls": 0,
+    "max_synthesis_calls": 6,
+    "max_model_calls": 5,
+    "max_total_tokens": null
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "enable_thinking": false
+  },
+  "search_policy": {
+    "mode": "structured_v1"
+  },
+  "adapter": {
+    "kind": "autonomous_ppa"
+  },
+  "output_dir": "experiments/track_a/hls_eval_atax_u55c"
+}
