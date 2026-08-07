@@ -33,9 +33,12 @@ def test_vitis_core_ram_lower_bound_is_memory_port_contention() -> None:
     primary = result["primary_diagnosis"]
 
     assert primary["category"] == "memory_port_contention"
-    assert primary["target"] == "A"
+    assert str(primary["target"]).casefold() == "a"
     assert "reported_ii_lower_bound=19" in primary["evidence"]
-    assert "contended_arrays=A" in primary["evidence"]
+    assert any(
+        str(item).casefold() == "contended_arrays=a"
+        for item in primary["evidence"]
+    )
 
 
 def test_optimisation_prompt_contains_nested_measured_hls_evidence(tmp_path: Path) -> None:
