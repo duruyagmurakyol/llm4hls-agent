@@ -3,17 +3,18 @@
 The baseline diagnosis pipeline already creates ``candidate_001_prompt.txt``.
 This module preserves that diagnosis prompt as an immutable template and adds a
 single explicit strategy-family contract for each of the first three search
-slots.  It does not call a model or run validation tools.
+slots. It does not call a model or run validation tools.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from agent.optimise.search_policy import (
-    EXPLORATION_STRATEGY_FAMILIES,
+    DEFAULT_EXPLORATION_STRATEGY_FAMILIES,
+    LAYER_ONE_STRATEGY_FAMILIES,
     build_structured_search_schedule,
 )
 
@@ -70,6 +71,65 @@ STRATEGY_GUIDANCE: dict[str, dict[str, Any]] = {
             "Do not add unbounded replication or unrelated accumulator rewrites.",
         ],
     },
+    "buffered_parallelism": {
+        "objective": (
+            "Exploit data reuse by coupling a bounded local buffer or tile with matched "
+            "memory banking and matched compute parallelism, so added memory ports have "
+            "real consumers and added compute lanes have sufficient bandwidth."
+        ),
+        "required_changes": [
+            "Identify a repeatedly reused working set in the diagnosed region and place only that bounded working set in local storage when useful.",
+            "Choose one bounded concurrency factor from 2, 4, 5 or 8 that is compatible with the relevant loop bounds and resource headroom.",
+            "Bank or partition the local working set by the chosen concurrency factor and apply matching bounded unrolling to the independent compute dimension that consumes those banks.",
+            "Reuse loaded values across the parallel operations instead of repeatedly re-reading the same top-level array element.",
+            "Handle any remainder iterations correctly when the chosen factor does not divide the trip count.",
+            "Preserve the exact top-function interface and numerical behaviour.",
+        ],
+        "forbidden_changes": [
+            "Do not completely partition a top-level interface array.",
+            "Do not copy an entire large input or output into local storage unless the whole array is demonstrably the bounded reused working set.",
+            "Do not add banking without matching compute consumers, or compute unrolling without matching memory bandwidth.",
+            "Do not use complete loop unrolling or unrelated DATAFLOW restructuring.",
+        ],
+        "parameters": {"allowed_factors": [2, 4, 5, 8]},
+    },
+    "sliding_window_reuse": {
+        "objective": (
+            "Replace repeated neighbouring memory reads with a bounded local shift-register, "
+            "line-buffer or sliding-window structure and exploit only the parallelism that "
+            "the local window can feed."
+        ),
+        "required_changes": [
+            "Create a bounded local window, shift register or line buffer only for values reused across neighbouring output positions.",
+            "Advance the window incrementally so previously loaded values are reused rather than fetched again from the top-level array.",
+            "If tap or window computation is parallelised, use bounded matching local partitioning and preserve all boundary conditions.",
+            "Preserve exact input coverage, output ordering, interfaces and numerical behaviour.",
+        ],
+        "forbidden_changes": [
+            "Do not copy the entire large input merely to rename it as a local buffer.",
+            "Do not completely partition top-level interface arrays.",
+            "Do not discard edge or remainder handling.",
+            "Do not introduce unrelated task-level DATAFLOW stages.",
+        ],
+    },
+    "dataflow_pipeline": {
+        "objective": (
+            "Overlap genuine producer/consumer stages using bounded task-level dataflow "
+            "while keeping each stage independently pipelineable and preserving ordering."
+        ),
+        "required_changes": [
+            "Identify at least two genuine sequential producer/consumer stages whose executions can safely overlap.",
+            "Restructure those stages into separate loops or helper stages with bounded local buffers or streams when needed, then apply #pragma HLS DATAFLOW at the enclosing level.",
+            "Pipeline the stage loops where legal and keep stream or buffer depths bounded.",
+            "Preserve the exact external top-function interface, transaction ordering and numerical behaviour.",
+        ],
+        "forbidden_changes": [
+            "Do not add DATAFLOW to a monolithic loop without creating real overlap-capable stages.",
+            "Do not introduce unbounded FIFOs, dynamic allocation or interface changes.",
+            "Do not duplicate the entire computation merely to create nominal stages.",
+            "Do not combine unrelated broad unrolling or complete top-level array partitioning.",
+        ],
+    },
 }
 
 
@@ -121,10 +181,19 @@ def prepare_structured_exploration_prompt(
     *,
     candidate_index: int,
     strategy_family: str,
+    exploration_strategy_families: Iterable[str] | None = None,
 ) -> Path:
     """Write one baseline-rooted exploration prompt and its audit metadata."""
 
-    schedule = build_structured_search_schedule(max_candidates=3)
+    selected_families = (
+        tuple(exploration_strategy_families)
+        if exploration_strategy_families is not None
+        else DEFAULT_EXPLORATION_STRATEGY_FAMILIES
+    )
+    schedule = build_structured_search_schedule(
+        max_candidates=3,
+        exploration_strategy_families=selected_families,
+    )
     expected = next(
         (
             item
@@ -140,7 +209,7 @@ def prepare_structured_exploration_prompt(
             f"candidate {candidate_index:03d} requires strategy family "
             f"{expected['strategy_family']}"
         )
-    if strategy_family not in EXPLORATION_STRATEGY_FAMILIES:
+    if strategy_family not in LAYER_ONE_STRATEGY_FAMILIES:
         raise ValueError(f"unsupported exploration strategy: {strategy_family}")
 
     config = _load_config(config_source)
@@ -191,6 +260,7 @@ def prepare_structured_exploration_prompt(
         "strategy_compliance_mode": "advisory",
         "phase": "explore",
         "structured_schedule": True,
+        "exploration_strategy_families": list(selected_families),
         "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
         "template_file": str(template_path.relative_to(REPO_ROOT)),
     }
