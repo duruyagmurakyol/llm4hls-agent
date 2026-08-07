@@ -34,6 +34,9 @@ NON_THINKING_MODELS = {
 DEFAULT_THINKING_BUDGETS = {
     "Qwen/Qwen3.5-122B-A10B": 1536,
 }
+STRUCTURED_EXPLORATION_MARKER = "Structured exploration contract:"
+CORRECTIVE_RETRY_MARKER = "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:"
+NO_SEMANTIC_CHANGE_MARKER = "because: no_semantic_change."
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
@@ -122,6 +125,36 @@ def _prompt_compaction_enabled(value: bool | None) -> bool:
     return configured.strip().casefold() not in _FALSE_VALUES
 
 
+def _structured_reasoning_policy(
+    *,
+    model: str,
+    user_prompt: str,
+    configured_enable_thinking: bool | None,
+) -> tuple[bool | None, str]:
+    """Use cheap direct generation first; escalate reasoning only after a no-op.
+
+    Structured C1-C3 prompts already contain a controller-selected strategy.
+    Qwen therefore starts without hidden reasoning. A partial strategy
+    implementation receives the existing same-slot corrective retry, still
+    without thinking. Only a no-semantic-change retry enables thinking.
+    Non-structured calls retain their configured behaviour unchanged.
+    """
+
+    if (
+        model != "Qwen/Qwen3.5-122B-A10B"
+        or STRUCTURED_EXPLORATION_MARKER not in user_prompt
+    ):
+        return configured_enable_thinking, "configured"
+
+    if CORRECTIVE_RETRY_MARKER not in user_prompt:
+        return False, "direct_non_thinking"
+
+    if NO_SEMANTIC_CHANGE_MARKER in user_prompt:
+        return True, "reasoning_escalation"
+
+    return False, "corrective_non_thinking"
+
+
 def complete(
     *,
     model: str,
@@ -158,7 +191,11 @@ def complete(
                 flush=True,
             )
 
-    effective_enable_thinking = enable_thinking
+    effective_enable_thinking, generation_mode = _structured_reasoning_policy(
+        model=model,
+        user_prompt=user_prompt,
+        configured_enable_thinking=enable_thinking,
+    )
     if effective_enable_thinking is None and model in NON_THINKING_MODELS:
         effective_enable_thinking = False
 
@@ -169,6 +206,13 @@ def complete(
         and effective_thinking_budget is None
     ):
         effective_thinking_budget = DEFAULT_THINKING_BUDGETS.get(model)
+
+    if generation_mode != "configured":
+        print(
+            f"Structured generation mode: {generation_mode}; "
+            f"thinking={'on' if effective_enable_thinking else 'off'}",
+            flush=True,
+        )
 
     payload: dict[str, Any] = {
         "model": model,
@@ -255,6 +299,8 @@ def complete(
 
     raw["_llm4hls_provider"] = selected_provider
     raw["_llm4hls_endpoint"] = request_url
+    raw["_llm4hls_generation_mode"] = generation_mode
+    raw["_llm4hls_effective_enable_thinking"] = effective_enable_thinking
     if effective_thinking_budget is not None:
         raw["_llm4hls_thinking_budget"] = effective_thinking_budget
     if prompt_compaction is not None:
