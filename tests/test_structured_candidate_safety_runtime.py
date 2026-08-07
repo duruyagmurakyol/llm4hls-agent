@@ -8,6 +8,7 @@ import pytest
 
 from agent.optimise import generate as generation
 from agent.optimise import search_ledger_runtime as runtime
+from agent.tools import validation as validation_module
 from agent.tools.validation import validate_ppa_candidate
 
 
@@ -122,6 +123,7 @@ def test_runtime_canonicalises_before_source_hash_and_static_validation(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(generation, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(validation_module, "REPO_ROOT", tmp_path)
     config = _config(tmp_path)
 
     def fake_generate(source, candidate_index=1, *, budget=None):
