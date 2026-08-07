@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from agent.analysis.hls_bottleneck_analyzer import analyse
+from agent.prompt_compaction import compact_user_prompt
 from scripts.run_ppa_optimisation import generate_optimisation_prompt
 
 
@@ -126,3 +127,9 @@ def test_optimisation_prompt_contains_nested_measured_hls_evidence(tmp_path: Pat
     assert "reported_ii_lower_bound=19" in prompt
     assert "contended_arrays=A" in prompt
     assert "Report diagnosis: unknown" not in prompt
+
+    compacted, _ = compact_user_prompt(prompt)
+    assert "Diagnosis category: memory_port_contention" in compacted
+    assert "Achieved II: 19" in compacted
+    assert "reported_ii_lower_bound=19" in compacted
+    assert "contended_arrays=A" in compacted
