@@ -172,6 +172,31 @@ def _local_array_declarations(source: str) -> set[str]:
     }
 
 
+def _local_array_names(source: str) -> set[str]:
+    """Return names of simple local fixed-size arrays introduced in source."""
+
+    analysed = mask_cpp_comments(source)
+    pattern = re.compile(
+        r"\b(?:static\s+)?(?:const\s+)?(?:unsigned\s+|signed\s+)?"
+        r"(?:short\s+|long\s+)?[A-Za-z_]\w*(?:::\w+)?(?:\s*<[^;{}]+>)?\s+"
+        r"(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]+\])+\s*(?:=\s*\{[^;]*\})?\s*;",
+        re.MULTILINE,
+    )
+    return {match.group("name") for match in pattern.finditer(analysed)}
+
+
+def _memory_pragma_variables(source: str) -> set[str]:
+    """Return arrays explicitly targeted by HLS local-memory directives."""
+
+    analysed = mask_cpp_comments(source)
+    pattern = re.compile(
+        r"#\s*pragma\s+HLS\s+(?:ARRAY_PARTITION|ARRAY_RESHAPE|BIND_STORAGE)\b"
+        r"[^\n]*\bvariable\s*=\s*([A-Za-z_]\w*)",
+        re.IGNORECASE,
+    )
+    return {match.group(1) for match in pattern.finditer(analysed)}
+
+
 def _memory_parallelism_evidence(source: str, baseline: str | None) -> dict[str, Any]:
     candidate_pragmas = _normalised_pragmas(
         source,
@@ -204,9 +229,16 @@ def _buffered_parallelism_evidence(
 ) -> dict[str, Any]:
     memory = _memory_parallelism_evidence(source, baseline)
     unroll = _bounded_unroll_evidence(source, strategy)
+    candidate_local_names = _local_array_names(source)
+    baseline_local_names = _local_array_names(baseline) if baseline is not None else set()
+    new_local_names = sorted(candidate_local_names - baseline_local_names)
+    banked_variables = _memory_pragma_variables(source)
+    banked_new_locals = sorted(set(new_local_names) & banked_variables)
     return {
-        "passed": bool(memory["passed"] and unroll["passed"]),
+        "passed": bool(new_local_names and banked_new_locals and unroll["passed"]),
         "memory": memory,
+        "new_local_arrays": new_local_names,
+        "banked_new_local_arrays": banked_new_locals,
         "bounded_unroll": unroll,
     }
 
