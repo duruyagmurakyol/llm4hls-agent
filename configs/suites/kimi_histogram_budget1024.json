@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "suite_id": "kimi_histogram_budget1024",
+  "description": "Single clean Kimi histogram retry with bounded hidden reasoning.",
+  "expected_runs": 1,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "moonshotai/Kimi-K2.7-Code",
+      "slug": "kimi_k27_code",
+      "provider": "siliconflow"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "histogram_small_optimise",
+      "path": "/home/xilinx/projects/llm4hls-agent/benchmarks/hard_smoke/histogram_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    }
+  ]
+}

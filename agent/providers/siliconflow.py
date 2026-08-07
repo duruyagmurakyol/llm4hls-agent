@@ -227,10 +227,7 @@ def complete(
     # SiliconFlow exposes these extension fields. Do not send them to
     # OpenRouter, whose model-specific reasoning controls differ.
     if selected_provider == "siliconflow":
-        if (
-            effective_thinking_budget is not None
-            and effective_enable_thinking is not False
-        ):
+        if effective_thinking_budget is not None:
             payload["thinking_budget"] = effective_thinking_budget
         if effective_enable_thinking is not None:
             payload["enable_thinking"] = effective_enable_thinking
