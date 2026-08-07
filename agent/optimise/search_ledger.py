@@ -15,6 +15,7 @@ from agent.optimise.duplicate import source_digest
 
 LEDGER_FILENAME = "structured_search_ledger.json"
 SCHEMA_VERSION = 1
+CORRECTIVE_RETRY_MARKER = "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:"
 
 TERMINAL_RETIREMENT_VERDICTS = {
     "reject_duplicate",
@@ -143,6 +144,24 @@ def _attempt_by_index(
     )
 
 
+def _attempt_prompt_hashes(attempt: dict[str, Any]) -> set[str]:
+    """Return every model-facing prompt hash recorded for one search candidate."""
+
+    hashes: set[str] = set()
+    primary = attempt.get("effective_prompt_hash")
+    if isinstance(primary, str) and primary:
+        hashes.add(primary)
+    history = attempt.get("generation_prompt_attempts")
+    if isinstance(history, list):
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("effective_prompt_hash")
+            if isinstance(value, str) and value:
+                hashes.add(value)
+    return hashes
+
+
 def inspect_branch_novelty(
     output_dir: Path,
     *,
@@ -174,7 +193,7 @@ def inspect_branch_novelty(
             item
             for item in ledger["attempts"]
             if prompt_hash is not None
-            and item.get("effective_prompt_hash") == prompt_hash
+            and prompt_hash in _attempt_prompt_hashes(item)
             and item.get("candidate_index") != candidate_index
         ),
         None,
@@ -199,6 +218,72 @@ def inspect_branch_novelty(
     }
 
 
+def _same_search_branch(existing: dict[str, Any], record: dict[str, Any]) -> bool:
+    """Return whether two records describe the same candidate search branch."""
+
+    comparable_keys = {
+        "parent_candidate_index",
+        "parent_source_hash",
+        "strategy_family",
+        "parameters",
+        "phase",
+        "branch_fingerprint",
+    }
+    return all(existing.get(key) == record.get(key) for key in comparable_keys)
+
+
+def _record_corrective_prompt_retry(
+    output_dir: Path,
+    ledger: dict[str, Any],
+    existing: dict[str, Any],
+    *,
+    effective_prompt_hash: str | None,
+) -> dict[str, Any]:
+    """Append a new model prompt attempt without changing the branch identity."""
+
+    if not isinstance(effective_prompt_hash, str) or not effective_prompt_hash:
+        raise SearchLedgerError("Corrective generation retry must have an effective prompt hash")
+
+    history = existing.get("generation_prompt_attempts")
+    if not isinstance(history, list):
+        history = []
+        original_hash = existing.get("effective_prompt_hash")
+        if isinstance(original_hash, str) and original_hash:
+            history.append(
+                {
+                    "attempt": 1,
+                    "kind": "initial",
+                    "effective_prompt_hash": original_hash,
+                }
+            )
+        existing["generation_prompt_attempts"] = history
+
+    for item in history:
+        if (
+            isinstance(item, dict)
+            and item.get("effective_prompt_hash") == effective_prompt_hash
+        ):
+            result = dict(existing)
+            result["generation_retry_registered"] = True
+            result["generation_retry_idempotent"] = True
+            return result
+
+    history.append(
+        {
+            "attempt": len(history) + 1,
+            "kind": "corrective_retry",
+            "effective_prompt_hash": effective_prompt_hash,
+        }
+    )
+    existing["latest_effective_prompt_hash"] = effective_prompt_hash
+    existing["generation_attempt_count"] = len(history)
+    write_search_ledger(output_dir, ledger)
+
+    result = dict(existing)
+    result["generation_retry_registered"] = True
+    return result
+
+
 def register_search_attempt(
     output_dir: Path,
     *,
@@ -210,10 +295,12 @@ def register_search_attempt(
     effective_prompt: str | None = None,
     phase: str | None = None,
 ) -> dict[str, Any]:
-    """Register one novel search attempt and return its persisted record.
+    """Register one novel search branch or an explicit same-slot corrective retry.
 
     Duplicate proposals are reported without changing the ledger. Re-registering
-    the same candidate index with identical data is idempotent.
+    the same candidate index with identical data is idempotent. A prompt carrying
+    the explicit corrective-retry marker may change only the model-facing prompt;
+    parent, strategy, parameters, phase, and branch fingerprint must remain fixed.
     """
 
     ledger = load_search_ledger(output_dir)
@@ -246,17 +333,23 @@ def register_search_attempt(
     }
 
     if existing is not None:
-        comparable_keys = {
-            "parent_candidate_index",
-            "parent_source_hash",
-            "strategy_family",
-            "parameters",
-            "phase",
-            "branch_fingerprint",
-            "effective_prompt_hash",
-        }
-        if all(existing.get(key) == record.get(key) for key in comparable_keys):
+        if not _same_search_branch(existing, record):
+            raise SearchLedgerError(
+                f"candidate {candidate_index:03d} is already registered with different search data"
+            )
+        if existing.get("effective_prompt_hash") == record.get("effective_prompt_hash"):
             return dict(existing)
+        is_corrective_retry = (
+            isinstance(effective_prompt, str)
+            and CORRECTIVE_RETRY_MARKER in effective_prompt
+        )
+        if is_corrective_retry and novelty["allowed"] is True:
+            return _record_corrective_prompt_retry(
+                output_dir,
+                ledger,
+                existing,
+                effective_prompt_hash=record.get("effective_prompt_hash"),
+            )
         raise SearchLedgerError(
             f"candidate {candidate_index:03d} is already registered with different search data"
         )
@@ -269,6 +362,19 @@ def register_search_attempt(
             "duplicate_of_candidate_index": novelty["duplicate_of_candidate_index"],
         }
 
+    prompt_hash = record.get("effective_prompt_hash")
+    record["generation_prompt_attempts"] = (
+        [
+            {
+                "attempt": 1,
+                "kind": "initial",
+                "effective_prompt_hash": prompt_hash,
+            }
+        ]
+        if isinstance(prompt_hash, str) and prompt_hash
+        else []
+    )
+    record["generation_attempt_count"] = len(record["generation_prompt_attempts"])
     ledger["attempts"].append(record)
     ledger["attempts"].sort(key=lambda item: int(item["candidate_index"]))
     write_search_ledger(output_dir, ledger)
