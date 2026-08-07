@@ -16,14 +16,19 @@ The supplied public testbench is the first correctness gate. A candidate must co
 
 ## Target
 
+The FPGA part and clock are defined by the task manifest/build configuration. The competition U55C variant uses:
+
 - Tool: AMD Vitis HLS 2025.2
-- FPGA part: `xczu3eg-sfvc784-2-e`
+- FPGA part: `xcu55c-fsvh2892-2L-e`
 - Requested clock: 10 ns
+- Minimum frequency: 100 MHz
+
+Historical ATAX experiments may retain their original target in their own configuration files.
 
 ## Optimisation objective
 
-Minimise latency and initiation interval while controlling LUT, FF, DSP, and BRAM usage. Preserve non-dominated solutions rather than collapsing the task into a single hard-coded scalar score.
+Minimise realised latency while controlling LUT, FF, DSP and BRAM usage. Preserve non-dominated solutions rather than collapsing the task into a single hard-coded scalar score.
 
 ## Budget policy
 
-The agent must terminate within the task manifest's model, C simulation, co-simulation, synthesis, and iteration budgets. Duplicate candidates must be rejected before expensive tool calls. Failed correctness candidates must not be synthesized.
+The agent must terminate within the task manifest's model, C simulation, co-simulation, synthesis and iteration budgets. Duplicate candidates must be rejected before expensive tool calls. Failed correctness candidates must not be synthesised.
