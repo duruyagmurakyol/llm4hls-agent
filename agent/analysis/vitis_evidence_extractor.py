@@ -166,6 +166,17 @@ def collect_warnings(search_root: Path, limit: int = 100) -> list[str]:
     return warnings
 
 
+def _warning_search_root(xml_path: Path) -> Path:
+    """Return the enclosing HLS project so scheduling warnings are not missed."""
+
+    for parent in xml_path.parents:
+        if parent.name == "syn":
+            solution = parent.parent
+            project = solution.parent
+            return project if project.is_dir() else solution
+    return xml_path.parent
+
+
 def extract_evidence(report_root: Path, *, interface_frozen: bool = False) -> dict[str, Any]:
     xml_path = find_csynth_xml(report_root)
     root = ET.parse(xml_path).getroot()
@@ -194,6 +205,7 @@ def extract_evidence(report_root: Path, *, interface_frozen: bool = False) -> di
         resources[key] = _first(root, aliases)
 
     top_latency = latency_worst if latency_worst is not None else latency_best
+    warning_root = _warning_search_root(xml_path)
     evidence = {
         "schema_version": 1,
         "source_report": str(xml_path),
@@ -212,13 +224,14 @@ def extract_evidence(report_root: Path, *, interface_frozen: bool = False) -> di
             "target_period_ns": target_period,
             "estimated_period_ns": estimated_period,
         },
-        "warnings": collect_warnings(report_root),
+        "warnings": collect_warnings(warning_root),
         "constraints": {
             "interface_frozen": interface_frozen,
         },
         "extraction": {
             "loop_count": 0,
             "warning_count": 0,
+            "warning_search_root": str(warning_root),
             "missing_fields": [],
         },
     }
