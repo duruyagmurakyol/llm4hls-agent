@@ -117,14 +117,26 @@ def _independent_validation_command(build_file: str) -> list[str]:
 
 
 def _benchmark_resource_limits(benchmark: DiscoveredBenchmark) -> dict[str, int]:
+    """Resolve limits from a canonical benchmark-family prefix.
+
+    Smoke/target variants such as ``gemm_u55c`` and ``bicg-u55c`` belong to
+    the same benchmark families as ``gemm`` and ``bicg``.  Match only at a
+    name boundary so unrelated names cannot accidentally inherit a ceiling.
+    """
+
     names = {
-        benchmark.name.casefold(),
-        benchmark.root.name.casefold(),
-        benchmark.root.parent.name.casefold(),
+        benchmark.name.casefold().replace("-", "_"),
+        benchmark.root.name.casefold().replace("-", "_"),
+        benchmark.root.parent.name.casefold().replace("-", "_"),
     }
-    for name in names:
-        configured = BENCHMARK_RESOURCE_LIMITS.get(name)
-        if configured is not None:
+    for family, configured in BENCHMARK_RESOURCE_LIMITS.items():
+        canonical = family.casefold().replace("-", "_")
+        if any(
+            name == canonical
+            or name.startswith(canonical + "_")
+            or name.endswith("_" + canonical)
+            for name in names
+        ):
             return dict(configured)
     return {}
 
