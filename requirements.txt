@@ -1,3 +1,4 @@
 # Runtime code on structured-optimisation-v1 uses the Python standard library.
 # Keep pytest available for container smoke/regression tests.
 pytest>=8,<9
+tomli>=2; python_version < "3.11"
