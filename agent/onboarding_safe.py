@@ -24,7 +24,9 @@ DEFAULT_BUDGETS = {
     "max_csim_calls": 5,
     "max_cosim_calls": 0,
     "max_synthesis_calls": 4,
-    "max_model_calls": 5,
+    # Five candidate slots plus one bounded corrective generation retry for
+    # each of the three baseline-rooted structured exploration slots.
+    "max_model_calls": 8,
     "max_total_tokens": None,
     "requires_cosim": False,
 }
