@@ -16,6 +16,11 @@ STRUCTURED_ADVISORY_MODE = "advisory"
 _BOUNDED_UNROLL_FAMILIES = {
     "bounded_unroll",
     "memory_parallelism",
+    "buffered_parallelism",
+}
+_DATAFLOW_FAMILIES = {
+    "pipeline_dataflow_restructuring",
+    "dataflow_pipeline",
 }
 
 
@@ -186,10 +191,7 @@ def _resolve_dataflow_pipeline_conflict(
         return source, []
 
     loop_count = len(re.findall(r"\bfor\s*\(", body))
-    keep_dataflow = (
-        strategy_name == "pipeline_dataflow_restructuring"
-        and loop_count >= 2
-    )
+    keep_dataflow = strategy_name in _DATAFLOW_FAMILIES and loop_count >= 2
     removed_kind = "PIPELINE" if keep_dataflow else "DATAFLOW"
     updated, count = _remove_pragma_kind(source, removed_kind)
     if count == 0:
