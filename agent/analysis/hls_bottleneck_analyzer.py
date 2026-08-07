@@ -46,6 +46,19 @@ def _bus_ports(warnings: str) -> list[str]:
     return sorted(set(re.findall(r"port ['\"]([^'\"]+)['\"]", warnings, re.I)))
 
 
+def _ram_arrays(warnings: str) -> list[str]:
+    """Extract RAM-backed arrays named by Vitis scheduling warnings."""
+
+    arrays = set(
+        re.findall(
+            r"(?:on array\s+['\"]?|accessing core:ram:)([A-Za-z_]\w*)",
+            warnings,
+            re.I,
+        )
+    )
+    return sorted(arrays)
+
+
 CATEGORY_PRIORITY = {
     "dataflow_stall": 100,
     "critical_path": 95,
@@ -119,6 +132,50 @@ def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
                 forbidden_transformations=forbidden,
                 expected_tradeoffs=[
                     "more requested parallel accesses cannot improve throughput when AXI service rate is the bound"
+                ],
+            )
+        )
+
+    # Vitis also reports on-chip RAM port pressure using messages such as:
+    # "Lower bound of II is 19 due to multiple 'load' ... on array 'A' ...
+    # accessing core:RAM:A". This is distinct from external AXI bandwidth and
+    # should drive local banking/buffering recommendations rather than generic
+    # pipeline advice.
+    ram_lower_bound = re.search(
+        r"lower bound of ii is\s+([0-9]+).*?(?:multiple\s+['\"]?(?:load|store)|accessing core:ram:)",
+        warnings,
+        re.I | re.S,
+    )
+    ram_contention = bool(ram_lower_bound) and (
+        "accessing core:ram:" in warnings or " on array " in warnings
+    )
+    if ram_contention:
+        lower_bound = _number(ram_lower_bound.group(1))
+        arrays = _ram_arrays(warnings)
+        evidence_items = [
+            "Vitis reports an II lower bound caused by repeated accesses to a RAM-backed array"
+        ]
+        if lower_bound is not None:
+            evidence_items.append(f"reported_ii_lower_bound={lower_bound:g}")
+        if arrays:
+            evidence_items.append("contended_arrays=" + ",".join(arrays))
+
+        diagnoses.append(
+            Diagnosis(
+                category="memory_port_contention",
+                target=",".join(arrays) if arrays else "local_memory",
+                confidence=0.98,
+                evidence=evidence_items,
+                recommended_transformations=[
+                    "match controlled unrolling to available memory ports",
+                    "bank or partition a bounded local buffer for the contended access pattern",
+                    "restructure accesses or introduce local row/tile buffering before parallel compute",
+                ],
+                forbidden_transformations=(
+                    ["change external interface architecture"] if interface_frozen else []
+                ),
+                expected_tradeoffs=[
+                    "lower II may increase BRAM, LUT, routing and buffering latency"
                 ],
             )
         )
