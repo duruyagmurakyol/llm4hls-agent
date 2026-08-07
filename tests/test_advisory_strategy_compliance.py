@@ -9,7 +9,7 @@ from agent.optimise import structured_exploration
 from agent.optimise.refinement_strategy import check_strategy_compliance
 
 
-def test_explicit_advisory_strategy_is_not_rejected_by_regex_compliance() -> None:
+def test_explicit_advisory_strategy_without_baseline_remains_non_rejecting() -> None:
     report = check_strategy_compliance(
         "int kernel(int x) { return x + 1; }\n",
         {
@@ -23,7 +23,7 @@ def test_explicit_advisory_strategy_is_not_rejected_by_regex_compliance() -> Non
         "required": False,
         "passed": True,
         "strategy": "critical_path_restructuring",
-        "reason": "advisory_strategy_not_source_enforced",
+        "reason": "structured_strategy_requires_baseline_for_source_audit",
     }
 
 
