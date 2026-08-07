@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from agent.optimise.structured_candidate_safety import (
     canonicalise_structured_candidate,
 )
@@ -38,6 +40,23 @@ def _validation() -> dict:
     }
 
 
+def _assert_bounded_partition(source: str, variable: str) -> None:
+    pragma = next(
+        line
+        for line in source.splitlines()
+        if "ARRAY_PARTITION" in line
+        and re.search(
+            rf"\bvariable\s*=\s*{re.escape(variable)}\b",
+            line,
+            re.IGNORECASE,
+        )
+    )
+    assert re.search(r"\bcyclic\b", pragma, re.IGNORECASE)
+    assert re.search(r"\bfactor\s*=\s*2\b", pragma, re.IGNORECASE)
+    assert re.search(r"\bdim\s*=\s*1\b", pragma, re.IGNORECASE)
+    assert re.search(r"\bcomplete\b", pragma, re.IGNORECASE) is None
+
+
 def test_bounded_unroll_candidate_is_made_statically_safe() -> None:
     unsafe = '''#include "vector_add.h"
 
@@ -71,9 +90,8 @@ void vector_add(
     assert "#pragma HLS DATAFLOW" not in source
     assert "#pragma HLS UNROLL factor=2" in source
     assert " complete" not in source
-    assert "variable=a cyclic factor=2 dim=1" in source
-    assert "variable=b cyclic factor=2 dim=1" in source
-    assert "variable=c cyclic factor=2 dim=1" in source
+    for variable in ("a", "b", "c"):
+        _assert_bounded_partition(source, variable)
     assert "vector_add_loop:" in source
 
     actions = [item["action"] for item in report["changes"]]
