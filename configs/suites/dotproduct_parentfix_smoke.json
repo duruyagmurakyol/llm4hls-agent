@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "suite_id": "dotproduct_parentfix_smoke",
+  "description": "Clean optimisation-only comparison over five valid baselines after fixing non-cosim budget admission.",
+  "expected_runs": 1,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "requested_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow",
+      "model_equivalence": "exact_requested_id"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "dotProduct_optimize",
+      "path": "external/fpt26-harness/tasks/dotProduct_optimize",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "dot_product"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": 2,
+  "suite_id": "hard_15_optimisation",
+  "description": "15-run hard optimisation evaluation over five diverse kernels across DeepSeek, Qwen and Kimi.",
+  "expected_runs": 15,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow"
+    },
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "slug": "qwen35_122b_a10b",
+      "provider": "siliconflow"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.7-Code",
+      "slug": "kimi_k27_code",
+      "provider": "siliconflow"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "conv2d_small_optimise",
+      "path": "benchmarks/hard_smoke/conv2d_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 2,
+      "tier": "core",
+      "id": "stencil2d_small_optimise",
+      "path": "benchmarks/hard_smoke/stencil2d_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 3,
+      "tier": "core",
+      "id": "transpose_small_optimise",
+      "path": "benchmarks/hard_smoke/transpose_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 4,
+      "tier": "core",
+      "id": "prefix_sum_small_optimise",
+      "path": "benchmarks/hard_smoke/prefix_sum_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 5,
+      "tier": "core",
+      "id": "histogram_small_optimise",
+      "path": "benchmarks/hard_smoke/histogram_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    }
+  ]
+}

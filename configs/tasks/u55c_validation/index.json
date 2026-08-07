@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "suite_kind": "u55c_representative_validation",
+  "purpose": "Confirm repair, synthesis, C/RTL co-simulation and PPA selection on the competition target.",
+  "cases": [
+    "configs/tasks/u55c_validation/dot_product_accumulator_overwrite_repair_full_agent_u55c.json",
+    "configs/tasks/u55c_validation/gemm_loop_bound_missing_k_repair_full_agent_u55c.json",
+    "configs/tasks/u55c_validation/hls_eval_gesummv_accumulator_overwrite_repair_full_agent_u55c.json",
+    "configs/tasks/u55c_validation/hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c.json"
+  ],
+  "task_ids": [
+    "dot_product_accumulator_overwrite_repair_full_agent_u55c",
+    "gemm_loop_bound_missing_k_repair_full_agent_u55c",
+    "hls_eval_gesummv_accumulator_overwrite_repair_full_agent_u55c",
+    "hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c"
+  ],
+  "case_count": 4,
+  "recommended_repetitions": 1,
+  "target": {
+    "board": "AMD Alveo U55C",
+    "part": "xcu55c-fsvh2892-2L-e",
+    "tool_version": "2025.2",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {
+      "lut": 1303680,
+      "ff": 2607360,
+      "dsp": 9024,
+      "bram_18k": 4032
+    }
+  },
+  "selection_rationale": {
+    "dot_product": "repeatable successful latency trade-off",
+    "gemm": "conservative baseline fallback",
+    "gesummv": "successful imported HLS-Eval optimisation",
+    "mvt": "difficult imported case with no verified optimisation candidate in the reference sweep"
+  }
+}

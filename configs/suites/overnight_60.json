@@ -16,14 +16,26 @@
       "provider": "siliconflow"
     },
     {
-      "id": "cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit",
+      "id": "Qwen/Qwen3.5-122B-A10B",
       "slug": "qwen35_122b_awq4",
-      "provider": "siliconflow"
+      "provider": "siliconflow",
+      "requested_id": "cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit",
+      "provider_model_id": "Qwen/Qwen3.5-122B-A10B",
+      "model_equivalence": "provider_substitute_precision_variant",
+      "requested_precision": "AWQ-4bit",
+      "provider_precision": "FP8",
+      "provider_mapping_note": "The requested AWQ-4bit artifact is not exposed by SiliconFlow. SiliconFlow's available Qwen3.5-122B-A10B endpoint is documented as FP8."
     },
     {
-      "id": "Qwen/Qwen3.6-27B-FP8",
+      "id": "Qwen/Qwen3.6-27B",
       "slug": "qwen36_27b_fp8",
-      "provider": "siliconflow"
+      "provider": "siliconflow",
+      "requested_id": "Qwen/Qwen3.6-27B-FP8",
+      "provider_model_id": "Qwen/Qwen3.6-27B",
+      "model_equivalence": "provider_alias_same_precision",
+      "requested_precision": "FP8",
+      "provider_precision": "FP8",
+      "provider_mapping_note": "SiliconFlow omits the -FP8 suffix from its API identifier while documenting the hosted Qwen3.6-27B endpoint as FP8."
     }
   ],
   "tasks": [

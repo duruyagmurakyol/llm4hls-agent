@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "suite_id": "qwen_bicg_u55c_exact_regression",
+  "description": "Exact Qwen BICG U55C regression using the historical smoke task that produced the verified overnight optimisation.",
+  "expected_runs": 1,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "slug": "qwen35_122b_a10b",
+      "provider": "siliconflow"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "bicg_u55c_optimise",
+      "path": "experiments/smoke_inputs/bicg_u55c",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "bicg"
+    }
+  ]
+}
