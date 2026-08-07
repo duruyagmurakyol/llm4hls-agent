@@ -66,6 +66,21 @@ def resource_limit_prompt_suffix(config: dict[str, Any]) -> str:
     )
 
 
+def minimal_edit_prompt_suffix() -> str:
+    """Keep model output source-only, compact, and materially different."""
+
+    return (
+        "\n\nMandatory output contract:\n"
+        "- Return ONLY the complete compilable C++ source file.\n"
+        "- Do not expose analysis, reasoning, deliberation, or step-by-step thought.\n"
+        "- Do not encode reasoning as C++ comments; explanatory comments are unnecessary.\n"
+        "- Preserve unrelated code verbatim and make the smallest executable change that realises the assigned strategy.\n"
+        "- Comments or whitespace alone do not count as a candidate change.\n"
+        "- Do not rewrite the whole algorithm or add speculative unrelated transformations.\n"
+        "- If the requested strategy cannot be applied safely, return the original source unchanged rather than inventing a broad rewrite."
+    )
+
+
 def _attach_latency_recovery_factor(
     output_dir: Path,
     strategy_path: Path,
@@ -323,6 +338,7 @@ def generate_candidate(
         + resource_limit_prompt_suffix(config)
         + _latency_recovery_prompt_suffix(strategy)
         + _latency_recovery_exhausted_suffix(exhausted)
+        + minimal_edit_prompt_suffix()
     )
     effective_prompt_path.write_text(user_prompt, encoding="utf-8")
 
@@ -344,9 +360,12 @@ def generate_candidate(
         response = complete(
             model=model_name,
             system_prompt=(
-                "You are an FPGA HLS optimisation agent. Follow the supplied constraints "
-                "exactly, treat hard resource ceilings as mandatory, and return only one "
-                "complete compilable C++ source file."
+                "You are an FPGA HLS optimisation agent. Return only one complete "
+                "compilable C++ source file. Never expose reasoning or deliberation, "
+                "including as source comments. Preserve unrelated code verbatim and "
+                "make the smallest executable change that realises the assigned strategy. "
+                "Comments or whitespace alone do not count as a change. Follow all "
+                "supplied safety, interface, correctness, and resource constraints exactly."
             ),
             user_prompt=user_prompt,
             temperature=float(model_config.get("temperature", 0.0)),
@@ -409,6 +428,7 @@ def generate_candidate(
         "strategy_directives_applied": directives_applied,
         "strategy_directives_canonicalised": canonicalised_directives > 0,
         "strategy_directive_canonicalisations": canonicalised_directives,
+        "minimal_edit_contract": True,
     }, indent=2) + "\n", encoding="utf-8")
     candidate_path.write_text(candidate_source, encoding="utf-8")
 
