@@ -3,16 +3,18 @@ set -euo pipefail
 
 # Run one official Track-A task package through the Dockerised unified agent.
 #
-# Defaults match the current Xilinx workstation layout used by this project:
-#   host Xilinx root: /home/xilinx/Xilinx
-#   Vitis:            /tools/Xilinx/Vitis/2025.2 inside the container
+# The workstation's Xilinx settings scripts contain absolute paths rooted at
+# /home/xilinx/Xilinx/2025.2. The installation is therefore mounted at that
+# exact same path inside the container.
 #
-# Override with IMAGE or HOST_XILINX_ROOT when necessary.
+# Override with IMAGE or HOST_XILINX_ROOT when necessary. If using a different
+# installation path whose settings scripts also contain absolute paths, mount
+# it at the same path inside the container.
 
 IMAGE="${IMAGE:-llm4hls-agent:vitis-2025.2}"
-HOST_XILINX_ROOT="${HOST_XILINX_ROOT:-/home/xilinx/Xilinx}"
-CONTAINER_XILINX_ROOT="${CONTAINER_XILINX_ROOT:-/tools/Xilinx}"
-CONTAINER_VITIS_ROOT="${CONTAINER_XILINX_ROOT}/Vitis/2025.2"
+HOST_XILINX_ROOT="${HOST_XILINX_ROOT:-/home/xilinx/Xilinx/2025.2}"
+CONTAINER_XILINX_ROOT="${CONTAINER_XILINX_ROOT:-${HOST_XILINX_ROOT}}"
+CONTAINER_VITIS_ROOT="${CONTAINER_XILINX_ROOT}/Vitis"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <task-directory> [run_agent.py options...]" >&2
@@ -32,9 +34,9 @@ if [[ ! -f "${TASK_DIR}/task.toml" ]]; then
   exit 2
 fi
 
-if [[ ! -f "${HOST_XILINX_ROOT}/Vitis/2025.2/settings64.sh" ]]; then
+if [[ ! -f "${HOST_XILINX_ROOT}/Vitis/settings64.sh" ]]; then
   echo "ERROR: Vitis 2025.2 not found under ${HOST_XILINX_ROOT}" >&2
-  echo "Set HOST_XILINX_ROOT to the host directory containing Vitis/." >&2
+  echo "Set HOST_XILINX_ROOT to the 2025.2 directory containing Vitis/." >&2
   exit 2
 fi
 
@@ -64,7 +66,7 @@ for name in \
   fi
 done
 
-echo "run-vitis: image=${IMAGE} task=${TASK_DIR} vitis=${HOST_XILINX_ROOT}/Vitis/2025.2" >&2
+echo "run-vitis: image=${IMAGE} task=${TASK_DIR} vitis=${HOST_XILINX_ROOT}/Vitis" >&2
 
 exec docker run --rm "${TTY[@]}" \
   --user "$(id -u):$(id -g)" \
