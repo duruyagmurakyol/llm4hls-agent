@@ -16,7 +16,7 @@ DEFAULT_MODEL = {
     "temperature": 0.0,
     "max_tokens": 4096,
     "timeout_seconds": 120,
-    "enable_thinking": False,
+    "enable_thinking": True,
 }
 
 DEFAULT_BUDGETS = {
