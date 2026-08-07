@@ -61,6 +61,56 @@ def _invalidate_changed_baseline(
             (output_dir / name).unlink(missing_ok=True)
 
 
+def _copy_synthesis_diagnostic_evidence(
+    synthesis: dict[str, Any],
+    synthesis_project: Path,
+    stable_project: Path,
+) -> list[str]:
+    """Persist text diagnostics needed for later evidence-driven HLS analysis.
+
+    The hierarchical analyser consumes scheduling warnings from ``*.log`` and
+    ``*.rpt`` files as well as metrics from ``*_csynth.xml``. A promoted
+    baseline must therefore retain those text diagnostics instead of copying
+    XML alone; otherwise causal messages such as HLS 200-448 memory-port
+    contention disappear before optimisation begins.
+    """
+
+    candidates: list[Path] = []
+    if synthesis_project.is_dir():
+        candidates.extend(path for path in synthesis_project.rglob("*.log") if path.is_file())
+        report_root = synthesis_project / "solution1/syn/report"
+        if report_root.is_dir():
+            candidates.extend(path for path in report_root.rglob("*.rpt") if path.is_file())
+
+    explicit_log = synthesis.get("log_path")
+    if isinstance(explicit_log, (str, Path)) and str(explicit_log):
+        explicit_path = _resolve(explicit_log)
+        if explicit_path.is_file():
+            candidates.append(explicit_path)
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+
+    copied: list[str] = []
+    diagnostic_root = stable_project / "diagnostic_evidence"
+    for index, path in enumerate(unique, start=1):
+        try:
+            relative = path.relative_to(synthesis_project.resolve())
+            destination = diagnostic_root / "project" / relative
+        except ValueError:
+            destination = diagnostic_root / "external" / f"{index:03d}_{path.name}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+        copied.append(_display(destination))
+    return copied
+
+
 def promote_verified_baseline(
     task: TaskManifest,
     source: Path,
@@ -132,13 +182,19 @@ def promote_verified_baseline(
         shutil.copy2(report, destination)
         copied_reports.append(_display(destination))
 
+    copied_diagnostics = _copy_synthesis_diagnostic_evidence(
+        synthesis,
+        synthesis_project,
+        stable_project,
+    )
+
     top_name = str(synthesis.get("top_function", task.data["interface"]["top_function"]))
     top_report = stable_report_root / f"{top_name}_csynth.xml"
     if not top_report.is_file():
         raise FileNotFoundError(f"Promoted top synthesis report is missing: {top_report}")
 
     record = {
-        "schema_version": 2,
+        "schema_version": 3,
         "origin": origin,
         "source": displayed_source,
         "original_source": _display(source),
@@ -146,6 +202,7 @@ def promote_verified_baseline(
         "project_dir": _display(stable_project),
         "top_csynth_xml": _display(top_report),
         "reports": copied_reports,
+        "diagnostic_evidence": copied_diagnostics,
         "metrics": dict(metrics),
         "validation": {
             "csim_passed": True,
