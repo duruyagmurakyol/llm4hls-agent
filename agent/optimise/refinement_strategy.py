@@ -9,6 +9,13 @@ from agent.optimise.source_text import mask_cpp_comments
 
 PARTIAL_UNROLL_FACTORS = (8, 4, 2)
 LATENCY_RECOVERY_FACTORS = (2, 4, 8)
+STRUCTURED_ADVISORY_STRATEGIES = {
+    "critical_path_restructuring",
+    "bounded_unroll",
+    "memory_parallelism",
+    "loop_schedule_restructuring",
+    "pipeline_dataflow_restructuring",
+}
 
 
 def select_latency_recovery_factor(
@@ -92,6 +99,219 @@ def _loop_spans(source: str) -> list[tuple[int, int]]:
     return spans
 
 
+def _normalised_semantic_source(source: str) -> str:
+    """Ignore comments and formatting while preserving executable/HLS tokens."""
+
+    return re.sub(r"\s+", "", mask_cpp_comments(source))
+
+
+def _semantic_change(source: str, baseline: str | None) -> bool | None:
+    if baseline is None:
+        return None
+    return _normalised_semantic_source(source) != _normalised_semantic_source(baseline)
+
+
+def _loop_headers(source: str) -> list[str]:
+    analysed = mask_cpp_comments(source)
+    return [
+        re.sub(r"\s+", "", match.group(1))
+        for match in re.finditer(r"\bfor\s*\(([^)]*)\)", analysed)
+    ]
+
+
+def _normalised_pragmas(source: str, kinds: str) -> set[str]:
+    analysed = mask_cpp_comments(source)
+    pattern = re.compile(
+        rf"#\s*pragma\s+HLS\s+(?:{kinds})\b[^\n]*",
+        re.IGNORECASE,
+    )
+    return {
+        re.sub(r"\s+", "", match.group(0)).casefold()
+        for match in pattern.finditer(analysed)
+    }
+
+
+def _bounded_unroll_evidence(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
+    allowed = strategy.get("parameters", {}).get("allowed_factors") or [2, 4]
+    allowed_factors = {
+        int(value)
+        for value in allowed
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    }
+    analysed = mask_cpp_comments(source)
+    observed = [
+        int(match.group(1))
+        for match in re.finditer(
+            r"#\s*pragma\s+HLS\s+UNROLL\b[^\n]*\bfactor\s*=\s*(\d+)",
+            analysed,
+            re.IGNORECASE,
+        )
+    ]
+    return {
+        "passed": any(factor in allowed_factors for factor in observed),
+        "allowed_factors": sorted(allowed_factors),
+        "observed_factors": observed,
+    }
+
+
+def _local_array_declarations(source: str) -> set[str]:
+    """Return normalised local-looking array declarations as weak buffer evidence."""
+
+    analysed = mask_cpp_comments(source)
+    pattern = re.compile(
+        r"\b(?:static\s+)?(?:const\s+)?[A-Za-z_]\w*(?:::\w+)?(?:\s*<[^;{}]+>)?"
+        r"(?:\s+[A-Za-z_]\w*)+\s+[A-Za-z_]\w*\s*(?:\[[^\]]+\])+\s*(?:=\s*\{[^;]*\})?\s*;",
+        re.MULTILINE,
+    )
+    return {
+        re.sub(r"\s+", "", match.group(0))
+        for match in pattern.finditer(analysed)
+    }
+
+
+def _memory_parallelism_evidence(source: str, baseline: str | None) -> dict[str, Any]:
+    candidate_pragmas = _normalised_pragmas(
+        source,
+        "ARRAY_PARTITION|ARRAY_RESHAPE|BIND_STORAGE|STREAM",
+    )
+    baseline_pragmas = (
+        _normalised_pragmas(
+            baseline,
+            "ARRAY_PARTITION|ARRAY_RESHAPE|BIND_STORAGE|STREAM",
+        )
+        if baseline is not None
+        else set()
+    )
+    new_pragmas = sorted(candidate_pragmas - baseline_pragmas)
+
+    candidate_arrays = _local_array_declarations(source)
+    baseline_arrays = _local_array_declarations(baseline) if baseline is not None else set()
+    new_arrays = sorted(candidate_arrays - baseline_arrays)
+    return {
+        "passed": bool(new_pragmas or new_arrays),
+        "new_memory_pragmas": new_pragmas,
+        "new_local_array_declarations": new_arrays,
+    }
+
+
+def _pipeline_dataflow_evidence(source: str, baseline: str | None) -> dict[str, Any]:
+    candidate = _normalised_pragmas(source, "PIPELINE|DATAFLOW")
+    previous = (
+        _normalised_pragmas(baseline, "PIPELINE|DATAFLOW")
+        if baseline is not None
+        else set()
+    )
+    added = sorted(candidate - previous)
+    return {
+        "passed": bool(added),
+        "new_pipeline_or_dataflow_pragmas": added,
+    }
+
+
+def _advisory_strategy_compliance(
+    source: str,
+    strategy: dict[str, Any],
+    baseline: str | None,
+) -> dict[str, Any]:
+    """Require observable source evidence for the bounded structured families."""
+
+    name = strategy.get("name")
+    semantic_change = _semantic_change(source, baseline)
+    if name not in STRUCTURED_ADVISORY_STRATEGIES:
+        return {
+            "required": False,
+            "passed": True,
+            "strategy": name,
+            "reason": "advisory_strategy_not_source_enforced",
+        }
+
+    if baseline is None:
+        return {
+            "required": False,
+            "passed": True,
+            "strategy": name,
+            "reason": "structured_strategy_requires_baseline_for_source_audit",
+        }
+
+    if semantic_change is not True:
+        return {
+            "required": True,
+            "passed": False,
+            "strategy": name,
+            "reason": "no_semantic_change",
+            "observed": {"semantic_change": semantic_change},
+        }
+
+    if name == "critical_path_restructuring":
+        return {
+            "required": True,
+            "passed": True,
+            "strategy": name,
+            "reason": "executable_dependency_structure_changed",
+            "observed": {"semantic_change": True},
+        }
+
+    if name == "bounded_unroll":
+        evidence = _bounded_unroll_evidence(source, strategy)
+        return {
+            "required": True,
+            "passed": bool(evidence["passed"]),
+            "strategy": name,
+            "reason": (
+                "bounded_unroll_evidence_found"
+                if evidence["passed"]
+                else "bounded_unroll_not_realised"
+            ),
+            "observed": evidence,
+        }
+
+    if name == "memory_parallelism":
+        evidence = _memory_parallelism_evidence(source, baseline)
+        return {
+            "required": True,
+            "passed": bool(evidence["passed"]),
+            "strategy": name,
+            "reason": (
+                "memory_parallelism_evidence_found"
+                if evidence["passed"]
+                else "memory_parallelism_not_realised"
+            ),
+            "observed": evidence,
+        }
+
+    if name == "loop_schedule_restructuring":
+        baseline_headers = _loop_headers(baseline)
+        candidate_headers = _loop_headers(source)
+        passed = candidate_headers != baseline_headers
+        return {
+            "required": True,
+            "passed": passed,
+            "strategy": name,
+            "reason": (
+                "loop_schedule_changed"
+                if passed
+                else "loop_schedule_not_realised"
+            ),
+            "observed": {
+                "baseline_loop_headers": baseline_headers,
+                "candidate_loop_headers": candidate_headers,
+            },
+        }
+
+    evidence = _pipeline_dataflow_evidence(source, baseline)
+    return {
+        "required": True,
+        "passed": bool(evidence["passed"]),
+        "strategy": name,
+        "reason": (
+            "pipeline_or_dataflow_evidence_found"
+            if evidence["passed"]
+            else "pipeline_dataflow_not_realised"
+        ),
+        "observed": evidence,
+    }
+
+
 def _innermost_loop(
     spans: list[tuple[int, int]],
     position: int,
@@ -136,23 +356,22 @@ def apply_strategy_directives(source: str, strategy: dict[str, Any]) -> str:
     return cleaned[: opening + 1] + directives + cleaned[opening + 1 :]
 
 
-def check_strategy_compliance(source: str, strategy: dict[str, Any]) -> dict[str, Any]:
+def check_strategy_compliance(
+    source: str,
+    strategy: dict[str, Any],
+    *,
+    baseline: str | None = None,
+) -> dict[str, Any]:
     """Check source-enforceable strategies before running Vitis.
 
-    Strategies marked ``compliance_mode=advisory`` describe a model-guided
-    architectural search family rather than one exact source pattern. They are
-    audited in metadata and by the normal correctness/PPA validation stages,
-    but are not rejected merely because a regex cannot prove the architecture.
-    Unknown strategies without this explicit marker remain rejected.
+    Structured model-guided families carry ``compliance_mode=advisory`` but are
+    still required to leave observable source evidence.  This prevents an LLM
+    from satisfying a search slot with comments, whitespace, or an unrelated
+    edit while retaining compatibility for older advisory strategy metadata.
     """
     name = strategy.get("name")
     if strategy.get("compliance_mode") == "advisory":
-        return {
-            "required": False,
-            "passed": True,
-            "strategy": name,
-            "reason": "advisory_strategy_not_source_enforced",
-        }
+        return _advisory_strategy_compliance(source, strategy, baseline)
 
     factor = int(strategy.get("parameters", {}).get("factor", 0))
     if name in {
