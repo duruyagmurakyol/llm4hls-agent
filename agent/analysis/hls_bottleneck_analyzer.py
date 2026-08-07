@@ -89,6 +89,11 @@ def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
     interface_frozen = bool(constraints.get("interface_frozen", False))
     top = evidence.get("top_function", {}) or {}
     top_interval = _number(top.get("interval_cycles"))
+    has_loop_ii_violation = any(
+        (ii := _number(loop.get("achieved_ii", loop.get("ii")))) is not None
+        and ii > 1
+        for loop in loops
+    )
 
     # Vitis can expose decisive bus/interface scheduling evidence even when the
     # csynth XML does not contain a per-loop table (for example after aggressive
@@ -138,16 +143,18 @@ def analyse(evidence: dict[str, Any]) -> dict[str, Any]:
 
     # Vitis also reports on-chip RAM port pressure using messages such as:
     # "Lower bound of II is 19 due to multiple 'load' ... on array 'A' ...
-    # accessing core:RAM:A". This is distinct from external AXI bandwidth and
-    # should drive local banking/buffering recommendations rather than generic
-    # pipeline advice.
+    # accessing core:RAM:A". Project-wide logs may contain warnings from sibling
+    # generated modules, so only attribute this diagnosis to a report that also
+    # exposes a local achieved-II violation in its own XML evidence.
     ram_lower_bound = re.search(
         r"lower bound of ii is\s+([0-9]+).*?(?:multiple\s+['\"]?(?:load|store)|accessing core:ram:)",
         warnings,
         re.I | re.S,
     )
-    ram_contention = bool(ram_lower_bound) and (
-        "accessing core:ram:" in warnings or " on array " in warnings
+    ram_contention = (
+        bool(ram_lower_bound)
+        and has_loop_ii_violation
+        and ("accessing core:ram:" in warnings or " on array " in warnings)
     )
     if ram_contention:
         lower_bound = _number(ram_lower_bound.group(1))
