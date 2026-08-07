@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "suite_id": "qwen_bicg_u55c_exact_regression",
-  "description": "Exact Qwen BICG U55C regression using the historical smoke task that produced the verified overnight optimisation.",
+  "description": "Qwen BICG U55C regression using the committed U55C benchmark package corresponding to the verified smoke experiment.",
   "expected_runs": 1,
   "order": "task_then_model",
   "defaults": {
@@ -21,7 +21,7 @@
       "priority": 1,
       "tier": "core",
       "id": "bicg_u55c_optimise",
-      "path": "experiments/smoke_inputs/bicg_u55c",
+      "path": "benchmarks/bicg/u55c",
       "mode": "optimise",
       "role": "optimisation",
       "subtype": "ppa",

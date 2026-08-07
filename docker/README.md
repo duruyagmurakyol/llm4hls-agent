@@ -1,89 +1,57 @@
-# Dockerised Track-A execution
+# Dockerised Vitis execution
 
-This container packages the existing `structured-optimisation-v1` agent while
-using the host machine's AMD/Xilinx Vitis 2025.2 installation. Vitis is not
-copied into the image.
-
-The Track-A adapter in this branch keeps the competition submission target at
-10 ns (100 MHz). Docker does not override that target.
+The Docker image packages the agent and Python dependencies while mounting the host AMD/Xilinx Vitis 2025.2 installation read-only. Vitis itself is not copied into the image.
 
 ## Build
 
 From the repository root:
 
 ```bash
-chmod +x docker/build.sh docker/run-vitis.sh docker/entrypoint.sh
+docker build -t llm4hls-agent:vitis-2025.2 .
+```
+
+or use the helper:
+
+```bash
 ./docker/build.sh
 ```
 
-The default image name is:
-
-```text
-llm4hls-agent:vitis-2025.2
-```
-
-Override it with `IMAGE=...` if required.
-
 ## Host Vitis layout
 
-The runner currently defaults to the project workstation layout:
+The wrapper defaults to:
 
 ```text
-/home/xilinx/Xilinx/Vitis/2025.2/settings64.sh
+/home/xilinx/Xilinx/2025.2
 ```
 
-If the Xilinx installation is elsewhere, set `HOST_XILINX_ROOT` to the host
-directory that contains `Vitis/`.
-
-Example:
-
-```bash
-export HOST_XILINX_ROOT=/tools/Xilinx
-```
-
-Inside the container that directory is mounted read-only at `/tools/Xilinx`,
 and the entrypoint sources:
 
 ```text
-/tools/Xilinx/Vitis/2025.2/settings64.sh
+/home/xilinx/Xilinx/2025.2/Vitis/settings64.sh
 ```
+
+Override the host installation root with `HOST_XILINX_ROOT` when necessary.
 
 ## Run an official Track-A task
 
-Set the same model-provider variables used by native branch runs, then pass the
-official task directory to the wrapper:
-
 ```bash
-export SILICONFLOW_API_KEY=...
+export SILICONFLOW_API_KEY="your-key"
 export LLM4HLS_PROVIDER=siliconflow
-export LLM4HLS_MODEL=Qwen/Qwen3.5-122B-A10B
+export LLM4HLS_MODEL="Qwen/Qwen3.5-122B-A10B"
 
-./docker/run-vitis.sh /path/to/fpt26-harness/tasks/dotProduct_optimize
+./docker/run-vitis.sh /path/to/fpt26-harness/tasks/dotProduct_optimize --mode auto
 ```
 
-The task is mounted read-only at `/task`. The branch's Track-A compatibility
-frontend stages only the public task files before invoking the existing unified
-repair/optimisation controller.
-
-Generated run artefacts are persisted into the repository's host-side
-`experiments/` directory.
-
-Any normal `scripts/run_agent.py` option can follow the task directory, for
-example:
+Onboarding only:
 
 ```bash
-./docker/run-vitis.sh /path/to/task --max-agent-steps 1
+./docker/run-vitis.sh /path/to/fpt26-harness/tasks/dotProduct_optimize --onboard-only
 ```
 
-## Smoke-test order
+The task directory is mounted read-only. The Track-A adapter stages only public task files before invoking `scripts/run_agent.py`; hidden tests and reference implementations are not copied into the agent-visible workspace.
 
-Use the supplied reference tasks in this order:
-
-1. `dotProduct_optimize` - proves onboarding, CSim, synthesis and optimisation.
-2. `projection_bugfix` - proves repair inside the container.
-3. `residual_stream_deadlock` - proves CoSim/deadlock handling inside Docker.
+Generated run artefacts persist on the host under ignored experiment/result directories.
 
 ## Secrets
 
-API keys are passed through from the host environment at runtime. They are not
-stored in the image or Dockerfile.
+API keys are passed through the host environment at runtime. They are not stored in the Dockerfile or image.
