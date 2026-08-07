@@ -4,7 +4,7 @@ The validation, budget, synthesis, archive and final-selection implementation
 remains in :mod:`agent.optimise.runner_legacy`.  This module changes only search
 control when ``structured_v1`` is enabled:
 
-* C1-C3 explore distinct strategy families from the verified baseline;
+* C1-C3 explore distinct diagnosis-selected layer-one strategy families from the verified baseline;
 * C4 exploits the best explicitly refinement-eligible exploration;
 * C5 performs one bounded recovery or an independent baseline fallback;
 * the candidate budget is capped at five, preventing unstructured C6+ retries.
@@ -26,9 +26,11 @@ from agent.optimise.config_source import ConfigInput, ConfigSource, as_config_so
 from agent.optimise.duplicate import normalise_source
 from agent.optimise.refinement_strategy import check_strategy_compliance
 from agent.optimise.search_policy import (
+    DEFAULT_EXPLORATION_STRATEGY_FAMILIES,
     MAX_STRUCTURED_CANDIDATES,
     build_structured_search_schedule,
 )
+from agent.optimise.strategy_selector import resolve_exploration_strategy_families
 from agent.optimise.structured_exploration import (
     prepare_structured_exploration_prompt,
 )
@@ -123,11 +125,28 @@ def _output_dir(config: dict[str, Any]) -> Path:
     return path if path.is_absolute() else Path(REPO_ROOT) / path
 
 
-def _exploration_attempt(candidate_index: int) -> dict[str, Any] | None:
+def _exploration_strategy_families(
+    config: dict[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Return the immutable per-run exploration plan or the historical default."""
+
+    if config is None:
+        return DEFAULT_EXPLORATION_STRATEGY_FAMILIES
+    return resolve_exploration_strategy_families(_output_dir(config))
+
+
+def _exploration_attempt(
+    candidate_index: int,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    families = _exploration_strategy_families(config)
     return next(
         (
             attempt
-            for attempt in build_structured_search_schedule(max_candidates=3)
+            for attempt in build_structured_search_schedule(
+                max_candidates=3,
+                exploration_strategy_families=families,
+            )
             if attempt["candidate_index"] == candidate_index
         ),
         None,
@@ -219,6 +238,22 @@ def _structured_retry_suffix(strategy: dict[str, Any], reason: str) -> str:
             "\n- A bounded local row/tile buffer is allowed. Bank or partition the "
             "local buffer when useful; do not completely partition a top-level interface array."
         )
+    elif family == "buffered_parallelism":
+        family_hint = (
+            "\n- Realise both halves of this family: introduce a bounded reused local "
+            "buffer/tile with bounded banking, and apply a matching explicit UNROLL "
+            "factor from the allowed set to the independent consumer loop."
+        )
+    elif family == "sliding_window_reuse":
+        family_hint = (
+            "\n- Introduce an actual bounded shift/window/line-buffer reuse structure; "
+            "do not merely add a pragma to the original repeated memory accesses."
+        )
+    elif family == "dataflow_pipeline":
+        family_hint = (
+            "\n- Create genuine producer/consumer stages and add #pragma HLS DATAFLOW "
+            "at their enclosing level; a DATAFLOW pragma on unchanged monolithic code is invalid."
+        )
 
     return (
         "\n\nCORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
@@ -305,7 +340,11 @@ def _structured_history_ready(
         return False
 
     output_dir = _output_dir(config)
-    schedule = build_structured_search_schedule(max_candidates=3)
+    families = _exploration_strategy_families(config)
+    schedule = build_structured_search_schedule(
+        max_candidates=3,
+        exploration_strategy_families=families,
+    )
     required_count = min(next_candidate_index - 1, 3)
     for attempt in schedule[:required_count]:
         index = int(attempt["candidate_index"])
@@ -330,7 +369,7 @@ def _baseline_exploration_parent(
     config: dict[str, Any],
     next_candidate_index: int,
 ) -> dict[str, Any]:
-    attempt = _exploration_attempt(next_candidate_index)
+    attempt = _exploration_attempt(next_candidate_index, config)
     if attempt is None:
         raise ValueError("candidate is not a structured exploration slot")
     return {
@@ -409,12 +448,14 @@ def _legacy_execution_hooks(
         *,
         budget: Any = None,
     ) -> Path:
-        attempt = _exploration_attempt(candidate_index) if enabled else None
+        families = _exploration_strategy_families(config) if enabled else None
+        attempt = _exploration_attempt(candidate_index, config) if enabled else None
         if attempt is not None:
             prepare_structured_exploration_prompt(
                 source,
                 candidate_index=candidate_index,
                 strategy_family=str(attempt["strategy_family"]),
+                exploration_strategy_families=families,
             )
 
         candidate_path = base_generate(source, candidate_index, budget=budget)
@@ -523,7 +564,8 @@ def _legacy_execution_hooks(
         summary: dict[str, Any],
         parent_reason: str,
     ) -> None:
-        attempt = _exploration_attempt(next_index) if enabled else None
+        families = _exploration_strategy_families(config) if enabled else None
+        attempt = _exploration_attempt(next_index, config) if enabled else None
         if (
             attempt is not None
             and next_index in {2, 3}
@@ -534,6 +576,7 @@ def _legacy_execution_hooks(
                 source,
                 candidate_index=next_index,
                 strategy_family=str(attempt["strategy_family"]),
+                exploration_strategy_families=families,
             )
             return
 
