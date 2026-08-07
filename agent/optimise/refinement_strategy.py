@@ -197,6 +197,53 @@ def _memory_pragma_variables(source: str) -> set[str]:
     return {match.group(1) for match in pattern.finditer(analysed)}
 
 
+def _bounded_partition_evidence(
+    source: str,
+    local_names: set[str],
+    allowed_factors: set[int],
+) -> list[dict[str, Any]]:
+    """Return bounded cyclic/block partitions applied to newly introduced locals."""
+
+    analysed = mask_cpp_comments(source)
+    evidence: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"#\s*pragma\s+HLS\s+ARRAY_PARTITION\b([^\n]*)",
+        analysed,
+        re.IGNORECASE,
+    ):
+        arguments = match.group(1)
+        variable_match = re.search(
+            r"\bvariable\s*=\s*([A-Za-z_]\w*)",
+            arguments,
+            re.IGNORECASE,
+        )
+        factor_match = re.search(
+            r"\bfactor\s*=\s*(\d+)",
+            arguments,
+            re.IGNORECASE,
+        )
+        mode_match = re.search(
+            r"\b(?:type\s*=\s*)?(cyclic|block)\b",
+            arguments,
+            re.IGNORECASE,
+        )
+        if not (variable_match and factor_match and mode_match):
+            continue
+        variable = variable_match.group(1)
+        factor = int(factor_match.group(1))
+        if variable not in local_names or factor not in allowed_factors:
+            continue
+        evidence.append(
+            {
+                "variable": variable,
+                "factor": factor,
+                "mode": mode_match.group(1).casefold(),
+                "pragma": match.group(0).strip(),
+            }
+        )
+    return evidence
+
+
 def _memory_parallelism_evidence(source: str, baseline: str | None) -> dict[str, Any]:
     candidate_pragmas = _normalised_pragmas(
         source,
@@ -232,13 +279,28 @@ def _buffered_parallelism_evidence(
     candidate_local_names = _local_array_names(source)
     baseline_local_names = _local_array_names(baseline) if baseline is not None else set()
     new_local_names = sorted(candidate_local_names - baseline_local_names)
-    banked_variables = _memory_pragma_variables(source)
-    banked_new_locals = sorted(set(new_local_names) & banked_variables)
+    allowed_factors = set(unroll["allowed_factors"])
+    partitions = _bounded_partition_evidence(
+        source,
+        set(new_local_names),
+        allowed_factors,
+    )
+    unroll_factors = {
+        factor
+        for factor in unroll["observed_factors"]
+        if factor in allowed_factors
+    }
+    matched = [
+        item
+        for item in partitions
+        if item["factor"] in unroll_factors
+    ]
     return {
-        "passed": bool(new_local_names and banked_new_locals and unroll["passed"]),
+        "passed": bool(new_local_names and matched),
         "memory": memory,
         "new_local_arrays": new_local_names,
-        "banked_new_local_arrays": banked_new_locals,
+        "bounded_local_partitions": partitions,
+        "matched_partition_unroll": matched,
         "bounded_unroll": unroll,
     }
 
