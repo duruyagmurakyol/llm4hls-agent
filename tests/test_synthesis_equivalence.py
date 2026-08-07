@@ -103,7 +103,7 @@ def test_later_equivalent_candidate_is_removed_from_pareto() -> None:
     assert updated["schema_version"] == 8
 
 
-def test_synthesis_equivalent_candidate_is_not_a_refinement_parent() -> None:
+def test_synthesis_equivalent_retired_results_restart_from_baseline() -> None:
     useful = _record(2, _metrics())
     equivalent = {
         **_record(9, _metrics()),
@@ -115,5 +115,5 @@ def test_synthesis_equivalent_candidate_is_not_a_refinement_parent() -> None:
 
     assert selected is not None
     parent, reason = selected
-    assert parent["candidate_index"] == 2
-    assert reason == "pareto_candidate"
+    assert parent["candidate_index"] == 0
+    assert reason == "restart_from_verified_baseline"
