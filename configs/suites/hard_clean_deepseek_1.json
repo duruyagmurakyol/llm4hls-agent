@@ -21,7 +21,7 @@
       "priority": 1,
       "tier": "core",
       "id": "stencil2d_small_optimise",
-      "path": "/home/xilinx/projects/llm4hls-agent/benchmarks/hard_smoke/stencil2d_small",
+      "path": "benchmarks/hard_smoke/stencil2d_small",
       "mode": "optimise",
       "role": "optimisation",
       "subtype": "ppa",
