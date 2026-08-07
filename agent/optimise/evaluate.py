@@ -279,7 +279,23 @@ def classify_candidate(
         return record
     if static and static.get("passed") is False:
         failed = [name for name, passed in (static.get("checks") or {}).items() if not passed]
-        record.update(verdict="reject_static", reason="Static validation failed: " + ", ".join(failed))
+        if "baseline_and_candidate_differ" in failed:
+            record.update(
+                verdict="reject_no_change",
+                reason="Candidate contains no executable or HLS-directive change relative to the verified baseline.",
+            )
+        elif "strategy_compliant" in failed:
+            compliance = static.get("strategy_compliance") or {}
+            reason = compliance.get("reason") or "requested_strategy_not_realised"
+            record.update(
+                verdict="reject_strategy_not_realised",
+                reason=f"Requested optimisation strategy was not realised: {reason}.",
+            )
+        else:
+            record.update(
+                verdict="reject_static",
+                reason="Static validation failed: " + ", ".join(failed),
+            )
         return record
     if csim and csim.get("passed") is False:
         record.update(verdict="reject_csim", reason="Vitis CSim failed or the candidate was not compiled.")
