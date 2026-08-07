@@ -1,72 +1,55 @@
 # `scripts/`
 
-This directory contains command-line entry points and a small number of compatibility or analysis utilities.
+`scripts/run_agent.py` is the only normal user-facing agent command. Reusable behaviour belongs under `agent/`; the other scripts are research, audit or repository-maintenance utilities rather than alternative agents.
 
 ## Public command
 
-Only this script should be treated as the normal user interface:
+```bash
+python3 scripts/run_agent.py <task-package-or-manifest> [options]
+```
+
+Important options include `--mode auto|repair|optimise`, `--onboard-only`, `--resume`, `--status-only` and `--max-agent-steps`.
+
+The Docker wrapper calls this same entry point:
 
 ```bash
-python3 scripts/run_agent.py <task-manifest-or-benchmark-directory>
+docker/run-vitis.sh <task-directory> --mode auto
 ```
 
-`run_agent.py` accepts either:
+## Research runners
 
-- a unified JSON task manifest; or
-- a benchmark directory that can be automatically onboarded.
+- `run_experiment_matrix.py` — explicit task × model matrix with isolated manifests, resumable state and CSV/JSON summaries.
+- `run_task_suite.py` — sequential discovery/execution of a provenance-aware task library.
 
-Options:
+These scripts invoke `run_agent.py`; they do not implement a second agent.
 
-```text
---onboard-only       generate task/config/report files without running the agent
---status-only        inspect resumable optimisation state without new expensive work
---max-agent-steps N  execute at most N optimisation state transitions
-```
+## Analysis and audit utilities
 
-Examples:
+- `check_matrix_models.py` — fail-fast provider/model availability check.
+- `audit_cosim_suite.py` — durable post-search final/Pareto COSIM re-audit for existing suite results.
+- `extract_final_results.py` — report-ready JSON/CSV/Markdown extraction.
+- `analyse_hls_hierarchy.py` — standalone CLI for the HLS hierarchy analyser.
+- `audit_prompt_compaction.py` — offline prompt/token compaction analysis.
 
-```bash
-python3 scripts/run_agent.py configs/tasks/atax_track_a.json
-python3 scripts/run_agent.py benchmarks/bicg/golden --onboard-only
-python3 scripts/run_agent.py benchmarks/bicg/golden --max-agent-steps 1
-```
+## Reproducibility / maintenance utilities
 
-## Internal and compatibility scripts
+The remaining preparation and migration scripts exist to regenerate committed benchmark/task material or recover experiment manifests. They are not part of the competition runtime path. Examples include U55C validation subset preparation, controlled repair-suite construction, HLS-Eval import, provider-ID migration and matrix refresh.
 
-Other scripts are implementation support, analysis utilities, or transitional compatibility layers. They are not separate agents and should not be documented as alternative primary workflows.
+## Removed obsolete wrappers
 
-A compatibility script may remain temporarily when code in `agent/` still invokes it, but new orchestration should be implemented as importable package code under `agent/`.
+The old standalone PPA optimiser, specialised overnight repair/agent runners and duplicate container entrypoint were removed. Their responsibilities are now covered by the unified agent, generic suite/matrix runners and `docker/entrypoint.sh`.
 
-## Script design rules
+## Rules
 
-- Keep argument parsing and process exit handling in scripts.
-- Put reusable behaviour in `agent/` modules.
-- Do not duplicate repair or optimisation state machines here.
-- Do not add benchmark-specific public scripts.
+- Put reusable state machines under `agent/`, not here.
+- Do not add benchmark-specific public launchers.
 - Do not embed API keys.
-- Resolve repository paths predictably.
+- Keep generated outputs under `experiments/`, `results/` or `runs/` as appropriate.
 - Return non-zero on configuration or execution failure.
-- Keep generated files under `experiments/`.
-
-## Adding a command
-
-Before adding a new script, check whether the feature belongs as:
-
-1. an option to `run_agent.py`;
-2. an importable function in `agent/`;
-3. a test or offline analysis notebook rather than a permanent command.
-
-A new script is justified only when it has a distinct operational boundary, such as a one-off data conversion or a standalone report inspection utility.
-
-## Obsolete scripts
-
-The project intentionally removed earlier experiment-specific wrappers for generation, validation, CSim, synthesis and evaluation. Those stages now belong to the unified optimisation implementation.
-
-Do not recreate scripts such as separate per-model experiment runners or benchmark-specific candidate commands unless required for reproducing archived evidence.
 
 ## Validation
 
 ```bash
 python -m compileall -q scripts
-python -m pytest
+python -m pytest -q
 ```

@@ -1,6 +1,7 @@
 .git
 .github
 .venv
+.venv-*
 venv
 __pycache__
 .pytest_cache
@@ -16,6 +17,8 @@ runs
 results
 experiments
 replication_runs
+external
+logs
 build
 dist
 .Xil
