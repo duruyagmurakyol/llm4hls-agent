@@ -1,12 +1,21 @@
 .git
+.github
 .venv
+venv
 __pycache__
 .pytest_cache
+.mypy_cache
+.ruff_cache
 *.pyc
 *.pyo
 *.log
+*.zip
+*.tar
+*.tar.gz
 runs
 results
+experiments
+replication_runs
 build
 dist
 .Xil
@@ -14,3 +23,5 @@ dist
 solution*
 *_project
 benchmarks/hls_eval_imported
+.vscode
+.idea
