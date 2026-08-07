@@ -23,6 +23,8 @@ from typing import Any, Iterator
 
 from agent.optimise import runner_legacy as _legacy
 from agent.optimise.config_source import ConfigInput, ConfigSource, as_config_source
+from agent.optimise.duplicate import normalise_source
+from agent.optimise.refinement_strategy import check_strategy_compliance
 from agent.optimise.search_policy import (
     MAX_STRUCTURED_CANDIDATES,
     build_structured_search_schedule,
@@ -44,6 +46,7 @@ from agent.optimise.structured_tail import (
 
 STRUCTURED_SEARCH_MODE = "structured_v1"
 STRUCTURED_PARENT_REASON = "structured_baseline_exploration"
+STRUCTURED_GENERATION_RETRIES = 1
 
 # Re-export the preserved implementation so existing imports keep the same
 # surface.  The two functions defined below intentionally replace the legacy
@@ -139,6 +142,157 @@ def _load_strategy(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _implementation_parent_source(
+    config: dict[str, Any],
+    output_dir: Path,
+    strategy: dict[str, Any],
+) -> str | None:
+    """Load the exact source that the strategy declares as its implementation parent."""
+
+    source_index = strategy.get("source_candidate_index")
+    if isinstance(source_index, int) and source_index > 0:
+        parent_path = output_dir / f"candidate_{source_index:03d}.cpp"
+    else:
+        baseline_value = (config.get("baseline") or {}).get("source")
+        if not isinstance(baseline_value, str) or not baseline_value:
+            return None
+        parent_path = Path(baseline_value)
+        if not parent_path.is_absolute():
+            parent_path = Path(REPO_ROOT) / parent_path
+
+    if not parent_path.is_file():
+        return None
+    return parent_path.read_text(encoding="utf-8")
+
+
+def _structured_generation_retry_reason(
+    config: dict[str, Any],
+    output_dir: Path,
+    candidate_index: int,
+) -> str | None:
+    """Return why one structured generation should receive a same-slot retry."""
+
+    strategy = _load_strategy(
+        output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+    )
+    if strategy.get("compliance_mode") != "advisory":
+        return None
+
+    candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
+    if not candidate_path.is_file():
+        return None
+
+    parent_source = _implementation_parent_source(config, output_dir, strategy)
+    if parent_source is None:
+        return None
+
+    candidate_source = candidate_path.read_text(encoding="utf-8")
+    if normalise_source(candidate_source) == normalise_source(parent_source):
+        return "no_semantic_change"
+
+    compliance = check_strategy_compliance(
+        candidate_source,
+        strategy,
+        baseline=parent_source,
+    )
+    if compliance.get("required") is True and compliance.get("passed") is False:
+        reason = compliance.get("reason")
+        return str(reason) if reason else "strategy_not_realised"
+    return None
+
+
+def _structured_retry_suffix(strategy: dict[str, Any], reason: str) -> str:
+    required = strategy.get("required_changes") or []
+    required_text = "\n".join(f"- {item}" for item in required)
+    family = str(strategy.get("name") or "assigned_strategy")
+
+    family_hint = ""
+    if family == "bounded_unroll":
+        family_hint = (
+            "\n- Use an explicit #pragma HLS UNROLL factor=2 or factor=4 on the "
+            "selected real loop when legal; comments or unchanged source are invalid."
+        )
+    elif family == "memory_parallelism":
+        family_hint = (
+            "\n- A bounded local row/tile buffer is allowed. Bank or partition the "
+            "local buffer when useful; do not completely partition a top-level interface array."
+        )
+
+    return (
+        "\n\nCORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:\n"
+        f"- The previous response was rejected before Vitis because: {reason}.\n"
+        f"- Strategy family remains: {family}.\n"
+        "- Do not return the implementation parent unchanged.\n"
+        "- Make one material executable or HLS-directive change that realises this family.\n"
+        "- Keep the change focused and preserve correctness, interfaces and bounds.\n"
+        "Required strategy changes include:\n"
+        + (required_text or "- Realise the assigned strategy with observable source evidence.")
+        + family_hint
+        + "\n- Return only the complete compilable C++ source file."
+    )
+
+
+def _preserve_generation_attempt(
+    output_dir: Path,
+    candidate_index: int,
+    attempt_number: int,
+) -> dict[str, Any]:
+    """Preserve first-attempt artefacts before a same-slot model retry overwrites them."""
+
+    prefix = f"candidate_{candidate_index:03d}"
+    mappings = {
+        output_dir / f"{prefix}.cpp": output_dir / f"{prefix}_generation_attempt_{attempt_number}.cpp",
+        output_dir / f"{prefix}_model_response.txt": output_dir / f"{prefix}_generation_attempt_{attempt_number}_model_response.txt",
+        output_dir / f"{prefix}_model_metadata.json": output_dir / f"{prefix}_generation_attempt_{attempt_number}_model_metadata.json",
+        output_dir / f"{prefix}_effective_prompt.txt": output_dir / f"{prefix}_generation_attempt_{attempt_number}_effective_prompt.txt",
+    }
+    for source, destination in mappings.items():
+        if source.is_file():
+            destination.write_bytes(source.read_bytes())
+
+    metadata_path = mappings[output_dir / f"{prefix}_model_metadata.json"]
+    return _load_strategy(metadata_path)
+
+
+def _merge_generation_retry_metadata(
+    output_dir: Path,
+    candidate_index: int,
+    first_metadata: dict[str, Any],
+    retry_reason: str,
+) -> None:
+    metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
+    second_metadata = _load_strategy(metadata_path)
+    if not second_metadata:
+        return
+
+    attempts = [dict(first_metadata), dict(second_metadata)]
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        values = [item.get(key) for item in attempts]
+        numeric = [
+            int(value)
+            for value in values
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        second_metadata[key] = sum(numeric)
+
+    latencies = [
+        float(item["latency_seconds"])
+        for item in attempts
+        if isinstance(item.get("latency_seconds"), (int, float))
+        and not isinstance(item.get("latency_seconds"), bool)
+    ]
+    if latencies:
+        second_metadata["latency_seconds"] = sum(latencies)
+
+    second_metadata["generation_attempt_count"] = 2
+    second_metadata["generation_retry_reason"] = retry_reason
+    second_metadata["generation_attempts"] = attempts
+    metadata_path.write_text(
+        json.dumps(second_metadata, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _structured_history_ready(
@@ -262,7 +416,59 @@ def _legacy_execution_hooks(
                 candidate_index=candidate_index,
                 strategy_family=str(attempt["strategy_family"]),
             )
-        return base_generate(source, candidate_index, budget=budget)
+
+        candidate_path = base_generate(source, candidate_index, budget=budget)
+        if attempt is None or STRUCTURED_GENERATION_RETRIES <= 0:
+            return candidate_path
+
+        output_dir = _output_dir(config)
+        retry_reason = _structured_generation_retry_reason(
+            config,
+            output_dir,
+            candidate_index,
+        )
+        if retry_reason is None:
+            return candidate_path
+
+        if budget is not None and not budget.can_consume("model_calls"):
+            (output_dir / f"candidate_{candidate_index:03d}_generation_retry_skipped.json").write_text(
+                json.dumps(
+                    {
+                        "candidate_index": candidate_index,
+                        "reason": retry_reason,
+                        "retry_skipped": "model_call_budget_unavailable",
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return candidate_path
+
+        strategy = _load_strategy(
+            output_dir / f"candidate_{candidate_index:03d}_strategy.json"
+        )
+        first_metadata = _preserve_generation_attempt(
+            output_dir,
+            candidate_index,
+            1,
+        )
+        prompt_path = output_dir / f"candidate_{candidate_index:03d}_prompt.txt"
+        with prompt_path.open("a", encoding="utf-8") as handle:
+            handle.write(_structured_retry_suffix(strategy, retry_reason) + "\n")
+
+        print(
+            f"Candidate {candidate_index:03d} generation retry: {retry_reason}",
+            flush=True,
+        )
+        retry_path = base_generate(source, candidate_index, budget=budget)
+        _merge_generation_retry_metadata(
+            output_dir,
+            candidate_index,
+            first_metadata,
+            retry_reason,
+        )
+        return retry_path
 
     def structured_select(
         records: Any,
