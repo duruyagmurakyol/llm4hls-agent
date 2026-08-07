@@ -13,6 +13,9 @@ STRUCTURED_ADVISORY_STRATEGIES = {
     "critical_path_restructuring",
     "bounded_unroll",
     "memory_parallelism",
+    "buffered_parallelism",
+    "sliding_window_reuse",
+    "dataflow_pipeline",
     "loop_schedule_restructuring",
     "pipeline_dataflow_restructuring",
 }
@@ -194,6 +197,35 @@ def _memory_parallelism_evidence(source: str, baseline: str | None) -> dict[str,
     }
 
 
+def _buffered_parallelism_evidence(
+    source: str,
+    baseline: str | None,
+    strategy: dict[str, Any],
+) -> dict[str, Any]:
+    memory = _memory_parallelism_evidence(source, baseline)
+    unroll = _bounded_unroll_evidence(source, strategy)
+    return {
+        "passed": bool(memory["passed"] and unroll["passed"]),
+        "memory": memory,
+        "bounded_unroll": unroll,
+    }
+
+
+def _sliding_window_evidence(source: str, baseline: str | None) -> dict[str, Any]:
+    memory = _memory_parallelism_evidence(source, baseline)
+    analysed = mask_cpp_comments(source).casefold()
+    baseline_analysed = mask_cpp_comments(baseline).casefold() if baseline is not None else ""
+    vocabulary = ("window", "shift", "line_buffer", "linebuffer", "tap_buffer", "sample_buffer")
+    new_window_vocabulary = sorted(
+        token for token in vocabulary if token in analysed and token not in baseline_analysed
+    )
+    return {
+        "passed": bool(memory["passed"] or new_window_vocabulary),
+        "memory": memory,
+        "new_window_vocabulary": new_window_vocabulary,
+    }
+
+
 def _pipeline_dataflow_evidence(source: str, baseline: str | None) -> dict[str, Any]:
     candidate = _normalised_pragmas(source, "PIPELINE|DATAFLOW")
     previous = (
@@ -205,6 +237,20 @@ def _pipeline_dataflow_evidence(source: str, baseline: str | None) -> dict[str, 
     return {
         "passed": bool(added),
         "new_pipeline_or_dataflow_pragmas": added,
+    }
+
+
+def _dataflow_evidence(source: str, baseline: str | None) -> dict[str, Any]:
+    candidate = _normalised_pragmas(source, "DATAFLOW")
+    previous = (
+        _normalised_pragmas(baseline, "DATAFLOW")
+        if baseline is not None
+        else set()
+    )
+    added = sorted(candidate - previous)
+    return {
+        "passed": bool(added),
+        "new_dataflow_pragmas": added,
     }
 
 
@@ -275,6 +321,48 @@ def _advisory_strategy_compliance(
                 "memory_parallelism_evidence_found"
                 if evidence["passed"]
                 else "memory_parallelism_not_realised"
+            ),
+            "observed": evidence,
+        }
+
+    if name == "buffered_parallelism":
+        evidence = _buffered_parallelism_evidence(source, baseline, strategy)
+        return {
+            "required": True,
+            "passed": bool(evidence["passed"]),
+            "strategy": name,
+            "reason": (
+                "buffered_parallelism_evidence_found"
+                if evidence["passed"]
+                else "buffered_parallelism_not_realised"
+            ),
+            "observed": evidence,
+        }
+
+    if name == "sliding_window_reuse":
+        evidence = _sliding_window_evidence(source, baseline)
+        return {
+            "required": True,
+            "passed": bool(evidence["passed"]),
+            "strategy": name,
+            "reason": (
+                "sliding_window_evidence_found"
+                if evidence["passed"]
+                else "sliding_window_not_realised"
+            ),
+            "observed": evidence,
+        }
+
+    if name == "dataflow_pipeline":
+        evidence = _dataflow_evidence(source, baseline)
+        return {
+            "required": True,
+            "passed": bool(evidence["passed"]),
+            "strategy": name,
+            "reason": (
+                "dataflow_evidence_found"
+                if evidence["passed"]
+                else "dataflow_pipeline_not_realised"
             ),
             "observed": evidence,
         }
