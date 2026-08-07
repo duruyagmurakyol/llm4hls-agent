@@ -33,7 +33,7 @@ def test_older_promising_synthesis_candidate_beats_latest_csim_failure() -> None
     assert reason == "synthesis_passed_refinement_eligible"
 
 
-def test_duplicate_candidate_is_never_selected() -> None:
+def test_duplicate_after_weak_failure_restarts_from_verified_baseline() -> None:
     selected = select_refinement_parent(
         [
             {
@@ -58,11 +58,11 @@ def test_duplicate_candidate_is_never_selected() -> None:
 
     assert selected is not None
     record, reason = selected
-    assert record["candidate_index"] == 1
-    assert reason == "csim_passed_candidate"
+    assert record["candidate_index"] == 0
+    assert reason == "restart_from_verified_baseline"
 
 
-def test_pareto_candidate_beats_promising_synthesis_candidate() -> None:
+def test_retired_pareto_does_not_beat_refinement_eligible_synthesis_candidate() -> None:
     selected = select_refinement_parent(
         [
             {
@@ -88,8 +88,8 @@ def test_pareto_candidate_beats_promising_synthesis_candidate() -> None:
 
     assert selected is not None
     record, reason = selected
-    assert record["candidate_index"] == 1
-    assert reason == "pareto_candidate"
+    assert record["candidate_index"] == 2
+    assert reason == "synthesis_passed_refinement_eligible"
 
 
 def test_pareto_candidate_beats_newer_dominated_verified_candidates() -> None:
@@ -313,7 +313,7 @@ def test_latest_candidate_wins_within_same_quality_tier() -> None:
     assert reason == "csim_passed_candidate"
 
 
-def test_static_rejection_is_retained_as_last_resort_feedback_parent() -> None:
+def test_duplicate_after_static_rejection_restarts_from_verified_baseline() -> None:
     selected = select_refinement_parent(
         [
             {
@@ -337,31 +337,33 @@ def test_static_rejection_is_retained_as_last_resort_feedback_parent() -> None:
 
     assert selected is not None
     record, reason = selected
-    assert record["candidate_index"] == 1
-    assert reason == "latest_non_duplicate_fallback"
+    assert record["candidate_index"] == 0
+    assert reason == "restart_from_verified_baseline"
 
 
-def test_returns_none_when_every_candidate_is_a_duplicate() -> None:
-    assert (
-        select_refinement_parent(
-            [
-                {
-                    "candidate_index": 1,
-                    "static_validation": True,
-                    "csim": None,
-                    "synthesis": None,
-                    "fully_verified": False,
-                    "verdict": "reject_duplicate",
-                },
-                {
-                    "candidate_index": 2,
-                    "static_validation": True,
-                    "csim": None,
-                    "synthesis": None,
-                    "fully_verified": False,
-                    "verdict": "reject_duplicate",
-                },
-            ]
-        )
-        is None
+def test_all_duplicate_candidates_restart_from_verified_baseline() -> None:
+    selected = select_refinement_parent(
+        [
+            {
+                "candidate_index": 1,
+                "static_validation": True,
+                "csim": None,
+                "synthesis": None,
+                "fully_verified": False,
+                "verdict": "reject_duplicate",
+            },
+            {
+                "candidate_index": 2,
+                "static_validation": True,
+                "csim": None,
+                "synthesis": None,
+                "fully_verified": False,
+                "verdict": "reject_duplicate",
+            },
+        ]
     )
+
+    assert selected is not None
+    record, reason = selected
+    assert record["candidate_index"] == 0
+    assert reason == "restart_from_verified_baseline"
