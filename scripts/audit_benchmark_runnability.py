@@ -11,8 +11,8 @@ With ``--vitis`` the audit additionally executes the original source of every
 discoverable local benchmark through Vitis CSim. If CSim passes, synthesis is
 also executed. A design-level CSim/synthesis failure is *reported* but is not a
 runnability failure because many retained repair benchmarks are intentionally
-faulty. Exceptions, timeouts, missing paths and malformed configuration are
-hard failures.
+faulty. Tool/configuration failures, exceptions, timeouts, missing paths and
+malformed configuration are hard failures.
 
 No model provider or API key is required.
 """
@@ -94,16 +94,11 @@ def _audit_manifests(patterns: list[str]) -> list[AuditItem]:
             continue
         data = _load_json(path)
         if data is None:
-            items.append(
-                AuditItem("manifest", relative, "invalid_json", "could not parse JSON", True)
-            )
+            items.append(AuditItem("manifest", relative, "invalid_json", "could not parse JSON", True))
             continue
-
-        # Index/registry JSON files are not task manifests.
         if not {"task_id", "artifacts", "adapter"}.issubset(data):
             items.append(AuditItem("manifest", relative, "registry", "not a task manifest"))
             continue
-
         if _manifest_references_external(data):
             missing_external = False
             artifacts = data.get("artifacts", {})
@@ -114,33 +109,17 @@ def _audit_manifests(patterns: list[str]) -> list[AuditItem]:
                 *(artifacts.get("build_files") or []),
             ]:
                 if isinstance(value, str) and _external_reference(value):
-                    resolved = REPO_ROOT / value
-                    if not resolved.exists():
+                    if not (REPO_ROOT / value).exists():
                         missing_external = True
             if missing_external:
-                items.append(
-                    AuditItem(
-                        "manifest",
-                        relative,
-                        "external_dependency",
-                        "organiser/evaluator input is not present in this checkout",
-                    )
-                )
+                items.append(AuditItem("manifest", relative, "external_dependency", "organiser/evaluator input is not present in this checkout"))
                 continue
-
         try:
             task = load_task(path)
-        except Exception as error:  # noqa: BLE001 - audit must report every malformed task
+        except Exception as error:  # noqa: BLE001
             items.append(AuditItem("manifest", relative, "load_failed", str(error), True))
         else:
-            items.append(
-                AuditItem(
-                    "manifest",
-                    relative,
-                    "loaded",
-                    f"{task.task_id} [{task.adapter_kind}]",
-                )
-            )
+            items.append(AuditItem("manifest", relative, "loaded", f"{task.task_id} [{task.adapter_kind}]"))
     return items
 
 
@@ -154,7 +133,6 @@ def _audit_suites(patterns: list[str]) -> list[AuditItem]:
         if data is None:
             items.append(AuditItem("suite", relative, "invalid_json", "could not parse JSON", True))
             continue
-
         schema = data.get("schema_version")
         missing: list[str] = []
         external: list[str] = []
@@ -181,57 +159,33 @@ def _audit_suites(patterns: list[str]) -> list[AuditItem]:
                 if not resolved.exists():
                     (external if _external_reference(value) else missing).append(value)
         else:
-            items.append(
-                AuditItem("suite", relative, "unsupported_schema", f"schema_version={schema!r}", True)
-            )
+            items.append(AuditItem("suite", relative, "unsupported_schema", f"schema_version={schema!r}", True))
             continue
-
         if missing:
-            items.append(
-                AuditItem(
-                    "suite",
-                    relative,
-                    "missing_local_paths",
-                    ", ".join(sorted(set(missing))),
-                    True,
-                )
-            )
+            items.append(AuditItem("suite", relative, "missing_local_paths", ", ".join(sorted(set(missing))), True))
         elif external:
-            items.append(
-                AuditItem(
-                    "suite",
-                    relative,
-                    "loaded_with_external_dependencies",
-                    ", ".join(sorted(set(external))),
-                )
-            )
+            items.append(AuditItem("suite", relative, "loaded_with_external_dependencies", ", ".join(sorted(set(external))))
         else:
             items.append(AuditItem("suite", relative, "loaded"))
     return items
 
 
 def _discover_local_benchmarks(patterns: list[str]) -> tuple[list[tuple[str, Path]], list[AuditItem]]:
-    suite_path = REPO_ROOT / "configs" / "suites" / "overnight_full.json"
-    suite = _load_suite(suite_path)
+    suite = _load_suite(REPO_ROOT / "configs" / "suites" / "overnight_full.json")
     discovered = _expand_suite(suite)
     roots: dict[str, Path] = {}
     items: list[AuditItem] = []
-
     for spec in discovered:
         path = spec.resolved_path
         if not path.exists():
-            # Missing organiser packages are intentionally ignored here; suite
-            # path accounting is handled separately above.
             continue
         try:
             path.relative_to(REPO_ROOT / "benchmarks")
         except ValueError:
             continue
         relative = _display(path)
-        if not _matches(relative, patterns):
-            continue
-        roots[relative] = path
-
+        if _matches(relative, patterns):
+            roots[relative] = path
     for relative, path in sorted(roots.items()):
         try:
             task = resolve_benchmark(path)
@@ -240,14 +194,7 @@ def _discover_local_benchmarks(patterns: list[str]) -> tuple[list[tuple[str, Pat
         else:
             source = str(task.data["artifacts"]["source"])
             build = str(task.data["artifacts"]["build_files"][0])
-            items.append(
-                AuditItem(
-                    "benchmark",
-                    relative,
-                    "onboarded",
-                    f"top={task.data['interface']['top_function']} source={source} build={build}",
-                )
-            )
+            items.append(AuditItem("benchmark", relative, "onboarded", f"top={task.data['interface']['top_function']} source={source} build={build}"))
     return sorted(roots.items()), items
 
 
@@ -256,10 +203,25 @@ def _resolve_artifact(value: str) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def _tool_configuration_failure(report: dict[str, Any]) -> bool:
+    evidence = "\n".join(str(item) for item in report.get("evidence", [])).casefold()
+    indicators = (
+        "unknown option",
+        "invalid command name",
+        "couldn't read file",
+        "no such file or directory",
+        "cannot find",
+        "could not find baseline",
+        "missing required task.cfg",
+        "missing [hls] section",
+        "unsupported task.cfg",
+    )
+    return any(token in evidence for token in indicators)
+
+
 def _audit_vitis(benchmarks: list[tuple[str, Path]]) -> list[AuditItem]:
     items: list[AuditItem] = []
-    find_vitis_run()  # fail immediately with the normal actionable error if Vitis is not loaded
-
+    find_vitis_run()
     for relative, root in benchmarks:
         try:
             task = resolve_benchmark(root)
@@ -268,82 +230,37 @@ def _audit_vitis(benchmarks: list[tuple[str, Path]]) -> list[AuditItem]:
         except Exception as error:  # noqa: BLE001
             items.append(AuditItem("vitis", relative, "csim_exception", str(error), True))
             continue
-
         if bool(csim.get("timed_out")):
-            items.append(
-                AuditItem(
-                    "vitis",
-                    relative,
-                    "csim_timeout",
-                    str(csim.get("log_path", "")),
-                    True,
-                )
-            )
+            items.append(AuditItem("vitis", relative, "csim_timeout", str(csim.get("log_path", "")), True))
             continue
-
         if csim.get("passed") is not True:
-            # This is intentionally not a hard failure: syntax/functional repair
-            # benchmarks are expected to fail their submitted source. The
-            # important property is that the task reached Vitis and produced a
-            # classified result rather than raising a configuration/path error.
-            items.append(
-                AuditItem(
-                    "vitis",
-                    relative,
-                    "csim_design_failure",
-                    f"class={csim.get('failure_class')} log={csim.get('log_path')}",
-                )
-            )
+            if _tool_configuration_failure(csim):
+                items.append(AuditItem("vitis", relative, "csim_configuration_failure", f"class={csim.get('failure_class')} log={csim.get('log_path')}", True))
+            else:
+                items.append(AuditItem("vitis", relative, "csim_design_failure", f"class={csim.get('failure_class')} log={csim.get('log_path')}"))
             continue
-
         try:
             synthesis = run_synthesis(task, source)
         except Exception as error:  # noqa: BLE001
             items.append(AuditItem("vitis", relative, "synthesis_exception", str(error), True))
             continue
-
         if bool(synthesis.get("timed_out")):
-            items.append(
-                AuditItem(
-                    "vitis",
-                    relative,
-                    "synthesis_timeout",
-                    str(synthesis.get("log_path", "")),
-                    True,
-                )
-            )
+            items.append(AuditItem("vitis", relative, "synthesis_timeout", str(synthesis.get("log_path", "")), True))
         elif synthesis.get("passed") is True:
-            items.append(
-                AuditItem(
-                    "vitis",
-                    relative,
-                    "csim_and_synthesis_pass",
-                    f"log={synthesis.get('log_path')}",
-                )
-            )
+            items.append(AuditItem("vitis", relative, "csim_and_synthesis_pass", f"log={synthesis.get('log_path')}"))
+        elif _tool_configuration_failure(synthesis):
+            items.append(AuditItem("vitis", relative, "synthesis_configuration_failure", f"class={synthesis.get('failure_class')} log={synthesis.get('log_path')}", True))
         else:
-            items.append(
-                AuditItem(
-                    "vitis",
-                    relative,
-                    "synthesis_design_failure",
-                    f"class={synthesis.get('failure_class')} log={synthesis.get('log_path')}",
-                )
-            )
+            items.append(AuditItem("vitis", relative, "synthesis_design_failure", f"class={synthesis.get('failure_class')} log={synthesis.get('log_path')}"))
     return items
 
 
 def audit_repository(*, vitis: bool = False, patterns: list[str] | None = None) -> dict[str, Any]:
     patterns = list(patterns or [])
     benchmarks, benchmark_items = _discover_local_benchmarks(patterns)
-    items = [
-        *_audit_manifests(patterns),
-        *_audit_suites(patterns),
-        *benchmark_items,
-    ]
+    items = [*_audit_manifests(patterns), *_audit_suites(patterns), *benchmark_items]
     if vitis:
         items.extend(_audit_vitis(benchmarks))
-
     hard_failures = [item for item in items if item.hard_failure]
     return {
         "schema_version": 1,
@@ -367,30 +284,13 @@ def _print_report(report: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Audit all retained benchmark/manfiest paths and optionally exercise Vitis."
-    )
-    parser.add_argument(
-        "--vitis",
-        action="store_true",
-        help="also run CSim for every local benchmark and synthesis when CSim passes",
-    )
-    parser.add_argument(
-        "--only",
-        action="append",
-        default=[],
-        help="audit only paths containing this substring; may be repeated",
-    )
-    parser.add_argument(
-        "--json-out",
-        type=Path,
-        help="optionally write the complete audit report as JSON",
-    )
+    parser = argparse.ArgumentParser(description="Audit all retained benchmark/manifest paths and optionally exercise Vitis.")
+    parser.add_argument("--vitis", action="store_true", help="also run CSim for every local benchmark and synthesis when CSim passes")
+    parser.add_argument("--only", action="append", default=[], help="audit only paths containing this substring; may be repeated")
+    parser.add_argument("--json-out", type=Path, help="optionally write the complete audit report as JSON")
     args = parser.parse_args()
-
     report = audit_repository(vitis=args.vitis, patterns=args.only)
     _print_report(report)
-
     if args.json_out:
         output = args.json_out.expanduser()
         if not output.is_absolute():
@@ -398,7 +298,6 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"JSON report: {_display(output)}")
-
     raise SystemExit(0 if report["passed"] else 1)
 
 
