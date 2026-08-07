@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# The workstation stores Vitis as:
-#   /home/xilinx/Xilinx/2025.2/Vitis/...
-# docker/run-vitis.sh mounts /home/xilinx/Xilinx/2025.2 at /tools/Xilinx,
-# therefore the container-side Vitis root is /tools/Xilinx/Vitis.
-VITIS_ROOT="${LLM4HLS_VITIS_ROOT:-/tools/Xilinx/Vitis}"
+# AMD/Xilinx settings scripts in this workstation installation contain
+# absolute paths rooted at /home/xilinx/Xilinx/2025.2. Mount the installation
+# at the same absolute path inside the container so those generated scripts
+# remain valid.
+VITIS_ROOT="${LLM4HLS_VITIS_ROOT:-/home/xilinx/Xilinx/2025.2/Vitis}"
 SETTINGS="${VITIS_ROOT}/settings64.sh"
 
 if [[ ! -f "${SETTINGS}" ]]; then
   echo "ERROR: Vitis 2025.2 settings not found at ${SETTINGS}" >&2
-  echo "Mount the host Xilinx 2025.2 directory or set LLM4HLS_VITIS_ROOT." >&2
+  echo "Mount the host Xilinx 2025.2 directory at the same absolute path or set LLM4HLS_VITIS_ROOT." >&2
   exit 2
 fi
 
