@@ -81,12 +81,46 @@ def _absolute_options(options: list[str], tcl_dir: Path) -> list[str]:
     return result
 
 
+def _with_include_dir(options: list[str], include_dir: Path) -> list[str]:
+    """Ensure an add_files option list contains the supplied include directory."""
+    result = list(options)
+    include_flag = f"-I{include_dir.resolve().as_posix()}"
+
+    for index, token in enumerate(result[:-1]):
+        if token != "-cflags":
+            continue
+
+        flags = shlex.split(result[index + 1])
+        if include_flag not in flags:
+            flags.append(include_flag)
+        result[index + 1] = " ".join(flags)
+        return result
+
+    result.extend(["-cflags", include_flag])
+    return result
+
+
 def _absolute_add_files(command: str, tcl_dir: Path, replacement: Path | None = None) -> str:
     is_tb, options, source_text = _parse_add_files(command)
-    source = replacement.resolve() if replacement else Path(source_text)
-    if replacement is None and not source.is_absolute():
-        source = (tcl_dir / source).resolve()
+
+    original_source = Path(source_text)
+    if not original_source.is_absolute():
+        original_source = (tcl_dir / original_source).resolve()
+
+    source = replacement.resolve() if replacement else original_source
     options = _absolute_options(options, tcl_dir)
+
+    # A generated candidate normally lives outside the benchmark's original
+    # source directory. Preserve that directory on the compiler include path
+    # so includes such as #include "vector_add.h" continue to resolve.
+    if replacement is not None and original_source.suffix.lower() in {
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+    }:
+        options = _with_include_dir(options, original_source.parent)
+
     tokens = ["add_files"]
     if is_tb and "-tb" not in options:
         tokens.append("-tb")
@@ -129,11 +163,16 @@ def _cfg_parts(
             flags.append(flag)
         return " ".join(flags)
 
-    design_tokens = ["add_files"]
+    design_options: list[str] = []
     absolute_syn_cflags = absolute_cflags(syn_cflags)
     if absolute_syn_cflags:
-        design_tokens.extend(["-cflags", absolute_syn_cflags])
-    design_tokens.append(candidate.resolve().as_posix())
+        design_options.extend(["-cflags", absolute_syn_cflags])
+
+    # Candidates are emitted outside the original source directory. Always
+    # preserve that directory as an include path for local benchmark headers.
+    design_options = _with_include_dir(design_options, source.parent)
+
+    design_tokens = ["add_files", *design_options, candidate.resolve().as_posix()]
     design = " ".join(shlex.quote(token) for token in design_tokens)
 
     auxiliaries: list[str] = []
