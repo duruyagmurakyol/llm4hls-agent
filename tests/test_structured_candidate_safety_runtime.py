@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -92,6 +93,30 @@ def _config(tmp_path: Path) -> Path:
     return path
 
 
+def _bounded_partition_variables(source: str) -> set[str]:
+    variables: set[str] = set()
+    for line in source.splitlines():
+        if "ARRAY_PARTITION" not in line:
+            continue
+        variable = re.search(
+            r"\bvariable\s*=\s*([A-Za-z_]\w*)",
+            line,
+            re.IGNORECASE,
+        )
+        if variable is None:
+            continue
+        if not re.search(r"\bcyclic\b", line, re.IGNORECASE):
+            continue
+        if not re.search(r"\bfactor\s*=\s*2\b", line, re.IGNORECASE):
+            continue
+        if not re.search(r"\bdim\s*=\s*1\b", line, re.IGNORECASE):
+            continue
+        if re.search(r"\bcomplete\b", line, re.IGNORECASE):
+            continue
+        variables.add(variable.group(1))
+    return variables
+
+
 def test_runtime_canonicalises_before_source_hash_and_static_validation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -113,7 +138,7 @@ def test_runtime_canonicalises_before_source_hash_and_static_validation(
     assert "#pragma HLS DATAFLOW" not in source
     assert "#pragma HLS UNROLL factor=2" in source
     assert " complete" not in source
-    assert source.count("cyclic factor=2 dim=1") == 3
+    assert _bounded_partition_variables(source) == {"a", "b", "c"}
     assert "vector_add_loop:" in source
 
     report_path = (
