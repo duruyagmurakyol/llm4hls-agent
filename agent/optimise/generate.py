@@ -76,8 +76,9 @@ def minimal_edit_prompt_suffix() -> str:
         "- Do not encode reasoning as C++ comments; explanatory comments are unnecessary.\n"
         "- Preserve unrelated code verbatim and make the smallest executable change that realises the assigned strategy.\n"
         "- Comments or whitespace alone do not count as a candidate change.\n"
+        "- A valid optimisation candidate must contain at least one executable or HLS-directive change relative to the implementation parent.\n"
         "- Do not rewrite the whole algorithm or add speculative unrelated transformations.\n"
-        "- If the requested strategy cannot be applied safely, return the original source unchanged rather than inventing a broad rewrite."
+        "- If one mechanism is unsafe, choose the smallest legal alternative within the assigned strategy family; do not return the implementation parent unchanged."
     )
 
 
@@ -364,6 +365,8 @@ def generate_candidate(
                 "compilable C++ source file. Never expose reasoning or deliberation, "
                 "including as source comments. Preserve unrelated code verbatim and "
                 "make the smallest executable change that realises the assigned strategy. "
+                "A valid response must materially differ from its implementation parent "
+                "through executable code or HLS directives; never return the parent unchanged. "
                 "Comments or whitespace alone do not count as a change. Follow all "
                 "supplied safety, interface, correctness, and resource constraints exactly."
             ),
