@@ -25,6 +25,7 @@ RESOURCE_LIMIT_FIELDS = (
     ("dsp", "resources_dsp_used", "DSP"),
     ("bram", "resources_bram_used", "BRAM"),
 )
+CORRECTIVE_RETRY_MARKER = "CORRECTIVE RETRY FOR THIS SAME CANDIDATE SLOT:"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -310,6 +311,9 @@ def generate_candidate(
     effective_prompt_path = output_dir / f"candidate_{candidate_index:03d}_effective_prompt.txt"
     strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
     exhausted_path = output_dir / f"candidate_{candidate_index:03d}_strategy_exhausted.json"
+    candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
+    metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
+    retry_failure_path = output_dir / f"candidate_{candidate_index:03d}_generation_retry_failure.json"
     if not prompt_path.is_file():
         raise FileNotFoundError(f"Prompt not found: {prompt_path}")
 
@@ -342,6 +346,7 @@ def generate_candidate(
         + minimal_edit_prompt_suffix()
     )
     effective_prompt_path.write_text(user_prompt, encoding="utf-8")
+    corrective_retry = CORRECTIVE_RETRY_MARKER in user_prompt and candidate_path.is_file()
 
     model_name = str(model_config["name"])
     print("\nSiliconFlow candidate generation")
@@ -375,9 +380,41 @@ def generate_candidate(
             max_tokens=int(model_config.get("max_tokens", 4096)),
             enable_thinking=model_config.get("enable_thinking"),
         )
-    except Exception:
+    except Exception as error:
         if budget is not None:
             budget.update_last_event(success=False)
+        if corrective_retry:
+            failure = {
+                "generation_mode": "corrective_same_slot_retry",
+                "generation_retry_failed": True,
+                "candidate_index": candidate_index,
+                "provider": "siliconflow",
+                "model": model_name,
+                "required_top": required_top,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "latency_seconds": 0.0,
+                "error_type": type(error).__name__,
+                "error": str(error),
+                "prompt_file": str(prompt_path.relative_to(REPO_ROOT)),
+                "effective_prompt_file": str(effective_prompt_path.relative_to(REPO_ROOT)),
+                "candidate_file": str(candidate_path.relative_to(REPO_ROOT)),
+            }
+            retry_failure_path.write_text(
+                json.dumps(failure, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            metadata_path.write_text(
+                json.dumps(failure, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(
+                f"Corrective generation retry failed ({type(error).__name__}); "
+                "preserving the first attempt and continuing.",
+                flush=True,
+            )
+            return candidate_path
         raise
 
     if budget is not None:
@@ -390,8 +427,6 @@ def generate_candidate(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_path = output_dir / f"candidate_{candidate_index:03d}_model_response.txt"
-    metadata_path = output_dir / f"candidate_{candidate_index:03d}_model_metadata.json"
-    candidate_path = output_dir / f"candidate_{candidate_index:03d}.cpp"
 
     raw_path.write_text(response.content.rstrip() + "\n", encoding="utf-8")
     candidate_source = extract_cpp(response.content, required_top)
