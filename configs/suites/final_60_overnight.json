@@ -1,0 +1,231 @@
+{
+  "schema_version": 2,
+  "suite_id": "final_60_overnight",
+  "description": "Final 60-run overnight evaluation: 20 tasks across three model families, covering PPA optimisation, conventional and iterative repair, specification-to-kernel generation, synthesis-specific repair, and structural C/RTL co-simulation repair.",
+  "expected_runs": 60,
+  "order": "task_then_model",
+  "defaults": {
+    "timeout_seconds": 5400,
+    "continue_on_error": true,
+    "cleanup_vitis_cache_after_run": true
+  },
+  "models": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "slug": "deepseek_v4_pro",
+      "provider": "siliconflow"
+    },
+    {
+      "id": "Qwen/Qwen3.5-122B-A10B",
+      "slug": "qwen35_122b_a10b",
+      "provider": "siliconflow"
+    },
+    {
+      "id": "moonshotai/Kimi-K2.7-Code",
+      "slug": "kimi_k27_code",
+      "provider": "siliconflow"
+    }
+  ],
+  "tasks": [
+    {
+      "priority": 1,
+      "tier": "core",
+      "id": "vector_add_optimise",
+      "path": "benchmarks/vector_add",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 2,
+      "tier": "core",
+      "id": "dot_product_optimise",
+      "path": "external/fpt26-harness/tasks/dotProduct_optimize",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "dot_product"
+    },
+    {
+      "priority": 3,
+      "tier": "core",
+      "id": "atax_optimise",
+      "path": "benchmarks/hls_eval/atax",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "atax"
+    },
+    {
+      "priority": 4,
+      "tier": "core",
+      "id": "bicg_u55c_optimise",
+      "path": "experiments/smoke_inputs/bicg_u55c",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 5,
+      "tier": "core",
+      "id": "gemm_u55c_optimise",
+      "path": "experiments/smoke_inputs/gemm_u55c",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "gemm"
+    },
+    {
+      "priority": 6,
+      "tier": "core",
+      "id": "fir_small_optimise",
+      "path": "benchmarks/fir_small",
+      "mode": "optimise",
+      "role": "optimisation",
+      "subtype": "ppa",
+      "canonical_design": "fir"
+    },
+    {
+      "priority": 7,
+      "tier": "core",
+      "id": "vector_add_syntax_missing_semicolon",
+      "path": "benchmarks/vector_add/faults/syntax_missing_semicolon",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "syntax",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 8,
+      "tier": "core",
+      "id": "vector_add_indexing_off_by_one",
+      "path": "benchmarks/vector_add/faults/indexing_off_by_one",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "indexing",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 9,
+      "tier": "core",
+      "id": "vector_add_interface_wrong_top_name",
+      "path": "benchmarks/vector_add/faults/interface_wrong_top_name",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "interface",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 10,
+      "tier": "core",
+      "id": "vector_add_functional_subtraction",
+      "path": "benchmarks/vector_add/faults/functional_subtraction",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "functional_arithmetic",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 11,
+      "tier": "core",
+      "id": "bicg_functional_wrong_operator",
+      "path": "benchmarks/bicg/faults/functional_wrong_operator",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "functional_arithmetic",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 12,
+      "tier": "core",
+      "id": "bicg_indexing_off_by_one",
+      "path": "benchmarks/bicg/faults/indexing_off_by_one",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "indexing",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 13,
+      "tier": "core",
+      "id": "bicg_multi_fault_feedback",
+      "path": "benchmarks/bicg/faults/multi_fault_feedback",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "multi_fault_feedback",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 14,
+      "tier": "core",
+      "id": "bicg_staged_compile_then_functional",
+      "path": "benchmarks/bicg/faults/staged_compile_then_functional",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "staged_compile_functional",
+      "canonical_design": "bicg"
+    },
+    {
+      "priority": 15,
+      "tier": "extended",
+      "id": "gemm_functional_wrong_sign",
+      "path": "benchmarks/repair_suite/gemm/functional_wrong_sign",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "functional_arithmetic",
+      "canonical_design": "gemm"
+    },
+    {
+      "priority": 16,
+      "tier": "extended",
+      "id": "gemm_loop_bound_missing_k",
+      "path": "benchmarks/repair_suite/gemm/loop_bound_missing_k",
+      "mode": "repair",
+      "role": "repair",
+      "subtype": "loop_bound",
+      "canonical_design": "gemm"
+    },
+    {
+      "priority": 17,
+      "tier": "capability",
+      "id": "vector_add_generate",
+      "path": "benchmarks/capability_suite/vector_add_generate",
+      "mode": "repair",
+      "role": "generation",
+      "subtype": "specification_to_kernel",
+      "canonical_design": "vector_add"
+    },
+    {
+      "priority": 18,
+      "tier": "capability",
+      "id": "synth_fix_dynamic_buffer",
+      "path": "benchmarks/capability_suite/synth_fix_dynamic_buffer",
+      "mode": "repair",
+      "role": "synthesis_repair",
+      "subtype": "unsupported_dynamic_allocation",
+      "canonical_design": "vector_scale"
+    },
+    {
+      "priority": 19,
+      "tier": "capability",
+      "id": "residual_stream_deadlock",
+      "path": "external/fpt26-harness/tasks/residual_stream_deadlock",
+      "mode": "repair",
+      "role": "structural_repair",
+      "subtype": "cosim_stream_deadlock",
+      "canonical_design": "residual_stream"
+    },
+    {
+      "priority": 20,
+      "tier": "capability",
+      "id": "structural_blind_stream",
+      "path": "benchmarks/capability_suite/structural_blind_stream",
+      "mode": "repair",
+      "role": "structural_repair",
+      "subtype": "blind_cosim_stream_deadlock",
+      "canonical_design": "stream_pipeline"
+    }
+  ]
+}
