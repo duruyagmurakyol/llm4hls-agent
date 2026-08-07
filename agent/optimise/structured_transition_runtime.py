@@ -1,16 +1,16 @@
 """Keep structured exploration moving after an early rejected candidate.
 
 The bounded runner normally recognises completed C1-C3 slots from their audit
-metadata.  A candidate can nevertheless be rejected before CSim and marked
-``refinement_eligible = false``.  The legacy selector then requests a generic
+metadata. A candidate can nevertheless be rejected before CSim and marked
+``refinement_eligible = false``. The legacy selector then requests a generic
 baseline restart, whose prompt builder is intended for measured no-gain results
 rather than an early static rejection.
 
-This compatibility guard sits underneath the bounded runner.  It recognises a
+This compatibility guard sits underneath the bounded runner. It recognises a
 completed structured exploration slot from persisted strategy, feedback, or
 prompt evidence and returns the verified baseline for the next exploration
-slot.  Legacy configurations have none of that evidence and are delegated to
-the original selector unchanged.
+slot. Diagnosis-aware runs read the immutable per-run exploration plan; older
+runs without that file retain the historical fixed family mapping.
 """
 
 from __future__ import annotations
@@ -23,11 +23,12 @@ from typing import Any
 from agent.optimise import runner_legacy
 
 STRUCTURED_PARENT_REASON = "structured_baseline_exploration"
-EXPLORATION_FAMILIES = {
+DEFAULT_EXPLORATION_FAMILIES = {
     1: "critical_path_restructuring",
     2: "bounded_unroll",
     3: "memory_parallelism",
 }
+EXPLORATION_PLAN_FILE = "structured_exploration_plan.json"
 
 _ORIGINAL_SELECT: Any = None
 
@@ -50,6 +51,19 @@ def _candidate_output_dir(record: dict[str, Any]) -> Path | None:
     if not path.is_absolute():
         path = Path(runner_legacy.REPO_ROOT) / path
     return path.parent
+
+
+def _exploration_family(output_dir: Path, index: int) -> str:
+    plan = _load_optional(output_dir / EXPLORATION_PLAN_FILE)
+    selected = plan.get("selected_strategy_families")
+    if (
+        isinstance(selected, list)
+        and len(selected) == 3
+        and all(isinstance(item, str) and item for item in selected)
+        and index in {1, 2, 3}
+    ):
+        return selected[index - 1]
+    return DEFAULT_EXPLORATION_FAMILIES[index]
 
 
 def _strategy_evidence(output_dir: Path, index: int, family: str) -> bool:
@@ -103,7 +117,7 @@ def _slot_has_structured_evidence(
     output_dir: Path,
     index: int,
 ) -> bool:
-    family = EXPLORATION_FAMILIES[index]
+    family = _exploration_family(output_dir, index)
     return any(
         (
             _strategy_evidence(output_dir, index, family),
@@ -153,7 +167,7 @@ def _structured_baseline_transition(
             "fully_verified": True,
             "verdict": STRUCTURED_PARENT_REASON,
             "next_candidate_index": next_index,
-            "strategy_family": EXPLORATION_FAMILIES[next_index],
+            "strategy_family": _exploration_family(output_dir, next_index),
         },
         STRUCTURED_PARENT_REASON,
     )
