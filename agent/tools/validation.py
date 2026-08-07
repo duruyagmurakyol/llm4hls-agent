@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.failures import FailureStage, classify_failure as classify_hls_failure
+from agent.optimise.duplicate import normalise_source
 from agent.optimise.refinement_strategy import check_strategy_compliance
 from agent.state import ValidationResult
 from agent.tools.command_runner import CommandResult
@@ -259,7 +260,7 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
     strategy_path = output_dir / f"candidate_{candidate_index:03d}_strategy.json"
     strategy = load_json(strategy_path) if strategy_path.is_file() else None
     strategy_compliance = (
-        check_strategy_compliance(candidate, strategy)
+        check_strategy_compliance(candidate, strategy, baseline=baseline)
         if strategy is not None
         else {"required": False, "passed": True}
     )
@@ -275,6 +276,7 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         _pipeline_complete_unroll_conflicts(candidate, top) if loop_pragma_guard else []
     )
     baseline_c, candidate_c = _has_c_linkage(baseline, top), _has_c_linkage(candidate, top)
+    semantic_change = normalise_source(baseline) != normalise_source(candidate)
 
     checks: dict[str, bool] = {
         "non_empty": bool(candidate.strip()),
@@ -282,7 +284,7 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         "contains_required_top": bool(re.search(rf"\b{re.escape(top)}\s*\(", candidate)),
         "contains_no_markdown_fence": "```" not in candidate,
         "balanced_braces": candidate.count("{") == candidate.count("}"),
-        "baseline_and_candidate_differ": baseline != candidate,
+        "baseline_and_candidate_differ": semantic_change,
         "top_signature_preserved": (
             _normalised_signature(baseline, top) == _normalised_signature(candidate, top)
             and _normalised_signature(candidate, top) is not None
@@ -349,6 +351,7 @@ def validate_ppa_candidate(config_path: Path, candidate_index: int = 1) -> dict[
         "pipeline_complete_unroll_guard_enabled": loop_pragma_guard,
         "pipeline_complete_unroll_conflicts": pipeline_unroll_conflicts,
         "changed_diff_lines": changed_lines,
+        "semantic_change": semantic_change,
         "baseline_c_linkage": baseline_c,
         "candidate_c_linkage": candidate_c,
         "note": "Static validation is a pre-synthesis gate and does not prove functional correctness.",
