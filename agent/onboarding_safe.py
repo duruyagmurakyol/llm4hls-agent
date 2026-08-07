@@ -14,7 +14,11 @@ DEFAULT_MODEL = {
     "provider": "siliconflow",
     "name": "Qwen/Qwen3.5-122B-A10B",
     "temperature": 0.0,
-    "max_tokens": 4096,
+    # Thinking-enabled Qwen3.5 can spend roughly four thousand completion
+    # tokens on reasoning before it starts emitting source.  Keep thinking on
+    # (it materially improves non-trivial HLS edits) but leave enough headroom
+    # for the complete C++ file instead of truncating at the reasoning boundary.
+    "max_tokens": 8192,
     "timeout_seconds": 120,
     "enable_thinking": True,
 }
