@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "map_siliconflow_model_ids.py"
+SCRIPT = REPO_ROOT / "scripts" / "maintenance" / "map_siliconflow_model_ids.py"
 
 
 def _module():
