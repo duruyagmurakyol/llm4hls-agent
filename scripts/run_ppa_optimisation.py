@@ -190,6 +190,47 @@ def analyse_source_causes(config: dict[str, Any], repo_root: Path, source_target
     return output_path
 
 
+def _render_measured_hls_evidence(target: dict[str, Any]) -> str:
+    """Render the exact hierarchical diagnosis selected for source optimisation."""
+
+    report = target.get("diagnosis")
+    if not isinstance(report, dict):
+        report = {}
+    primary = report.get("primary_diagnosis")
+    if not isinstance(primary, dict):
+        primary = {}
+
+    category = primary.get("category") or report.get("category") or "unknown"
+    diagnosis_target = primary.get("target")
+    confidence = primary.get("confidence")
+    achieved_ii = report.get("max_achieved_ii")
+    latency = report.get("latency_cycles")
+    interval = report.get("interval_cycles")
+    evidence = primary.get("evidence") if isinstance(primary.get("evidence"), list) else []
+    recommendations = (
+        primary.get("recommended_transformations")
+        if isinstance(primary.get("recommended_transformations"), list)
+        else []
+    )
+
+    lines = [f"- Diagnosis category: {category}"]
+    if diagnosis_target:
+        lines.append(f"- Diagnosis target: {diagnosis_target}")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        lines.append(f"- Diagnosis confidence: {float(confidence):.2f}")
+    if isinstance(achieved_ii, (int, float)) and not isinstance(achieved_ii, bool):
+        lines.append(f"- Achieved II: {float(achieved_ii):g}")
+    if isinstance(latency, (int, float)) and not isinstance(latency, bool):
+        lines.append(f"- Target-region latency: {float(latency):g} cycles")
+    if isinstance(interval, (int, float)) and not isinstance(interval, bool):
+        lines.append(f"- Target-region interval: {float(interval):g} cycles")
+    for item in evidence:
+        lines.append(f"- Evidence: {item}")
+    for item in recommendations:
+        lines.append(f"- Recommended transformation: {item}")
+    return "\n".join(lines)
+
+
 def generate_optimisation_prompt(config: dict[str, Any], repo_root: Path, diagnosis_path: Path, source_target_path: Path, source_cause_path: Path) -> Path:
     diagnosis = load_json(diagnosis_path)
     target = load_json(source_target_path)
@@ -210,6 +251,7 @@ def generate_optimisation_prompt(config: dict[str, Any], repo_root: Path, diagno
     ]
     numbered = "\n".join(f"{i}. {item}" for i, item in enumerate([*base_constraints, *constraints], 1))
     alternative_text = "\n".join(f"- {item['category']} (confidence {item['confidence']})" for item in alternatives) or "- None"
+    measured_evidence = _render_measured_hls_evidence(target)
     prompt = f"""You are optimising an AMD/Xilinx Vitis HLS C++ kernel.
 
 Benchmark: {config['benchmark']}
@@ -220,7 +262,9 @@ Selected target:
 - Function/report: {target['target_name']}
 - Loop label: {target['loop_label']}
 - Source region: lines {target['region_start_line']}-{target['region_end_line']}
-- Report diagnosis: {target['diagnosis'].get('category', 'unknown')}
+
+Measured HLS evidence (authoritative):
+{measured_evidence}
 
 Primary source-level hypothesis:
 - Category: {primary['category']}
