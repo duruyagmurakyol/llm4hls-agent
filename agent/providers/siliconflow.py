@@ -28,6 +28,12 @@ NON_THINKING_MODELS = {
     "Qwen/Qwen3.5-122B-A10B",
     "Qwen/Qwen3.6-27B",
 }
+# When thinking is explicitly enabled for source-generation models, cap
+# reasoning so it cannot consume the whole completion budget before emitting
+# the required source file. Explicit caller-provided thinking_budget wins.
+DEFAULT_THINKING_BUDGETS = {
+    "Qwen/Qwen3.5-122B-A10B": 1536,
+}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
@@ -156,6 +162,14 @@ def complete(
     if effective_enable_thinking is None and model in NON_THINKING_MODELS:
         effective_enable_thinking = False
 
+    effective_thinking_budget = thinking_budget
+    if (
+        selected_provider == "siliconflow"
+        and effective_enable_thinking is True
+        and effective_thinking_budget is None
+    ):
+        effective_thinking_budget = DEFAULT_THINKING_BUDGETS.get(model)
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -169,8 +183,11 @@ def complete(
     # SiliconFlow exposes these extension fields. Do not send them to
     # OpenRouter, whose model-specific reasoning controls differ.
     if selected_provider == "siliconflow":
-        if thinking_budget is not None and effective_enable_thinking is not False:
-            payload["thinking_budget"] = thinking_budget
+        if (
+            effective_thinking_budget is not None
+            and effective_enable_thinking is not False
+        ):
+            payload["thinking_budget"] = effective_thinking_budget
         if effective_enable_thinking is not None:
             payload["enable_thinking"] = effective_enable_thinking
 
@@ -231,13 +248,15 @@ def complete(
         if finish_reason == "length" and isinstance(reasoning, str) and reasoning.strip():
             raise RuntimeError(
                 f"{selected_provider} exhausted the output budget during reasoning "
-                "before returning final content. Disable thinking for this experiment "
-                "or increase max_tokens."
+                "before returning final content. Set a smaller thinking_budget or "
+                "increase max_tokens."
             )
         raise RuntimeError(f"{selected_provider} returned empty content: {raw}")
 
     raw["_llm4hls_provider"] = selected_provider
     raw["_llm4hls_endpoint"] = request_url
+    if effective_thinking_budget is not None:
+        raw["_llm4hls_thinking_budget"] = effective_thinking_budget
     if prompt_compaction is not None:
         raw["_client_prompt_compaction"] = prompt_compaction
 
