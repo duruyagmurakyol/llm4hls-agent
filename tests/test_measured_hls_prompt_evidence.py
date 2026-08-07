@@ -41,6 +41,32 @@ def test_vitis_core_ram_lower_bound_is_memory_port_contention() -> None:
     )
 
 
+def test_project_wide_ram_warning_does_not_contaminate_ii1_report() -> None:
+    evidence = {
+        "warnings": [
+            "WARNING: [HLS 200-448] Lower bound of II is 19 due to multiple "
+            "'load' operation 64 bit ('A_load') on array 'A' accessing core:RAM:A"
+        ],
+        "loops": [
+            {
+                "name": "VITIS_LOOP_16_1",
+                "achieved_ii": 1,
+                "target_ii": None,
+                "latency_cycles": 40,
+                "pipelined": True,
+            }
+        ],
+        "top_function": {"interval_cycles": 40},
+        "constraints": {"interface_frozen": False},
+        "clock": {},
+        "resources": {},
+    }
+
+    result = analyse(evidence)
+
+    assert result["primary_diagnosis"]["category"] != "memory_port_contention"
+
+
 def test_optimisation_prompt_contains_nested_measured_hls_evidence(tmp_path: Path) -> None:
     source = tmp_path / "kernel.cpp"
     source.write_text(
