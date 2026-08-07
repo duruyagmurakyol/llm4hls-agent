@@ -17,6 +17,10 @@ DEFAULT_MODEL = {
     "max_tokens": 4096,
     "timeout_seconds": 120,
     "enable_thinking": True,
+    # Keep Qwen's useful reasoning mode, but reserve enough of the completion
+    # budget for the actual source file instead of allowing reasoning to consume
+    # the entire 4096-token response.
+    "thinking_budget": 1536,
 }
 
 DEFAULT_BUDGETS = {
