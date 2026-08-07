@@ -47,6 +47,15 @@
     "max_tokens": 4096,
     "enable_thinking": false
   },
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Keep all accesses within A[38][42], x[42], y[42], and tmp[38].",
+      "Preserve the complete ATAX computation: tmp = A*x followed by y = A^T*tmp.",
+      "Preserve the kernel_atax top-level signature and all testbench-observed behaviour.",
+      "Use hardware-relevant HLS transformations and retain only fully validated latency-resource trade-offs."
+    ]
+  },
   "search_policy": {
     "mode": "structured_v1"
   },
