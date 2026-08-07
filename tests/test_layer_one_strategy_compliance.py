@@ -44,7 +44,7 @@ def test_buffered_parallelism_requires_memory_and_compute_evidence() -> None:
     assert result["required"] is True
     assert result["passed"] is True
     assert result["reason"] == "buffered_parallelism_evidence_found"
-    assert result["observed"]["banked_new_local_arrays"] == ["row"]
+    assert result["observed"]["matched_partition_unroll"][0]["factor"] == 4
 
 
 def test_buffered_parallelism_rejects_unmatched_banking_only() -> None:
@@ -91,8 +91,58 @@ def test_buffered_parallelism_rejects_top_level_partition_plus_unroll() -> None:
     assert result["passed"] is False
     assert result["reason"] == "buffered_parallelism_not_realised"
     assert result["observed"]["new_local_arrays"] == []
-    assert result["observed"]["banked_new_local_arrays"] == []
+    assert result["observed"]["matched_partition_unroll"] == []
     assert result["observed"]["bounded_unroll"]["passed"] is True
+
+
+def test_buffered_parallelism_rejects_complete_local_partition() -> None:
+    candidate = """void kernel(double A[8][8], double C[8]) {
+    double row[8];
+#pragma HLS ARRAY_PARTITION variable=row complete
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < 8; ++j) row[j] = A[i][j];
+        for (int j = 0; j < 8; ++j) {
+#pragma HLS UNROLL factor=4
+            C[j] += row[j];
+        }
+    }
+}
+"""
+
+    result = check_strategy_compliance(
+        candidate,
+        _buffered_strategy(),
+        baseline=BASELINE,
+    )
+
+    assert result["passed"] is False
+    assert result["observed"]["bounded_local_partitions"] == []
+    assert result["observed"]["matched_partition_unroll"] == []
+
+
+def test_buffered_parallelism_rejects_mismatched_partition_unroll_factor() -> None:
+    candidate = """void kernel(double A[8][8], double C[8]) {
+    double row[8];
+#pragma HLS ARRAY_PARTITION variable=row cyclic factor=4 dim=1
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < 8; ++j) row[j] = A[i][j];
+        for (int j = 0; j < 8; ++j) {
+#pragma HLS UNROLL factor=2
+            C[j] += row[j];
+        }
+    }
+}
+"""
+
+    result = check_strategy_compliance(
+        candidate,
+        _buffered_strategy(),
+        baseline=BASELINE,
+    )
+
+    assert result["passed"] is False
+    assert result["observed"]["bounded_local_partitions"][0]["factor"] == 4
+    assert result["observed"]["matched_partition_unroll"] == []
 
 
 def test_dataflow_pipeline_requires_new_dataflow_pragma() -> None:
