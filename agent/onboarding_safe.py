@@ -209,6 +209,7 @@ def resolve_benchmark(root: Path) -> TaskManifest:
             "selection": dict(DEFAULT_OPTIMISATION["selection"]),
         },
         "adapter": {"kind": "auto"},
+        "search_policy": {"mode": "structured_v1"},
         "output_dir": f"experiments/track_a/{task_id}",
     }
     return TaskManifest(path=root, data=data)
