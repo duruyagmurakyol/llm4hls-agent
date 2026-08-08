@@ -5,6 +5,7 @@
 
 # Local test executables
 add_test
+host_test
 
 # Vitis HLS generated projects
 *_project/
@@ -16,6 +17,7 @@ solution*/
 .gen/
 .hw/
 .ip_user_files/
+hls.app
 
 # Simulation-generated files
 *.log
@@ -53,6 +55,3 @@ experiments/track_a_runs/
 experiments/
 logs/
 results/
-
-# Downloaded/generated HLS-Eval benchmark material
-benchmarks/hls_eval_imported/
