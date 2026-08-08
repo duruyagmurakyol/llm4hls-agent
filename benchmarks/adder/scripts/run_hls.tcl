@@ -6,7 +6,7 @@ add_files -tb ../testbench/add_test.cpp
 
 open_solution -reset solution1
 
-set_part {xczu3eg-sfvc784-2-e}
+set_part {xcu55c-fsvh2892-2L-e}
 create_clock -period 10 -name default
 
 csim_design
