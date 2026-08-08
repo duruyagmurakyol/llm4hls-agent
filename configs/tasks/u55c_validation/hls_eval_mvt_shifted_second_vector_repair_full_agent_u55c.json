@@ -1,0 +1,128 @@
+{
+  "task_id": "hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c",
+  "task_kind": "unknown",
+  "artifacts": {
+    "source": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/src/mvt.cpp",
+    "testbench": [
+      "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/testbench/mvt_tb.cpp"
+    ],
+    "headers": [
+      "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/src/mvt.h"
+    ],
+    "specification": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector/kernel_description.md",
+    "build_files": [
+      "configs/tasks/u55c_validation/build/hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c.cfg"
+    ]
+  },
+  "interface": {
+    "top_function": "kernel_mvt",
+    "language": "cpp",
+    "numerical_tolerance": 1e-08,
+    "protected_contract": [
+      "Preserve the exact kernel_mvt function signature.",
+      "Modify only src/mvt.cpp.",
+      "Update x1 using A[i][j] and y_1[j].",
+      "Update x2 using A[j][i] and the matching y_2[j] element."
+    ]
+  },
+  "target": {
+    "tool": "AMD Vitis HLS",
+    "tool_version": "2025.2",
+    "platform": "Alveo U55C",
+    "part": "xcu55c-fsvh2892-2L-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0,
+    "resource_limits": {
+      "lut": 1303680,
+      "ff": 2607360,
+      "dsp": 9024,
+      "bram_18k": 4032
+    }
+  },
+  "budgets": {
+    "max_iterations": 8,
+    "max_csim_calls": 10,
+    "max_cosim_calls": 10,
+    "max_synthesis_calls": 10,
+    "max_model_calls": 8,
+    "max_total_tokens": 32768
+  },
+  "model": {
+    "provider": "siliconflow",
+    "name": "Qwen/Qwen3.5-122B-A10B",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "timeout_seconds": 180,
+    "enable_thinking": false
+  },
+  "repair": {
+    "benchmark_source": "benchmarks/hls_eval_imported/mvt/faults/shifted_second_vector",
+    "editable_files": [
+      "src/mvt.cpp"
+    ],
+    "protected_files": [
+      "src/mvt.h",
+      "testbench/mvt_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "context_files": [
+      "src/mvt.h",
+      "testbench/mvt_tb.cpp",
+      "kernel_description.md",
+      "task.cfg"
+    ],
+    "host_validation": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-Isrc",
+        "src/mvt.cpp",
+        "testbench/mvt_tb.cpp",
+        "-o",
+        "host_test"
+      ],
+      "run_command": [
+        "./host_test"
+      ]
+    },
+    "independent_validation": {
+      "enabled": true,
+      "command": [
+        "bash",
+        "-lc",
+        "cd '{workspace}' && vitis-run --mode hls --csim --config task.cfg --work_dir vitis_work"
+      ]
+    }
+  },
+  "adapter": {
+    "kind": "auto"
+  },
+  "output_dir": "runs/u55c_validation/hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c",
+  "provenance": {
+    "upstream_repository": "sharc-lab/hls-eval",
+    "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b",
+    "upstream_directory": "hls_eval_data/polybench/mvt",
+    "testbench_note": "The upstream print-only harness is retained under golden; the repair case uses a self-checking derivative."
+  },
+  "source_task_manifest": "configs/tasks/hls_eval_imported/mvt_shifted_second_vector.json",
+  "optimisation": {
+    "validation": {},
+    "prompt_constraints": [
+      "Optimise only after kernel_mvt has become a fully verified repaired baseline.",
+      "Preserve the exact top-level interface and all testbench-observed behaviour.",
+      "Use hardware-relevant HLS transformations rather than comments, renaming, or no-op rewrites.",
+      "Do not completely partition top-level interface arrays.",
+      "Target the AMD Alveo U55C part xcu55c-fsvh2892-2L-e; treat 100 MHz and the configured U55C resource limits as hard constraints."
+    ]
+  },
+  "parent_task_id": "hls_eval_mvt_shifted_second_vector_repair_full_agent",
+  "target_validation": {
+    "purpose": "competition_target_representative_rerun",
+    "source_manifest": "configs/tasks/combined_full_agent/hls_eval_mvt_shifted_second_vector_repair_full_agent.json",
+    "target_board": "AMD Alveo U55C",
+    "target_part": "xcu55c-fsvh2892-2L-e",
+    "clock_period_ns": 10.0,
+    "minimum_frequency_mhz": 100.0
+  }
+}
