@@ -1,0 +1,6 @@
+{
+  "benchmark": "gemver",
+  "fault": "transpose_access",
+  "editable_file": "src/gemver.cpp",
+  "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b"
+}

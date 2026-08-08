@@ -1,0 +1,6 @@
+{
+  "benchmark": "syrk",
+  "fault": "missing_diagonal_scaling",
+  "editable_file": "src/syrk.cpp",
+  "upstream_commit": "adea9ff46ab3dea51a8e1790b9d8c4da7899275b"
+}
