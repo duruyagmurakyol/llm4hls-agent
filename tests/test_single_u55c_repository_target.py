@@ -9,17 +9,44 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 U55C_PART = "xcu55c-fsvh2892-2L-e"
 PART_PATTERN = re.compile(r"\bxc[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)+\b", re.IGNORECASE)
+TEXT_SUFFIXES = {
+    ".cfg",
+    ".json",
+    ".md",
+    ".py",
+    ".sh",
+    ".tcl",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+TEXT_FILENAMES = {"Dockerfile", "requirements.txt", ".dockerignore", ".gitignore"}
 
 
 def _tracked_files() -> list[Path]:
-    output = subprocess.check_output(
-        ["git", "ls-files", "-z"], cwd=REPO_ROOT
+    if (REPO_ROOT / ".git").exists():
+        output = subprocess.check_output(
+            ["git", "ls-files", "-z"], cwd=REPO_ROOT
+        )
+        return [
+            REPO_ROOT / entry.decode("utf-8")
+            for entry in output.split(b"\0")
+            if entry
+        ]
+
+    # Submission Docker images intentionally omit .git. In that environment,
+    # scan every copied text/config source instead of weakening the target guard.
+    return sorted(
+        path
+        for path in REPO_ROOT.rglob("*")
+        if path.is_file()
+        and (path.suffix.lower() in TEXT_SUFFIXES or path.name in TEXT_FILENAMES)
+        and not any(
+            part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+            for part in path.relative_to(REPO_ROOT).parts
+        )
     )
-    return [
-        REPO_ROOT / entry.decode("utf-8")
-        for entry in output.split(b"\0")
-        if entry
-    ]
 
 
 def test_no_tracked_file_retains_legacy_zu3eg_part() -> None:
