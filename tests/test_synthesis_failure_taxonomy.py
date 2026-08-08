@@ -20,7 +20,7 @@ def _task(tmp_path: Path) -> tuple[TaskManifest, Path]:
         "[hls]\n"
         "syn.file=src/kernel.cpp\n"
         "syn.top=kernel\n"
-        "part=xczu3eg-sfvc784-2-e\n"
+        "part=xcu55c-fsvh2892-2L-e\n"
         "clock=10ns\n",
         encoding="utf-8",
     )
