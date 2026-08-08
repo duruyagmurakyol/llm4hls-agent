@@ -35,7 +35,7 @@ syn.cflags=-Isrc
 syn.top=example
 tb.file=testbench/example_tb.cpp
 tb.cflags=-Isrc
-part=xczu3eg-sfvc784-2-e
+part=xcu55c-fsvh2892-2L-e
 clock=10ns
 """,
         encoding="utf-8",
