@@ -22,7 +22,7 @@ The same agent implementation is used for repair, optimisation, local experiment
 
 ## Competition target
 
-The repository uses a single tracked HLS target: AMD Alveo U55C with AMD Vitis HLS 2025.2.
+The tracked runnable repository uses a single AMD Alveo U55C target with AMD Vitis HLS 2025.2:
 
 ```text
 FPGA part:          xcu55c-fsvh2892-2L-e
@@ -30,7 +30,7 @@ submission clock:   10 ns
 minimum frequency:  100 MHz
 ```
 
-Every tracked runnable benchmark build description and task manifest is normalised to this U55C part. A regression guard scans tracked `task.cfg`, TCL, JSON and other source files and fails CI if another Xilinx part is introduced. Historical generated result artefacts retain their original provenance; standardising the current runnable configuration does not retroactively reclassify measurements from older runs as U55C results.
+A regression guard checks benchmark build descriptions, task manifests, TCL files and tracked source/configuration text so that active repository definitions cannot silently drift to another Xilinx part. Historical generated result artefacts retain their original provenance and are not retroactively relabelled by this policy.
 
 A final selected design is considered fully verified only after the required validation chain passes. Depending on task type this includes static checks, CSim, synthesis and final C/RTL co-simulation. Search-time co-simulation can be budgeted separately from the mandatory final verification audit.
 
@@ -111,7 +111,7 @@ llm4hls-agent/
 │   │   ├── atax/              # ATAX source/TB + explicit task_u55c.cfg
 │   │   ├── gemm/
 │   │   └── vector_add/        # HLS-Eval-style vector add + task_u55c.cfg
-│   ├── hls_eval_imported/     # retained Appendix-C fault cases only
+│   ├── hls_eval_imported/     # retained Appendix-C fault cases included in Docker
 │   │   ├── gemver/faults/transpose_access/
 │   │   ├── gesummv/faults/accumulator_overwrite/
 │   │   ├── mvt/faults/shifted_second_vector/
@@ -342,7 +342,7 @@ This is intended for compatible non-stage-aware task paths. Stage-aware task typ
 
 # Targeted U55C reproductions
 
-The whole tracked runnable repository now targets U55C. The paths below are the explicit manifests/packages associated with the reported targeted optimisation experiments.
+Use these paths for the retained U55C-targeted local experiments.
 
 ## ATAX
 
@@ -382,7 +382,7 @@ python3 -u scripts/run_experiment_matrix.py \
 
 ## Vector Add
 
-Use the explicit task manifest associated with the reported targeted Vector Add experiment:
+Use the explicit U55C task manifest:
 
 ```bash
 python3 scripts/run_agent.py \
@@ -601,7 +601,7 @@ results/suites/<run-id>/
 
 # Docker
 
-Docker packages the Python agent and its dependencies. Vitis itself is **not** copied into the image; the host Vitis 2025.2 installation is mounted read-only at runtime.
+Docker packages the Python agent and its retained local benchmark inputs. Vitis itself is **not** copied into the image; the host Vitis 2025.2 installation is mounted read-only at runtime. The image intentionally excludes `.git`, but the target-policy tests fall back to scanning copied source/configuration files so the image remains independently testable.
 
 The Dockerfile is based on the Xilinx Alveo runtime userspace and compiles the Python source as part of the image build.
 
@@ -845,13 +845,7 @@ Persistent manifests are retained under:
 configs/tasks/combined_full_agent/
 ```
 
-The four HLS-Eval-derived fault inputs required by the retained repeated evaluation are committed under `benchmarks/hls_eval_imported/` rather than depending on ignored local copies.
-
-The current runnable forms of these repair-to-optimisation cases use the repository-wide U55C target. The dedicated four-case competition-target validation subset is retained under:
-
-```text
-configs/tasks/u55c_validation/
-```
+The four HLS-Eval-derived fault inputs required by the retained repeated evaluation are committed under `benchmarks/hls_eval_imported/` and are copied into the Docker image, so these manifests remain runnable in a clean container build.
 
 ---
 
@@ -881,8 +875,6 @@ Run the Python validation gate from the repository root:
 python -m compileall -q agent scripts tests
 python -m pytest -q
 ```
-
-The test suite includes a single-target policy guard. It checks tracked benchmark `task.cfg` files, HLS TCL `set_part` commands, JSON `part`/`target_part` fields and tracked Xilinx part tokens, and rejects any target other than `xcu55c-fsvh2892-2L-e`.
 
 For an image-level check:
 
@@ -921,7 +913,7 @@ The repository intentionally distinguishes persistent inputs from generated/exte
 - regression tests;
 - persistent task manifests and suite definitions;
 - retained local benchmark source, headers, testbenches and build descriptions;
-- U55C benchmark/config variants required by the targeted experiments;
+- explicit U55C benchmark/config variants required by the targeted experiments;
 - the four HLS-Eval-derived fault cases used by the retained repeated full-agent evaluation.
 
 ### External by design
