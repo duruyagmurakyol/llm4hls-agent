@@ -27,7 +27,7 @@
   "target": {
     "tool": "AMD Vitis HLS",
     "tool_version": "2025.2",
-    "part": "xczu3eg-sfvc784-2-e",
+    "part": "xcu55c-fsvh2892-2L-e",
     "clock_period_ns": 10.0,
     "minimum_frequency_mhz": 100.0,
     "resource_limits": {}
