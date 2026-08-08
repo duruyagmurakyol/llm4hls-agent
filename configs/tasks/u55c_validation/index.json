@@ -4,13 +4,17 @@
   "purpose": "Confirm repair, synthesis, C/RTL co-simulation and PPA selection on the competition target using clone-runnable retained benchmarks.",
   "cases": [
     "configs/tasks/u55c_validation/dot_product_accumulator_overwrite_repair_full_agent_u55c.json",
-    "configs/tasks/u55c_validation/gemm_loop_bound_missing_k_repair_full_agent_u55c.json"
+    "configs/tasks/u55c_validation/gemm_loop_bound_missing_k_repair_full_agent_u55c.json",
+    "configs/tasks/u55c_validation/hls_eval_gesummv_accumulator_overwrite_repair_full_agent_u55c.json",
+    "configs/tasks/u55c_validation/hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c.json"
   ],
   "task_ids": [
     "dot_product_accumulator_overwrite_repair_full_agent_u55c",
-    "gemm_loop_bound_missing_k_repair_full_agent_u55c"
+    "gemm_loop_bound_missing_k_repair_full_agent_u55c",
+    "hls_eval_gesummv_accumulator_overwrite_repair_full_agent_u55c",
+    "hls_eval_mvt_shifted_second_vector_repair_full_agent_u55c"
   ],
-  "case_count": 2,
+  "case_count": 4,
   "recommended_repetitions": 1,
   "target": {
     "board": "AMD Alveo U55C",
@@ -27,6 +31,8 @@
   },
   "selection_rationale": {
     "dot_product": "repeatable repair-to-optimisation case backed by a committed benchmark",
-    "gemm": "conservative repair-to-optimisation case backed by a committed benchmark"
+    "gemm": "conservative repair-to-optimisation case backed by a committed benchmark",
+    "gesummv": "retained HLS-Eval-derived repair case with committed self-checking inputs",
+    "mvt": "retained HLS-Eval-derived repair case with committed self-checking inputs"
   }
 }
