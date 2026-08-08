@@ -25,6 +25,5 @@ dist
 .vitis_hls
 solution*
 *_project
-benchmarks/hls_eval_imported
 .vscode
 .idea
