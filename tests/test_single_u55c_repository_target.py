@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 U55C_PART = "xcu55c-fsvh2892-2L-e"
+PART_PATTERN = re.compile(r"\bxc[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)+\b", re.IGNORECASE)
 
 
 def _tracked_files() -> list[Path]:
@@ -29,6 +30,18 @@ def test_no_tracked_file_retains_legacy_zu3eg_part() -> None:
         if path.is_file() and legacy in path.read_bytes():
             offenders.append(str(path.relative_to(REPO_ROOT)))
     assert not offenders, "legacy ZU3EG target remains in: " + ", ".join(offenders)
+
+
+def test_all_tracked_xilinx_part_tokens_are_u55c() -> None:
+    offenders: list[str] = []
+    for path in _tracked_files():
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for part in sorted(set(PART_PATTERN.findall(text))):
+            if part.lower() != U55C_PART.lower():
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {part}")
+    assert not offenders, "non-U55C Xilinx parts remain in tracked files: " + ", ".join(offenders)
 
 
 def test_all_benchmark_cfg_parts_are_u55c() -> None:
