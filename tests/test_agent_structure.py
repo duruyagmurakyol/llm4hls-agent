@@ -117,7 +117,7 @@ def _test_task(tmp_path: Path) -> tuple[TaskManifest, Path]:
         "syn.file=src/kernel.cpp\n"
         "syn.top=kernel\n"
         "tb.file=testbench/kernel_tb.cpp\n"
-        "part=xczu3eg-sfvc784-2-e\n"
+        "part=xcu55c-fsvh2892-2L-e\n"
         "clock=10ns\n",
         encoding="utf-8",
     )
@@ -294,7 +294,7 @@ def test_atax_benchmark_is_discovered_from_tcl() -> None:
     benchmark = discover_benchmark(Path("benchmarks/hls_eval/atax"))
     assert benchmark.name == "atax"
     assert benchmark.top_function == "kernel_atax"
-    assert benchmark.part == "xczu3eg-sfvc784-2-e"
+    assert benchmark.part == "xcu55c-fsvh2892-2L-e"
     assert benchmark.clock_period_ns == 10.0
     assert benchmark.source.name == "atax_candidate_3b.cpp"
     assert [path.name for path in benchmark.testbenches] == ["atax_tb.cpp"]
@@ -433,7 +433,7 @@ def test_bicg_benchmark_is_discovered_from_task_cfg() -> None:
 
     assert benchmark.name == "bicg"
     assert benchmark.top_function == "kernel_bicg"
-    assert benchmark.part == "xczu3eg-sfvc784-2-e"
+    assert benchmark.part == "xcu55c-fsvh2892-2L-e"
     assert benchmark.clock_period_ns == 10.0
     assert benchmark.source.name == "bicg.cpp"
     assert [path.name for path in benchmark.testbenches] == ["bicg_test.cpp"]
