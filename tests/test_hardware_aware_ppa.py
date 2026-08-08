@@ -219,7 +219,7 @@ def test_task_frequency_and_resource_requirements_are_forwarded_to_ppa_config() 
             "target": {
                 "clock_period_ns": 8.0,
                 "minimum_frequency_mhz": 125.0,
-                "part": "xczu3eg-sfvc784-2-e",
+                "part": "xcu55c-fsvh2892-2L-e",
                 "resource_limits": {"lut": 200, "dsp": 4},
             },
             "model": {"name": "model"},
