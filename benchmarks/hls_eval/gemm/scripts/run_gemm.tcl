@@ -4,5 +4,5 @@ add_files -cflags "-I/home/xilinx/projects/llm4hls-agent/benchmarks/hls_eval/gem
 add_files "/home/xilinx/projects/llm4hls-agent/benchmarks/hls_eval/gemm/src/gemm.h"
 add_files -tb -cflags "-I/home/xilinx/projects/llm4hls-agent/benchmarks/hls_eval/gemm/src" "/home/xilinx/projects/llm4hls-agent/benchmarks/hls_eval/gemm/testbench/gemm_tb.cpp"
 open_solution -reset solution1
-set_part xczu3eg-sfvc784-2-e
+set_part xcu55c-fsvh2892-2L-e
 create_clock -period 10 -name default
