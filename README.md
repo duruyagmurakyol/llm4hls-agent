@@ -22,7 +22,7 @@ The same agent implementation is used for repair, optimisation, local experiment
 
 ## Competition target
 
-The final competition-oriented target is AMD Alveo U55C using AMD Vitis HLS 2025.2:
+The repository uses a single tracked HLS target: AMD Alveo U55C with AMD Vitis HLS 2025.2.
 
 ```text
 FPGA part:          xcu55c-fsvh2892-2L-e
@@ -30,7 +30,7 @@ submission clock:   10 ns
 minimum frequency:  100 MHz
 ```
 
-Some retained historical/research benchmark configurations deliberately preserve the target used when those experiments were originally run. For the targeted U55C reproductions, use the explicit U55C manifests/configurations documented below rather than assuming every historical benchmark directory defaults to U55C.
+Every tracked runnable benchmark build description and task manifest is normalised to this U55C part. A regression guard scans tracked `task.cfg`, TCL, JSON and other source files and fails CI if another Xilinx part is introduced. Historical generated result artefacts retain their original provenance; standardising the current runnable configuration does not retroactively reclassify measurements from older runs as U55C results.
 
 A final selected design is considered fully verified only after the required validation chain passes. Depending on task type this includes static checks, CSim, synthesis and final C/RTL co-simulation. Search-time co-simulation can be budgeted separately from the mandatory final verification audit.
 
@@ -342,7 +342,7 @@ This is intended for compatible non-stage-aware task paths. Stage-aware task typ
 
 # Targeted U55C reproductions
 
-Use these paths for the retained U55C-targeted local experiments.
+The whole tracked runnable repository now targets U55C. The paths below are the explicit manifests/packages associated with the reported targeted optimisation experiments.
 
 ## ATAX
 
@@ -382,7 +382,7 @@ python3 -u scripts/run_experiment_matrix.py \
 
 ## Vector Add
 
-Use the explicit U55C task manifest rather than relying on a historical benchmark default:
+Use the explicit task manifest associated with the reported targeted Vector Add experiment:
 
 ```bash
 python3 scripts/run_agent.py \
@@ -847,6 +847,12 @@ configs/tasks/combined_full_agent/
 
 The four HLS-Eval-derived fault inputs required by the retained repeated evaluation are committed under `benchmarks/hls_eval_imported/` rather than depending on ignored local copies.
 
+The current runnable forms of these repair-to-optimisation cases use the repository-wide U55C target. The dedicated four-case competition-target validation subset is retained under:
+
+```text
+configs/tasks/u55c_validation/
+```
+
 ---
 
 # Utility scripts
@@ -875,6 +881,8 @@ Run the Python validation gate from the repository root:
 python -m compileall -q agent scripts tests
 python -m pytest -q
 ```
+
+The test suite includes a single-target policy guard. It checks tracked benchmark `task.cfg` files, HLS TCL `set_part` commands, JSON `part`/`target_part` fields and tracked Xilinx part tokens, and rejects any target other than `xcu55c-fsvh2892-2L-e`.
 
 For an image-level check:
 
@@ -913,7 +921,7 @@ The repository intentionally distinguishes persistent inputs from generated/exte
 - regression tests;
 - persistent task manifests and suite definitions;
 - retained local benchmark source, headers, testbenches and build descriptions;
-- explicit U55C benchmark/config variants required by the targeted experiments;
+- U55C benchmark/config variants required by the targeted experiments;
 - the four HLS-Eval-derived fault cases used by the retained repeated full-agent evaluation.
 
 ### External by design
