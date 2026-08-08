@@ -24,7 +24,7 @@ def test_directory_resolution_is_in_memory(monkeypatch) -> None:
         "testbench/vector_add_test.cpp"
     )
     assert task.data["interface"]["top_function"] == "vector_add"
-    assert task.data["target"]["part"] == "xczu3eg-sfvc784-2-e"
+    assert task.data["target"]["part"] == "xcu55c-fsvh2892-2L-e"
     assert task.data["target"]["clock_period_ns"] == 10.0
     assert task.data["repair"]["editable_files"] == ["src/vector_add.cpp"]
     assert "config" not in task.data["adapter"]
