@@ -84,3 +84,12 @@ The frozen 20-task × 3-model breadth result used in the dissertation is retaine
 - [`overnight_60_matrix.csv`](overnight_60_matrix.csv) — machine-readable 60-row table with task metadata, exact model identifiers and terminal status.
 
 The canonical experiment definition remains [`configs/suites/overnight_60.json`](../configs/suites/overnight_60.json). For PPA rows, `completed` means that a valid terminal state was reached and does not imply that an improved candidate displaced the verified baseline.
+
+## Two-page paper results
+
+The complete set of results explicitly displayed or numerically discussed in the two-page LLM4HLS-Agent paper is indexed here:
+
+- [`two_page_paper_results.md`](two_page_paper_results.md) — human-readable summary covering the 60-run breadth result, the full representative optimisation table, BICG recovery, the GEMM negative control, the 90/90 versus 1/90 staged-feedback ablation, and the 36-run repeated sweep;
+- [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv) — machine-readable form of the paper's representative optimisation outcome table.
+
+The paper summary intentionally distinguishes principal breadth evidence from supplementary optimisation and secondary repair/cost studies, matching the scope used in the report.
