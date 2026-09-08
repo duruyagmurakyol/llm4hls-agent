@@ -87,9 +87,9 @@ The canonical experiment definition remains [`configs/suites/overnight_60.json`]
 
 ## Two-page paper results
 
-The complete set of results explicitly displayed or numerically discussed in the two-page LLM4HLS-Agent paper is indexed here:
+The results reported on **pages 1–2 of the two-page LLM4HLS-Agent paper** are indexed here:
 
-- [`two_page_paper_results.md`](two_page_paper_results.md) — human-readable summary covering the 60-run breadth result, the full representative optimisation table, BICG recovery, the GEMM negative control, the 90/90 versus 1/90 staged-feedback ablation, and the 36-run repeated sweep;
-- [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv) — machine-readable form of the paper's representative optimisation outcome table.
+- [`two_page_paper_results.md`](two_page_paper_results.md) — human-readable summary of the 54/60 breadth result, the complete Table I optimisation outcomes, the cross-model trade-offs discussed in the text, the GEMM negative control, and the BICG recovery trajectory;
+- [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv) — machine-readable form of Table I.
 
-The paper summary intentionally distinguishes principal breadth evidence from supplementary optimisation and secondary repair/cost studies, matching the scope used in the report.
+The later supporting appendix pages contain additional evidence such as the detailed benchmark matrix, the staged-feedback repair ablation and the 36-run repeated sweep. Those results are not described here as results displayed in the two-page main paper itself.
