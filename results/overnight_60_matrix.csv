@@ -1,0 +1,61 @@
+priority,task_id,tier,mode,role,subtype,canonical_design,model,model_id,terminal_status,status_note
+1,vector_add_generate,core,repair,generation,specification_to_kernel,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+1,vector_add_generate,core,repair,generation,specification_to_kernel,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+1,vector_add_generate,core,repair,generation,specification_to_kernel,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+2,synth_fix_dynamic_buffer,core,repair,synthesis_repair,unsupported_dynamic_allocation,vector_scale,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+2,synth_fix_dynamic_buffer,core,repair,synthesis_repair,unsupported_dynamic_allocation,vector_scale,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+2,synth_fix_dynamic_buffer,core,repair,synthesis_repair,unsupported_dynamic_allocation,vector_scale,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+3,projection_bugfix,core,repair,repair,functional,projection,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+3,projection_bugfix,core,repair,repair,functional,projection,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+3,projection_bugfix,core,repair,repair,functional,projection,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+4,residual_stream_deadlock,core,repair,structural_repair,cosim_stream_deadlock,residual_stream,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+4,residual_stream_deadlock,core,repair,structural_repair,cosim_stream_deadlock,residual_stream,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+4,residual_stream_deadlock,core,repair,structural_repair,cosim_stream_deadlock,residual_stream,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+5,structural_blind_stream,core,repair,structural_repair,blind_cosim_stream_deadlock,stream_pipeline,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+5,structural_blind_stream,core,repair,structural_repair,blind_cosim_stream_deadlock,stream_pipeline,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+5,structural_blind_stream,core,repair,structural_repair,blind_cosim_stream_deadlock,stream_pipeline,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+6,dotProduct_optimize,core,optimise,optimisation,ppa,dot_product,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+6,dotProduct_optimize,core,optimise,optimisation,ppa,dot_product,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+6,dotProduct_optimize,core,optimise,optimisation,ppa,dot_product,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+7,atax,core,optimise,optimisation,ppa,atax,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,not_completed,invalid starting optimisation baseline; no valid before-after PPA comparison
+7,atax,core,optimise,optimisation,ppa,atax,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,not_completed,invalid starting optimisation baseline; no valid before-after PPA comparison
+7,atax,core,optimise,optimisation,ppa,atax,Qwen3.6-27B,Qwen/Qwen3.6-27B,not_completed,invalid starting optimisation baseline; no valid before-after PPA comparison
+8,bicg,core,optimise,optimisation,ppa,bicg,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+8,bicg,core,optimise,optimisation,ppa,bicg,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+8,bicg,core,optimise,optimisation,ppa,bicg,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+9,gemm,core,optimise,optimisation,ppa,gemm,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+9,gemm,core,optimise,optimisation,ppa,gemm,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+9,gemm,core,optimise,optimisation,ppa,gemm,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+10,syntax_missing_semicolon,core,repair,repair,syntax,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+10,syntax_missing_semicolon,core,repair,repair,syntax,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+10,syntax_missing_semicolon,core,repair,repair,syntax,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+11,indexing_off_by_one,core,repair,repair,indexing,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+11,indexing_off_by_one,core,repair,repair,indexing,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+11,indexing_off_by_one,core,repair,repair,indexing,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+12,multi_fault_feedback,core,repair,repair,multi_fault,bicg,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+12,multi_fault_feedback,core,repair,repair,multi_fault,bicg,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+12,multi_fault_feedback,core,repair,repair,multi_fault,bicg,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+13,interface_wrong_top_name,extended,repair,repair,interface,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,not_completed,wrong-top interface case did not reach a valid terminal state
+13,interface_wrong_top_name,extended,repair,repair,interface,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,not_completed,wrong-top interface case did not reach a valid terminal state
+13,interface_wrong_top_name,extended,repair,repair,interface,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,not_completed,wrong-top interface case did not reach a valid terminal state
+14,functional_subtraction,extended,repair,repair,functional_arithmetic,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+14,functional_subtraction,extended,repair,repair,functional_arithmetic,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+14,functional_subtraction,extended,repair,repair,functional_arithmetic,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+15,accumulator_overwrite,extended,repair,repair,state_accumulator,dot_product,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+15,accumulator_overwrite,extended,repair,repair,state_accumulator,dot_product,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+15,accumulator_overwrite,extended,repair,repair,state_accumulator,dot_product,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+16,loop_bound_missing_last,extended,repair,repair,loop_bound,dot_product,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+16,loop_bound_missing_last,extended,repair,repair,loop_bound,dot_product,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+16,loop_bound_missing_last,extended,repair,repair,loop_bound,dot_product,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+17,functional_wrong_sign,extended,repair,repair,matrix_arithmetic,gemm,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+17,functional_wrong_sign,extended,repair,repair,matrix_arithmetic,gemm,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+17,functional_wrong_sign,extended,repair,repair,matrix_arithmetic,gemm,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+18,staged_compile_then_functional,extended,repair,repair,staged_compile_functional,bicg,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached
+18,staged_compile_then_functional,extended,repair,repair,staged_compile_functional,bicg,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached
+18,staged_compile_then_functional,extended,repair,repair,staged_compile_functional,bicg,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached
+19,vector_add,extended,optimise,optimisation,ppa,vector_add,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+19,vector_add,extended,optimise,optimisation,ppa,vector_add,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+19,vector_add,extended,optimise,optimisation,ppa,vector_add,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+20,stream_pipeline,extended,optimise,optimisation,ppa,stream_pipeline,DeepSeek-V4-Pro,deepseek-ai/DeepSeek-V4-Pro,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+20,stream_pipeline,extended,optimise,optimisation,ppa,stream_pipeline,Qwen3.5-122B-A10B,Qwen/Qwen3.5-122B-A10B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline
+20,stream_pipeline,extended,optimise,optimisation,ppa,stream_pipeline,Qwen3.6-27B,Qwen/Qwen3.6-27B,completed,valid terminal state reached; completion does not imply an improved design displaced the verified baseline

@@ -75,3 +75,12 @@ python3 scripts/run_agent.py configs/tasks/atax_track_a.json
 ```
 
 Where automatic onboarding was used, retain or copy the generated task and optimisation config alongside the selected evidence.
+
+## Dissertation breadth matrix
+
+The frozen 20-task × 3-model breadth result used in the dissertation is retained in two forms:
+
+- [`overnight_60_matrix.md`](overnight_60_matrix.md) — human-readable task × model table with aggregate counts and interpretation notes;
+- [`overnight_60_matrix.csv`](overnight_60_matrix.csv) — machine-readable 60-row table with task metadata, exact model identifiers and terminal status.
+
+The canonical experiment definition remains [`configs/suites/overnight_60.json`](../configs/suites/overnight_60.json). For PPA rows, `completed` means that a valid terminal state was reached and does not imply that an improved candidate displaced the verified baseline.
