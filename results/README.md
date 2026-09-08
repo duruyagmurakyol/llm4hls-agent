@@ -1,95 +1,30 @@
 # `results/`
 
-This directory contains curated experimental evidence selected from generated runs for analysis, comparison, reporting or submission.
+This directory contains the curated experimental evidence used for the final LLM4HLS-Agent evaluation. The dissertation and the two-page competition paper report the same underlying result set; the files here differ only in level of detail and machine-readability.
 
-It is different from `experiments/`:
+The frozen controller revision for the reported experiments is commit `30b8107`. Later commits on `main` are documentation and repository-cleanup changes.
 
-- `experiments/` is the working history of agent runs, including rejected candidates and debugging evidence.
-- `results/` is a deliberate, smaller collection of evidence that supports conclusions.
+## Final reported results
 
-## What belongs here
+Start with [`final_results.md`](final_results.md). It is the canonical human-readable summary and contains:
 
-Examples include:
+- the pre-specified 20-task × 3-model breadth experiment: 54/60 completed overall, including 39/42 generation/repair/structural rows and 15/18 PPA rows;
+- the complete optimisation table used in the two-page paper, including cross-model speed/area trade-offs;
+- the BICG infeasible-to-recovered trajectory and configured resource ceilings;
+- the GEMM timing-regression negative control;
+- the staged-feedback repair ablation and repeated full-agent sweep as secondary controlled studies.
 
-- baseline-versus-candidate metric summaries;
-- accepted or Pareto-relevant candidate records;
-- benchmark comparison tables;
-- aggregated success and failure counts;
-- selected trajectory summaries;
-- data used directly in a dissertation figure or competition report.
+Supporting files provide the same result set at finer granularity:
 
-## Required provenance
+- [`optimisation_results.csv`](optimisation_results.csv) — machine-readable form of the complete optimisation table;
+- [`overnight_60_matrix.md`](overnight_60_matrix.md) — detailed human-readable 20-task × 3-model breadth matrix;
+- [`overnight_60_matrix.csv`](overnight_60_matrix.csv) — machine-readable 60-row breadth matrix;
+- [`../configs/suites/overnight_60.json`](../configs/suites/overnight_60.json) — canonical experiment definition for the breadth study.
 
-Every retained result should be traceable to:
+For PPA rows, `completed` means that the controller reached a valid terminal state. It does not imply that an improved candidate displaced the verified baseline.
 
-- benchmark and task identifier;
-- exact source revision or commit;
-- task and optimisation configuration;
-- Vitis version, part and clock target;
-- model provider and model name;
-- baseline and candidate source paths;
-- original reports under `experiments/`;
-- acceptance or rejection rule.
+## Provenance and interpretation
 
-Do not copy a number into a summary without preserving where it came from.
+Retained results should remain traceable to the benchmark/task, source revision, configuration, Vitis version and target, model/provider, original reports, and the acceptance or rejection decision. Compare candidates under identical synthesis settings, report timing regressions as well as improvements, and keep meaningful rejected candidates when they explain controller behaviour.
 
-## Recommended format
-
-Prefer machine-readable JSON or CSV for data and Markdown for explanations.
-
-Example:
-
-```text
-results/
-└── bicg/
-    ├── summary.md
-    ├── metrics.json
-    └── provenance.json
-```
-
-A summary should distinguish clearly between:
-
-- functional correctness;
-- initiation interval;
-- top-level latency and interval;
-- estimated clock period;
-- LUT, FF, DSP and BRAM usage;
-- whether timing constraints were met;
-- final agent verdict.
-
-## Interpretation rules
-
-- Do not claim an optimisation from loop II alone.
-- Compare baseline and candidate under identical part, clock and tool settings.
-- Report timing regressions even when latency improves.
-- Keep rejected candidates when they demonstrate a meaningful agent behaviour or failure mode.
-- Separate measured synthesis evidence from hypotheses about why a result occurred.
-- Do not manually alter generated metrics.
-
-## Reproducibility
-
-A result intended for formal use should be reproducible from a documented command, for example:
-
-```bash
-python3 scripts/run_agent.py configs/tasks/atax_track_a.json
-```
-
-Where automatic onboarding was used, retain or copy the generated task and optimisation config alongside the selected evidence.
-
-## Dissertation breadth matrix
-
-The frozen 20-task × 3-model breadth result used in the dissertation is retained in two forms:
-
-- [`overnight_60_matrix.md`](overnight_60_matrix.md) — human-readable task × model table with aggregate counts and interpretation notes;
-- [`overnight_60_matrix.csv`](overnight_60_matrix.csv) — machine-readable 60-row table with task metadata, exact model identifiers and terminal status.
-
-The canonical experiment definition remains [`configs/suites/overnight_60.json`](../configs/suites/overnight_60.json). For PPA rows, `completed` means that a valid terminal state was reached and does not imply that an improved candidate displaced the verified baseline.
-
-## Two-page paper results
-
-The results reported on **pages 1–2 of the two-page LLM4HLS-Agent paper** are indexed here:
-
-- [`two_page_paper_results.md`](two_page_paper_results.md) — human-readable summary of the 54/60 breadth result, the complete Table I optimisation outcomes, the cross-model trade-offs discussed in the text, the GEMM negative control, and the BICG recovery trajectory;
-- [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv) — machine-readable form of Table I.
-
-The later supporting appendix pages contain additional evidence such as the detailed benchmark matrix, the staged-feedback repair ablation and the 36-run repeated sweep. Those results are not described here as results displayed in the two-page main paper itself.
+Generated working runs and rejected/debugging artefacts live under `experiments/`; `results/` is the smaller curated reporting surface.
