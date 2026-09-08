@@ -1,12 +1,14 @@
 # Results reported in the two-page LLM4HLS-Agent paper
 
-This file collects the experimental results that were explicitly reported in the two-page LLM4HLS-Agent competition paper and its appended supporting pages. It is intended as a human-readable index to the retained result evidence in this repository.
+This file reproduces the experimental results that appear in the **two-page main paper** of *LLM4HLS-Agent: Budgeted Autonomous Repair and Multi-Objective Optimisation for HLS* (pages 1–2 of the competition report).
 
-The frozen controller revision for the reported competition experiment is commit `30b8107`. The current `main` branch may contain later documentation-only commits.
+The frozen controller revision used for the reported competition experiment is commit `30b8107`. The current `main` branch contains later documentation-only commits.
 
-## 1. Principal 60-run breadth result
+> Scope note: the report also contains references and supporting appendices after the two-page main paper. Results that appear only in those appendices (for example the 90/90 staged-feedback ablation and the 36-run repeated sweep) are not counted here as two-page-paper results.
 
-The pre-specified breadth experiment used 20 tasks and three fixed models, producing 60 isolated model–task runs under the same controller.
+## 1. Principal breadth result
+
+The main paper reports a pre-specified matrix of 20 tasks × 3 models = 60 isolated model–task runs under the same controller.
 
 | Group | Rows | Completed | Completion rate |
 |---|---:|---:|---:|
@@ -14,26 +16,26 @@ The pre-specified breadth experiment used 20 tasks and three fixed models, produ
 | PPA run completion | 18 | 15 | 83.3% |
 | **Overall** | **60** | **54** | **90.0%** |
 
-The six non-completions were confined to:
+The six non-completions reported in the paper were confined to:
 
 - 3 × ATAX PPA rows with an invalid starting optimisation baseline;
 - 3 × wrong-top interface rows.
 
-The full task × model matrix is retained separately in [`overnight_60_matrix.md`](overnight_60_matrix.md) and [`overnight_60_matrix.csv`](overnight_60_matrix.csv).
+The paper states that the successful non-PPA rows span the remaining 13 generation/repair/structural tasks. The full task × model matrix is retained separately in [`overnight_60_matrix.md`](overnight_60_matrix.md) and [`overnight_60_matrix.csv`](overnight_60_matrix.csv); that detailed matrix corresponds to the supporting benchmark matrix rather than the two-page main-paper table.
 
-For PPA rows, `Completed` means that the controller reached a valid terminal state. It may therefore include returning the unchanged verified baseline and does **not** imply that an improved candidate displaced the baseline.
+For PPA rows, `Completed` means the controller reached a valid terminal state. It does **not** imply that an improved candidate necessarily displaced the verified baseline.
 
-## 2. Representative verified optimisation outcomes
+## 2. Table I — representative verified optimisation outcomes
 
-The following table reproduces the optimisation result table reported in the paper. Negative latency or throughput deltas indicate improvement. The BICG infeasible row is intentionally retained because the paper used it to demonstrate hard-resource rejection and subsequent recovery.
+Negative latency or throughput deltas indicate improvement. `*` marks the BICG candidate rejected by hard resource gates.
 
-| Kernel | Model | Δ latency | Δ throughput period | Δ LUT | Δ FF | Δ DSP | Status |
+| Kernel | Model | Δ latency | Δ throughput | Δ LUT | Δ FF | Δ DSP | Status |
 |---|---|---:|---:|---:|---:|---:|---|
 | Vector add | Qwen | -73.39% | -66.73% | +182.83% | -40.0% | — | verified |
 | ATAX | Qwen | -5.93% | -5.93% | -0.62% | -2.96% | +6.82% | verified |
 | BICG recovery | Qwen | -61.84% | -61.77% | +227.01% | +158.05% | +300% | verified and selected |
 | BICG Pareto | Qwen | -40.7% | -40.7% | +47.5% | +17.2% | +100% | verified Pareto point |
-| BICG infeasible | Qwen | -55.94% | -55.88% | +891.3% | +545.5% | +904.5% | rejected: resource infeasible |
+| BICG infeasible* | Qwen | -55.94% | -55.88% | +891.3% | +545.5% | +904.5% | rejected: resource infeasible |
 | Vector add | DeepSeek | -35.1% | -45.9% | +31.3% | 0.0% | — | verified |
 | Vector add | Kimi | -35.1% | -45.9% | +31.3% | 0.0% | — | verified |
 | Dot product | DeepSeek | -69.3% | -69.1% | +182.5% | +219.6% | — | verified |
@@ -52,58 +54,61 @@ The following table reproduces the optimisation result table reported in the pap
 | Histogram | Kimi | -9.1% | — | +15.4% | — | — | verified |
 | Conv2D | Qwen | -0.89% | — | — | — | — | verified |
 
-The machine-readable form of this table is [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv).
+The machine-readable form is [`two_page_paper_optimisation_table.csv`](two_page_paper_optimisation_table.csv).
 
-## 3. BICG resource-aware recovery
+The paper uses these rows to illustrate several distinct optimisation regimes: compute-dominated vector-add, dot-product and FIR speed-ups; memory/locality trade-offs in Stencil2D and Transpose; dependency-constrained Prefix and Histogram cases; and explicit hard-resource recovery in BICG.
 
-The paper used BICG as its central recovery example.
+## 3. Cross-model trade-offs explicitly discussed in the paper
 
-| State | HLS-estimated latency | LUT | FF | DSP | Outcome |
-|---|---:|---:|---:|---:|---|
-| Verified baseline | 7420.56 ns | 7,626 | 20,191 | 44 | feasible baseline |
-| Aggressive candidate | 3269.76 ns | 75,596 | 130,326 | 442 | rejected |
-| Recovered candidate | 2831.816 ns | 24,938 | 52,102 | 176 | selected |
-| Configured ceiling | — | 34,964 | 86,908 | 224 | hard limit |
+The paper calls out the following comparisons from Table I:
 
-The recovered candidate reduced HLS-estimated latency by **61.84%** relative to the verified baseline and had an estimated Fmax of **131.72 MHz**, satisfying the 100 MHz requirement and all configured LUT, FF and DSP ceilings.
+- **Dot product:** DeepSeek reaches -69.3% latency versus Qwen at -62.4%, while also using substantially less added LUT/FF.
+- **Stencil2D:** DeepSeek (-57.6% latency, +190.4% LUT), Qwen (-41.2%, +99.8%), and Kimi (-23.4%, +39.1%) form an area–latency ladder.
+- **Transpose:** DeepSeek and Kimi both reach -81.2% latency, but Kimi uses +97.9% LUT versus DeepSeek's +220.6%.
+- **Prefix:** DeepSeek and Kimi reach -25.3% latency with +23.7% LUT, whereas Qwen reaches only -5.4% while using +193.9% LUT.
 
-The paper also retained an earlier verified BICG Pareto point at approximately **-40.7% latency**, **+47.5% LUT**, **+17.2% FF** and **+100% DSP**. This point and the faster recovered design represent different speed/area operating choices.
-
-The BICG run exhausted its five-call model budget only after the 2831.816 ns candidate had already been verified and selected, so budget exhaustion stopped further exploration rather than invalidating the result.
+These comparisons motivate measured Pareto retention rather than selecting candidates from model identity or transformation description alone.
 
 ## 4. GEMM negative-control result
 
-The paper reported GEMM as a negative control for cycle-only ranking. A generated candidate reduced scheduled cycle count but degraded achievable clock sufficiently that realised post-synthesis latency increased by approximately **137%** in the competition observation. The candidate was therefore rejected rather than promoted on cycle count alone.
+The main paper reports GEMM as a negative control for cycle-only ranking. One generated candidate reduced cycle count but degraded achievable clock enough that realised post-synthesis latency increased by approximately **137%**. The candidate was therefore rejected.
 
-This result supports the policy that optimisation is ranked using realised HLS timing and feasibility evidence rather than source-level intent or cycle count in isolation.
+This result is used to support ranking by realised HLS timing and feasibility evidence rather than cycle count or source-level intent alone.
 
-## 5. Secondary repair and repeated-run evidence
+## 5. BICG resource-aware recovery
 
-The paper's supporting material also reported two secondary studies that informed the controller design.
+BICG is the main recovery case study in the two-page paper.
 
-### Staged-feedback repair ablation
+| State | HLS-estimated latency | Throughput | LUT | FF | DSP | Outcome |
+|---|---:|---:|---:|---:|---:|---|
+| Verified baseline | 7420.56 ns | 7428.132 ns | 7,626 | 20,191 | 44 | feasible baseline |
+| Aggressive candidate | 3269.76 ns | — | 75,596 | 130,326 | 442 | rejected: resource infeasible |
+| Recovered candidate | 2831.816 ns | — | 24,938 | 52,102 | 176 | selected |
+| Configured ceiling | — | — | 34,964 | 86,908 | 224 | hard limit |
 
-Across Qwen, DeepSeek and Kimi:
+The recovered candidate:
 
-- iterative repair: **90/90** successful staged-fault cases;
-- corresponding one-shot repair: **1/90** successful cases.
+- reduces HLS-estimated latency by **61.84%** relative to the verified baseline;
+- remains within the configured LUT, FF and DSP ceilings;
+- reaches an estimated Fmax of **131.72 MHz**, above the 100 MHz minimum requirement.
 
-Iterative repair receives newly exposed tool feedback and additional model calls after earlier faults are corrected, so this is not an equal-call or equal-token comparison.
+The paper also reports that the BICG run exhausted its five-call model budget only after the 2831.816 ns candidate had already been verified and selected, so budget exhaustion stopped further exploration rather than compromising correctness.
 
-### Repeated full-agent sweep
+An earlier verified BICG Pareto point is retained at approximately **-40.7% latency**, **+47.5% LUT**, **+17.2% FF** and **+100% DSP**, preserving a lower-area operating point alongside the faster recovered design.
 
-A 12-task sweep with three repetitions per task produced 36 complete runs:
+## 6. Headline quantitative results from the abstract/conclusion
 
-| Measurement | Result |
-|---|---:|
-| Completed runs | 36/36 |
-| Generated candidates | 204 |
-| Fully verified candidates | 116 |
-| Model calls | 240 |
-| Total tokens | 347,075 |
+The two-page paper foregrounds the following quantities:
 
-These values correspond to approximately 6.67 model calls and 9.64k tokens per completed run, with 56.9% of generated candidates reaching full verification.
+- **54/60 (90.0%)** overall breadth completion;
+- **39/42 (92.9%)** non-PPA completion;
+- **15/18 (83.3%)** PPA run completion;
+- **73.4%** vector-add latency reduction;
+- **5.9%** ATAX latency reduction;
+- **61.8%** BICG latency reduction, from 7420.56 ns to 2831.816 ns, while satisfying the configured resource ceilings and 100 MHz requirement.
 
-## 6. Scope of this summary
+These values are repetitions of the same evidence above rather than separate experiments.
 
-This file reproduces the results that were explicitly displayed or numerically discussed in the two-page paper and its supporting appended pages. The architecture figure is not duplicated here because it describes controller structure rather than an experimental result. The repository's underlying experiment definitions, source artefacts and retained reports remain the authoritative provenance for individual measurements.
+## 7. Scope
+
+This file is intentionally limited to results reported on **pages 1–2 of the two-page main paper**. The supporting appendices contain additional evidence, including the detailed 20-task benchmark matrix, the staged-feedback repair ablation, and the repeated 36-run sweep; those are retained separately and should not be described as results displayed in the two-page main paper itself.
