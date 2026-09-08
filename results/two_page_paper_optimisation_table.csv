@@ -1,0 +1,23 @@
+kernel,model,delta_latency_pct,delta_throughput_period_pct,delta_lut_pct,delta_ff_pct,delta_dsp_pct,status
+Vector add,Qwen,-73.39,-66.73,182.83,-40.0,,verified
+ATAX,Qwen,-5.93,-5.93,-0.62,-2.96,6.82,verified
+BICG recovery,Qwen,-61.84,-61.77,227.01,158.05,300.0,verified and selected
+BICG Pareto,Qwen,-40.7,-40.7,47.5,17.2,100.0,verified Pareto point
+BICG infeasible,Qwen,-55.94,-55.88,891.3,545.5,904.5,rejected: resource infeasible
+Vector add,DeepSeek,-35.1,-45.9,31.3,0.0,,verified
+Vector add,Kimi,-35.1,-45.9,31.3,0.0,,verified
+Dot product,DeepSeek,-69.3,-69.1,182.5,219.6,,verified
+Dot product,Qwen,-62.4,-62.3,420.8,480.4,,verified
+FIR-small,DeepSeek,-64.8,-64.6,50.3,69.4,,verified
+Stencil2D,DeepSeek,-57.6,,190.4,,,verified
+Stencil2D,Qwen,-41.2,,99.8,,,verified
+Stencil2D,Kimi,-23.4,,39.1,,,verified
+Transpose,DeepSeek,-81.2,,220.6,,,verified
+Transpose,Kimi,-81.2,,97.9,,,verified
+Transpose,Qwen,-49.3,,51.5,,,verified
+Prefix,DeepSeek,-25.3,,23.7,,,verified
+Prefix,Kimi,-25.3,,23.7,,,verified
+Prefix,Qwen,-5.4,,193.9,,,verified
+Histogram,DeepSeek,-9.1,,15.4,,,verified
+Histogram,Kimi,-9.1,,15.4,,,verified
+Conv2D,Qwen,-0.89,,,,,verified
